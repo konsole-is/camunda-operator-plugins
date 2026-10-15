@@ -30,6 +30,7 @@ const (
 	pluginsGroup          = "plugins.camunda.io"
 	registrationsResource = "pluginregistrations"
 	serveVerb             = "serve"
+	clusterRoleKind       = "ClusterRole"
 )
 
 // served is what one ClusterRole grants serve on: every registration, or the
@@ -68,7 +69,7 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &d)
 			d.Namespace = inNamespace(d.Namespace, namespace)
 			deployments = append(deployments, d)
-		case "ClusterRole":
+		case clusterRoleKind:
 			var r rbacv1.ClusterRole
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &r)
 			roles = append(roles, r)
@@ -86,6 +87,7 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	found = append(found, controllerProblems...)
 	serveRoles, roleProblems := serveRules(roles, registrations)
 	found = append(found, roleProblems...)
+	found = append(found, unknownRoles(bindings, roles)...)
 	found = append(found, bindingProblems(bindings, serveRoles, controllers, registrations)...)
 
 	return found
@@ -166,6 +168,25 @@ func serveRules(roles []rbacv1.ClusterRole, registrations []string) (map[string]
 	return serveRoles, found
 }
 
+// unknownRoles returns a problem for each binding of a ClusterRole that the
+// chart does not render. A role from outside the chart, such as
+// cluster-admin, can grant serve on every registration.
+func unknownRoles(bindings []rbacv1.ClusterRoleBinding, roles []rbacv1.ClusterRole) []string {
+	var found []string
+	for _, b := range bindings {
+		rendered := slices.ContainsFunc(roles, func(r rbacv1.ClusterRole) bool { return r.Name == b.RoleRef.Name })
+		if b.RoleRef.Kind == clusterRoleKind && !rendered {
+			found = append(found, fmt.Sprintf(
+				"ClusterRoleBinding %q binds the ClusterRole %q, which the chart does not render",
+				b.Name,
+				b.RoleRef.Name,
+			))
+		}
+	}
+
+	return found
+}
+
 func grantsServe(rule rbacv1.PolicyRule) bool {
 	return anyOf(rule.APIGroups, pluginsGroup) &&
 		anyOf(rule.Resources, registrationsResource) &&
@@ -192,7 +213,7 @@ func bindingProblems(
 	bound := map[string]bool{}
 	for _, b := range bindings {
 		role, ok := serveRoles[b.RoleRef.Name]
-		if b.RoleRef.Kind != "ClusterRole" || !ok {
+		if b.RoleRef.Kind != clusterRoleKind || !ok {
 			continue
 		}
 		for _, s := range b.Subjects {

@@ -173,6 +173,34 @@ func TestProblemsPlacesObjectsWithoutANamespaceInTheReleaseNamespace(t *testing.
 	assert.Empty(t, problems(objects, []string{"a", "b"}, "plugins"))
 }
 
+func TestProblemsRefusesABindingOfARoleThatTheChartDoesNotRender(t *testing.T) {
+	clusterAdmin := `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: example-admin}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin}
+subjects:
+  - {kind: ServiceAccount, name: example, namespace: plugins}`
+
+	assert.Contains(t, problems(render(t, goodRender, clusterAdmin), []string{"a", "b"}, "plugins"),
+		`ClusterRoleBinding "example-admin" binds the ClusterRole "cluster-admin", which the chart does not render`)
+}
+
+func TestProblemsChecksTheItemsOfAList(t *testing.T) {
+	list := `apiVersion: v1
+kind: List
+items:
+  - apiVersion: admissionregistration.k8s.io/v1
+    kind: ValidatingAdmissionPolicyBinding
+    metadata: {name: grants}`
+
+	assert.Contains(
+		t,
+		problems(render(t, goodRender, list), []string{"a", "b"}, "plugins"),
+		`the chart renders ValidatingAdmissionPolicyBinding "grants": `+
+			`the operator chart holds the one grant admission policy`,
+	)
+}
+
 func TestProblemsRefusesAChartWithoutAController(t *testing.T) {
 	assert.Contains(t, problems(nil, []string{"a"}, "plugins"), "the chart renders no Deployment")
 }

@@ -36,6 +36,7 @@ import (
 	"os"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 )
@@ -103,7 +104,8 @@ func readRegistrations(file string) ([]string, error) {
 }
 
 // readObjects decodes a stream of YAML documents. It skips an empty
-// document, which helm template writes for a template that renders nothing.
+// document, which helm template writes for a template that renders nothing,
+// and returns the items of a List document in place of the List.
 func readObjects(input io.Reader) ([]*unstructured.Unstructured, error) {
 	decoder := utilyaml.NewYAMLOrJSONDecoder(input, 4096)
 	var objects []*unstructured.Unstructured
@@ -116,8 +118,22 @@ func readObjects(input io.Reader) ([]*unstructured.Unstructured, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decoding the rendered chart: %w", err)
 		}
-		if len(content) > 0 {
-			objects = append(objects, &unstructured.Unstructured{Object: content})
+		if len(content) == 0 {
+			continue
+		}
+
+		object := &unstructured.Unstructured{Object: content}
+		if !object.IsList() {
+			objects = append(objects, object)
+			continue
+		}
+
+		err = object.EachListItem(func(item runtime.Object) error {
+			objects = append(objects, item.(*unstructured.Unstructured))
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("reading the items of %s %q: %w", object.GetKind(), object.GetName(), err)
 		}
 	}
 }
