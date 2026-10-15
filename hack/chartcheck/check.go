@@ -73,6 +73,12 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 			var r rbacv1.ClusterRole
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &r)
 			roles = append(roles, r)
+			// The API server replaces the rules of an aggregated role with the
+			// rules of the roles that it selects, also roles outside the chart.
+			if r.AggregationRule != nil {
+				found = append(found, fmt.Sprintf(
+					"ClusterRole %q aggregates other roles, so the chart cannot show what it grants", r.Name))
+			}
 		case "ClusterRoleBinding":
 			var b rbacv1.ClusterRoleBinding
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &b)

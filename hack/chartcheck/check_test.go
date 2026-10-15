@@ -185,6 +185,31 @@ subjects:
 		`ClusterRoleBinding "example-admin" binds the ClusterRole "cluster-admin", which the chart does not render`)
 }
 
+func TestProblemsRefusesAnAggregatedClusterRole(t *testing.T) {
+	aggregated := `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: example-extra}
+aggregationRule:
+  clusterRoleSelectors: [{}]
+rules: []`
+	charts := map[string][]string{
+		"an extra role": {goodRender, aggregated},
+		"the serve role": {
+			strings.Replace(goodRender, "rules:\n", "aggregationRule:\n  clusterRoleSelectors: [{}]\nrules:\n", 1),
+		},
+	}
+	want := map[string]string{
+		"an extra role":  `ClusterRole "example-extra" aggregates other roles, so the chart cannot show what it grants`,
+		"the serve role": `ClusterRole "example-serve" aggregates other roles, so the chart cannot show what it grants`,
+	}
+
+	for name, docs := range charts {
+		t.Run(name, func(t *testing.T) {
+			assert.Contains(t, problems(render(t, docs...), []string{"a", "b"}, "plugins"), want[name])
+		})
+	}
+}
+
 func TestProblemsChecksTheItemsOfAList(t *testing.T) {
 	list := `apiVersion: v1
 kind: List
