@@ -234,7 +234,7 @@ golangci-lint: | $(LOCALBIN) ## Build golangci-lint with the plugins of .custom-
 		echo "Building golangci-lint $(GOLANGCI_LINT_VERSION) with the plugins of .custom-gcl.yml"; \
 		rm -f "$(GOLANGCI_LINT)"; \
 		GOBIN="$(LOCALBIN)" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
-		"$(GOLANGCI_LINT)" custom --destination "$(LOCALBIN)" --name golangci-lint-custom; \
+		"$(GOLANGCI_LINT)" custom --version "$(GOLANGCI_LINT_VERSION)" --destination "$(LOCALBIN)" --name golangci-lint-custom; \
 		mv -f "$(LOCALBIN)/golangci-lint-custom" "$(GOLANGCI_LINT)"; \
 		echo "$$want" > "$(GOLANGCI_LINT).stamp"; \
 	}
