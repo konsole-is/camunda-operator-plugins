@@ -3,6 +3,14 @@
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+skeleton.clusterName is the name of the cluster-scoped objects of the
+release. Two releases of one name in two namespaces must not share them.
+*/}}
+{{- define "skeleton.clusterName" -}}
+{{- printf "%s-%s" .Release.Namespace .Release.Name | trunc 57 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "skeleton.selectorLabels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
