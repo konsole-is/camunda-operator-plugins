@@ -33,6 +33,13 @@ const (
 	clusterRoleKind       = "ClusterRole"
 )
 
+// roleRef is the role reference of one ClusterRoleBinding or RoleBinding.
+type roleRef struct {
+	kind string
+	name string
+	ref  rbacv1.RoleRef
+}
+
 // served is what one ClusterRole grants serve on: every registration, or the
 // names of its rules.
 type served struct {
@@ -53,6 +60,7 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	var deployments []appsv1.Deployment
 	var roles []rbacv1.ClusterRole
 	var bindings []rbacv1.ClusterRoleBinding
+	var refs []roleRef
 	for _, o := range objects {
 		var err error
 		switch o.GetKind() {
@@ -83,6 +91,11 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 			var b rbacv1.ClusterRoleBinding
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &b)
 			bindings = append(bindings, b)
+			refs = append(refs, roleRef{kind: o.GetKind(), name: b.Name, ref: b.RoleRef})
+		case "RoleBinding":
+			var b rbacv1.RoleBinding
+			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &b)
+			refs = append(refs, roleRef{kind: o.GetKind(), name: b.Name, ref: b.RoleRef})
 		}
 		if err != nil {
 			found = append(found, fmt.Sprintf("decoding %s %q: %v", o.GetKind(), o.GetName(), err))
@@ -93,7 +106,7 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	found = append(found, controllerProblems...)
 	serveRoles, roleProblems := serveRules(roles, registrations)
 	found = append(found, roleProblems...)
-	found = append(found, unknownRoles(bindings, roles)...)
+	found = append(found, unknownRoles(refs, roles)...)
 	found = append(found, bindingProblems(bindings, serveRoles, controllers, registrations)...)
 
 	return found
@@ -174,18 +187,19 @@ func serveRules(roles []rbacv1.ClusterRole, registrations []string) (map[string]
 	return serveRoles, found
 }
 
-// unknownRoles returns a problem for each binding of a ClusterRole that the
-// chart does not render. A role from outside the chart, such as
-// cluster-admin, can grant serve on every registration.
-func unknownRoles(bindings []rbacv1.ClusterRoleBinding, roles []rbacv1.ClusterRole) []string {
+// unknownRoles returns a problem for each ClusterRoleBinding or RoleBinding
+// of a ClusterRole that the chart does not render. A role from outside the
+// chart, such as cluster-admin, can grant serve on every registration.
+func unknownRoles(refs []roleRef, roles []rbacv1.ClusterRole) []string {
 	var found []string
-	for _, b := range bindings {
-		rendered := slices.ContainsFunc(roles, func(r rbacv1.ClusterRole) bool { return r.Name == b.RoleRef.Name })
-		if b.RoleRef.Kind == clusterRoleKind && !rendered {
+	for _, b := range refs {
+		rendered := slices.ContainsFunc(roles, func(r rbacv1.ClusterRole) bool { return r.Name == b.ref.Name })
+		if b.ref.Kind == clusterRoleKind && !rendered {
 			found = append(found, fmt.Sprintf(
-				"ClusterRoleBinding %q binds the ClusterRole %q, which the chart does not render",
-				b.Name,
-				b.RoleRef.Name,
+				"%s %q binds the ClusterRole %q, which the chart does not render",
+				b.kind,
+				b.name,
+				b.ref.Name,
 			))
 		}
 	}

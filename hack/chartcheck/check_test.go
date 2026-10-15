@@ -210,6 +210,25 @@ rules: []`
 	}
 }
 
+func TestProblemsRefusesARoleBindingOfARoleThatTheChartDoesNotRender(t *testing.T) {
+	clusterAdmin := `apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: example-admin, namespace: plugins}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin}
+subjects:
+  - {kind: ServiceAccount, name: example, namespace: plugins}`
+
+	got := problems(render(t, goodRender, clusterAdmin), []string{"a", "b"}, "plugins")
+
+	assert.Equal(
+		t,
+		[]string{
+			`RoleBinding "example-admin" binds the ClusterRole "cluster-admin", which the chart does not render`,
+		},
+		got,
+	)
+}
+
 func TestProblemsChecksTheItemsOfAList(t *testing.T) {
 	list := `apiVersion: v1
 kind: List
