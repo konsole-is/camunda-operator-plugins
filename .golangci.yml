@@ -1,0 +1,86 @@
+version: "2"
+run:
+  allow-parallel-runners: true
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - depguard
+    - dupl
+    - errcheck
+    - ginkgolinter
+    - goconst
+    - gocyclo
+    - govet
+    - ineffassign
+    - lll
+    - modernize
+    - misspell
+    - nakedret
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - logcheck
+  settings:
+    custom:
+      logcheck:
+        type: "module"
+        description: Checks Go logging calls for Kubernetes logging conventions.
+    depguard:
+      rules:
+        published-api:
+          # CONTRIBUTING.md: a plugin uses only the published plugin API. The
+          # operator publishes its api and conformance modules. The rest of
+          # its root module is not a published API.
+          list-mode: lax
+          deny:
+            - pkg: github.com/konsole-is/camunda-operator/internal
+              desc: not a published API of the operator; use github.com/konsole-is/camunda-operator/api
+            - pkg: github.com/konsole-is/camunda-operator/pkg
+              desc: not a published API of the operator; use github.com/konsole-is/camunda-operator/api
+            - pkg: github.com/konsole-is/camunda-operator/cmd
+              desc: not a published API of the operator
+            - pkg: github.com/konsole-is/camunda-operator/test
+              desc: not a published API of the operator
+            - pkg: github.com/konsole-is/camunda-operator/hack
+              desc: not a published API of the operator
+    revive:
+      rules:
+        - name: comment-spacings
+        - name: import-shadowing
+    modernize:
+      disable:
+        - omitzero
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - dupl
+          - lll
+        path: internal/*
+    paths:
+      - third_party$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+    - golines
+  settings:
+    golines:
+      # This matches the lll limit, so the formatter never leaves a line that the linter rejects.
+      max-len: 120
+      tab-len: 4
+      # Comments are prose, not code. A rewrap mangles markers and doc links.
+      shorten-comments: false
+      # A long chain breaks at the dots. Otherwise the arguments of the last
+      # call are nested, which makes Gomega assertions hard to read.
+      chain-split-dots: true
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - examples$
