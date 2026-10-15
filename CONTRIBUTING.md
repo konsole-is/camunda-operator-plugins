@@ -38,6 +38,7 @@ A maintainer approves a plugin when all of these rules are true:
 3. The chart binds that ClusterRole to the ServiceAccount of the controller.
 4. The operator chart holds the one grant admission policy. Before it admits a `Grant`, the policy checks that the writer has `serve` on the registration of the `Grant`.
 5. A plugin chart ships no `ValidatingAdmissionPolicy` and no `ValidatingAdmissionPolicyBinding`.
+6. The chart binds only the ClusterRoles that it ships. A role from outside the chart, such as `cluster-admin`, can give `serve` on every registration.
 
 `make chart-verify` checks these rules for the chart of each plugin.
 
