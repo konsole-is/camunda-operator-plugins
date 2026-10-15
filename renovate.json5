@@ -1,0 +1,80 @@
+// Renovate keeps the dependencies of this repository current in batches, the
+// way the operator does: minor and patch updates arrive on the 1st and the
+// 15th, grouped so that one pull request carries what has to land together,
+// and a major update arrives when it is published. Go modules,
+// .tool-versions, GitHub Actions, and the Dockerfile go through the standard
+// managers. A marker comment above a Makefile variable names a tool pin:
+//
+//   # renovate: datasource=go depName=golang.org/x/vuln
+//   GOVULNCHECK_VERSION ?= v1.8.0
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  // Without a tidy, a Go update leaves the replaced versions in go.sum, and
+  // the tidy check of the Tests workflow fails.
+  postUpdateOptions: ["gomodTidy"],
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    enabled: true,
+    labels: ["security"],
+  },
+  customManagers: [
+    {
+      // The marker, then `NAME ?= <version>` on the next line.
+      customType: "regex",
+      managerFilePatterns: ["/^Makefile$/"],
+      matchStrings: [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s*\\n\\w+\\s*\\??=\\s*(?<currentValue>\\S+)",
+      ],
+    },
+  ],
+  packageRules: [
+    {
+      matchUpdateTypes: ["minor", "patch"],
+      schedule: ["* * 1,15 * *"],
+    },
+    {
+      // The plugin API. A release of the operator tags it api/vX.Y.Z. go.mod
+      // can pin a commit of the operator main branch until the next tag, and
+      // that pin moves only to a tag, not to each new commit. The CRD bases
+      // of envtest follow the version of go.mod, so one pull request moves
+      // both.
+      matchPackageNames: ["github.com/konsole-is/camunda-operator/api"],
+      matchUpdateTypes: ["digest"],
+      enabled: false,
+    },
+    {
+      matchPackageNames: ["github.com/konsole-is/camunda-operator/api"],
+      groupName: "operator-api",
+    },
+    {
+      matchPackageNames: ["github.com/aws/aws-sdk-go-v2{/,}**", "github.com/aws/smithy-go"],
+      groupName: "aws-sdk",
+    },
+    {
+      description: "controller-runtime is built against a specific k8s.io minor, so they land together.",
+      matchPackageNames: [
+        "sigs.k8s.io/controller-runtime",
+        "k8s.io/api",
+        "k8s.io/apiextensions-apiserver",
+        "k8s.io/apimachinery",
+        "k8s.io/client-go",
+      ],
+      groupName: "kubernetes-and-controller-runtime",
+    },
+    {
+      matchPackageNames: [
+        "github.com/onsi/ginkgo/v2",
+        "github.com/onsi/gomega",
+        "github.com/stretchr/testify",
+      ],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "test-dependencies",
+    },
+    {
+      matchFileNames: [".tool-versions"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "tool-versions",
+    },
+  ],
+}
