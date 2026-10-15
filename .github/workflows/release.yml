@@ -52,6 +52,7 @@ jobs:
         platform: [linux/amd64, linux/arm64]
     env:
       IMG: camunda-operator-plugins-${{ matrix.plugin }}:scan
+      VERSION: ${{ needs.plan.outputs.version }}
     steps:
       - name: Clone the code
         uses: actions/checkout@v7
@@ -60,7 +61,9 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build the image
-        run: make docker-buildx "PLUGIN=${{ matrix.plugin }}" "IMG=${IMG}" "PLATFORMS=${{ matrix.platform }}" BUILDX_OUTPUT=--load
+        run: >-
+          make docker-buildx "PLUGIN=${{ matrix.plugin }}" "IMG=${IMG}" "VERSION=${VERSION}"
+          "PLATFORMS=${{ matrix.platform }}" BUILDX_OUTPUT=--load
 
       # trivy-action is pinned to the commit of its tag, so a moved tag
       # cannot change the code that runs here.

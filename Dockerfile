@@ -1,7 +1,8 @@
 # Build the binary of one plugin. PLUGIN names a directory of cmd/. The
 # builder runs on the platform of the build host and cross-compiles, so a
-# multi-platform build needs no emulation.
-FROM --platform=$BUILDPLATFORM golang:1.27 AS builder
+# multi-platform build needs no emulation. The base images are pinned by
+# digest, so the release publishes the same layers that its scan checked.
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG PLUGIN
@@ -24,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpat
     -ldflags "-X github.com/konsole-is/camunda-operator-plugins/internal/version.version=${VERSION}" \
     -o plugin "./cmd/${PLUGIN}"
 
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 WORKDIR /
 COPY --from=builder /workspace/plugin /plugin
 USER 65532:65532
