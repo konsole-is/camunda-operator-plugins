@@ -1,0 +1,6 @@
+# Ignore everything, then include the Go sources and the module files.
+**
+!**/*.go
+**/*_test.go
+!go.mod
+!go.sum
