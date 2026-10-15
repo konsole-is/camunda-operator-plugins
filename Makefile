@@ -66,7 +66,22 @@ chart-verify: ## Lint and render the chart of each plugin, and check the serve r
 			echo "charts/$$p renders without a registration" >&2; exit 1 ;; \
 		esac; \
 		echo "  charts/$$p refuses to render without a registration"; \
+		$(MAKE) -s chart-names-differ CHART="charts/$$p" A="team-a skeleton" B="team a-skeleton" || exit 1; \
+		$(MAKE) -s chart-names-differ CHART="charts/$$p" \
+			A="$$(printf 'n%.0s' $$(seq 60))a skeleton" B="$$(printf 'n%.0s' $$(seq 60))b skeleton" || exit 1; \
 	done
+
+# chart-names-differ checks that two releases, A and B as "<namespace> <release>",
+# render different names for the cluster-scoped objects of CHART.
+.PHONY: chart-names-differ
+chart-names-differ:
+	@names() { $(HELM) template "$$2" "$(CHART)" --namespace "$$1" \
+		| awk '/^kind: ClusterRole(Binding)?$$/ { k = 1 } k && /^  name:/ { print $$2; k = 0 }'; }; \
+	a="$$(names $(A))"; b="$$(names $(B))"; \
+	if [ -z "$$a" ] || [ -n "$$(comm -12 <(printf '%s\n' $$a | sort) <(printf '%s\n' $$b | sort))" ]; then \
+		echo "$(CHART): the releases '$(A)' and '$(B)' share a cluster-scoped name: $$a" >&2; exit 1; \
+	fi; \
+	echo "  $(CHART): '$(A)' and '$(B)' render different cluster-scoped names"
 
 # GOMOD_FILE is the go.mod that check-published-api reads. test-published-api
 # sets it to a copy that requires the root module of the operator.
