@@ -32,7 +32,7 @@ The `skeleton` plugin is the plugin that a new plugin copies. It serves no secti
 
 ## Development
 
-The tools and their versions are in `.tool-versions`: Go, Helm, and cosign. `make lint-renovate` also needs `npx`, and the image targets need Docker.
+`.tool-versions` gives the versions of Go, Helm, and cosign. `make lint-renovate` also needs `npx`, and the image targets need Docker.
 
 | Command | What it does |
 | --- | --- |

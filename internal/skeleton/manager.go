@@ -15,8 +15,8 @@ limitations under the License.
 */
 
 // Package skeleton is the plugin that a new plugin copies. It starts a
-// manager that serves health probes and reads the plugins.camunda.io kinds.
-// It serves no section yet.
+// manager whose scheme holds the plugins.camunda.io kinds, and that serves
+// health probes. It reads nothing from the cluster and serves no section yet.
 package skeleton
 
 import (

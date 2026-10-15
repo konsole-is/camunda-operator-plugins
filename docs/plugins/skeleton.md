@@ -1,6 +1,6 @@
 # Skeleton
 
-The skeleton plugin is the plugin that a new plugin copies. It starts a controller that reads the `plugins.camunda.io` kinds and serves its health probes. It serves no section yet.
+The skeleton plugin is the plugin that a new plugin copies. It starts a controller that serves its health probes. The scheme of the controller holds the `plugins.camunda.io` kinds, but the controller reads nothing from the cluster. It serves no section yet.
 
 ## What it creates
 
@@ -8,7 +8,7 @@ The skeleton creates nothing.
 
 ## Prerequisites
 
-The cluster has the CRDs of the operator, because the controller reads the `plugins.camunda.io` kinds.
+The skeleton needs nothing on the cluster, because it reads nothing. Its envtest suite loads the CRD bases of the operator, and `make test` downloads them.
 
 ## Chart values
 
