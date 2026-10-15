@@ -188,8 +188,7 @@ setup-envtest: envtest ## Download the binaries required for envtest in the loca
 	@"$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path > /dev/null
 
 .PHONY: envtest
-envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
-$(ENVTEST): | $(LOCALBIN)
+envtest: | $(LOCALBIN) ## Download setup-envtest locally if necessary.
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: envtest-crds
@@ -224,17 +223,21 @@ $(GOLANGCI_LINT_SCHEMA): | $(LOCALBIN)
 	curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --max-time 60 \
 		-o "$@.tmp" "https://golangci-lint.run/jsonschema/$(notdir $@)" && mv -f "$@.tmp" "$@"
 
+# The custom golangci-lint holds the plugins of .custom-gcl.yml, and it cannot
+# load code that needs a newer Go than the Go that built it. A change of
+# either, or of GOLANGCI_LINT_VERSION, builds it again.
 .PHONY: golangci-lint
-golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
-# The directory is an order-only prerequisite. Each new file in bin/ changes
-# its time, and a normal prerequisite would build the tool again each run.
-$(GOLANGCI_LINT): | $(LOCALBIN)
-	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
-	@test -f .custom-gcl.yml && { \
-		echo "Building custom golangci-lint with plugins..." && \
-		$(GOLANGCI_LINT) custom --destination $(LOCALBIN) --name golangci-lint-custom && \
-		mv -f $(LOCALBIN)/golangci-lint-custom $(GOLANGCI_LINT); \
-	} || true
+golangci-lint: | $(LOCALBIN) ## Build golangci-lint with the plugins of .custom-gcl.yml if necessary.
+	@want="$(GOLANGCI_LINT_VERSION) $$(go env GOVERSION) $$(sha256sum .custom-gcl.yml | cut -d' ' -f1)"; \
+	[ -x "$(GOLANGCI_LINT)" ] && [ "$$(cat "$(GOLANGCI_LINT).stamp" 2>/dev/null)" = "$$want" ] || { \
+		set -e; \
+		echo "Building golangci-lint $(GOLANGCI_LINT_VERSION) with the plugins of .custom-gcl.yml"; \
+		rm -f "$(GOLANGCI_LINT)"; \
+		GOBIN="$(LOCALBIN)" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+		"$(GOLANGCI_LINT)" custom --destination "$(LOCALBIN)" --name golangci-lint-custom; \
+		mv -f "$(LOCALBIN)/golangci-lint-custom" "$(GOLANGCI_LINT)"; \
+		echo "$$want" > "$(GOLANGCI_LINT).stamp"; \
+	}
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
