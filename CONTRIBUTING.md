@@ -51,5 +51,5 @@ A maintainer approves a plugin when all of these rules are true:
 
 1. A maintainer publishes a GitHub release with a tag `vX.Y.Z`.
 2. The release publishes the image and the chart of every plugin, all at version `X.Y.Z`.
-3. The release then opens a pull request on `konsole-is/camunda-operator`. That pull request sets the versions in the catalog of official plugins that the fleet manager shows.
+3. The release then opens a pull request on `konsole-is/camunda-operator`. That pull request sets the versions in the catalog of official plugins that the fleet manager shows. It stops when a chart of the catalog has no release at the new version.
 4. A prerelease, for example `v0.2.0-rc.1`, publishes the images and the charts, but it does not change the catalog.

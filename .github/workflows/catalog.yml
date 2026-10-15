@@ -15,6 +15,10 @@ on:
         required: false
         type: string
         default: main
+      require_published:
+        required: false
+        type: boolean
+        default: true
     secrets:
       OPERATOR_CATALOG_TOKEN:
         required: true
@@ -29,6 +33,11 @@ on:
         required: true
         default: main
         type: string
+      require_published:
+        description: Stop when a chart of the catalog has no release at the version. Turn it off only for a test release.
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -60,13 +69,37 @@ jobs:
           fi
           echo "VERSION=${TAG#v}" >> "${GITHUB_ENV}"
 
+      - name: Read the catalog of the base branch
+        run: |
+          base_sha=$(gh api "repos/${OPERATOR_REPO}/git/ref/heads/${BASE}" --jq .object.sha)
+          gh api "repos/${OPERATOR_REPO}/contents/${CATALOG}?ref=${base_sha}" --jq .content | base64 -d > old.json
+          echo "BASE_SHA=${base_sha}" >> "${GITHUB_ENV}"
+
+      - name: Install Helm
+        if: inputs.require_published
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+
+      # Every chart of the catalog gets the one version, so a chart without a
+      # release at that version stops the run.
+      - name: Check that each chart of the catalog is published at the version
+        if: inputs.require_published
+        run: |
+          missing=()
+          while read -r chart; do
+            helm show chart "${chart}" --version "${VERSION}" > /dev/null 2>&1 || missing+=("${chart}")
+          done < <(jq -r '.charts[].chart' old.json)
+          if (( ${#missing[@]} > 0 )); then
+            echo "These charts of the catalog have no release ${VERSION}: ${missing[*]}" >&2
+            exit 1
+          fi
+
       # jq writes the layout that the test of the catalog checks, so the diff
       # holds only the versions.
       - name: Write the catalog with the version
         id: write
         run: |
-          base_sha=$(gh api "repos/${OPERATOR_REPO}/git/ref/heads/${BASE}" --jq .object.sha)
-          gh api "repos/${OPERATOR_REPO}/contents/${CATALOG}?ref=${base_sha}" --jq .content | base64 -d > old.json
           jq --arg v "${VERSION}" \
             '.charts |= map(.version = $v | .installCommand |= sub("--version [^ ]+"; "--version " + $v))' \
             old.json > new.json
@@ -81,7 +114,6 @@ jobs:
             exit 0
           fi
           echo "changed=true" >> "${GITHUB_OUTPUT}"
-          echo "BASE_SHA=${base_sha}" >> "${GITHUB_ENV}"
 
       # The ruleset of the operator main branch requires signed commits.
       # GitHub signs a commit of the createCommitOnBranch mutation, and it
