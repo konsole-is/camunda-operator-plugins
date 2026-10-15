@@ -32,6 +32,13 @@ const (
 	serveVerb             = "serve"
 )
 
+// served is what one ClusterRole grants serve on: every registration, or the
+// names of its rules.
+type served struct {
+	all   bool
+	names []string
+}
+
 // problems returns each way in which the rendered objects of a plugin chart
 // break the chart rule for the registrations of its values, in the release
 // namespace.
@@ -55,10 +62,11 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 				o.GetName(),
 			))
 		case "ServiceAccount":
-			accounts[o.GetName()] = true
+			accounts[account(inNamespace(o.GetNamespace(), namespace), o.GetName())] = true
 		case "Deployment":
 			var d appsv1.Deployment
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &d)
+			d.Namespace = inNamespace(d.Namespace, namespace)
 			deployments = append(deployments, d)
 		case "ClusterRole":
 			var r rbacv1.ClusterRole
@@ -78,13 +86,29 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	found = append(found, controllerProblems...)
 	serveRoles, roleProblems := serveRules(roles, registrations)
 	found = append(found, roleProblems...)
-	found = append(found, bindingProblems(bindings, serveRoles, controllers, namespace)...)
+	found = append(found, bindingProblems(bindings, serveRoles, controllers, registrations)...)
 
 	return found
 }
 
-// controllerAccounts returns the ServiceAccount of each Deployment, and a
-// problem for a Deployment that runs as an account the chart does not render.
+// inNamespace returns the namespace of an object, which is the release
+// namespace when the template sets none.
+func inNamespace(objectNamespace, releaseNamespace string) string {
+	if objectNamespace == "" {
+		return releaseNamespace
+	}
+
+	return objectNamespace
+}
+
+func account(namespace, name string) string {
+	return namespace + "/" + name
+}
+
+// controllerAccounts returns the ServiceAccount of each Deployment as
+// namespace/name, for each Deployment whose account the chart renders, and a
+// problem for a Deployment that runs as an account that the chart does not
+// render in the namespace of the Deployment.
 func controllerAccounts(deployments []appsv1.Deployment, accounts map[string]bool) ([]string, []string) {
 	if len(deployments) == 0 {
 		return nil, []string{"the chart renders no Deployment"}
@@ -93,32 +117,36 @@ func controllerAccounts(deployments []appsv1.Deployment, accounts map[string]boo
 	var controllers, found []string
 	for _, d := range deployments {
 		name := d.Spec.Template.Spec.ServiceAccountName
-		if !accounts[name] {
+		if name == "" {
+			name = "default"
+		}
+		id := account(d.Namespace, name)
+		if !accounts[id] {
 			found = append(found, fmt.Sprintf(
-				"Deployment %q runs as the ServiceAccount %q, which the chart does not render", d.Name, name))
+				"Deployment %q runs as the ServiceAccount %q, which the chart does not render", d.Name, id))
 			continue
 		}
-		controllers = append(controllers, name)
+		controllers = append(controllers, id)
 	}
 
 	return controllers, found
 }
 
-// serveRules returns the names of the ClusterRoles that grant serve on
-// pluginregistrations, and a problem for each registration they miss and
-// each name they grant beyond the registrations. A rule without
+// serveRules returns what each ClusterRole that grants serve on
+// pluginregistrations serves, and a problem for each rule without
+// resourceNames and each name beyond the registrations. A rule without
 // resourceNames grants serve on every registration of the cluster.
-func serveRules(roles []rbacv1.ClusterRole, registrations []string) (map[string]bool, []string) {
-	serveRoles := map[string]bool{}
-	served := map[string]bool{}
+func serveRules(roles []rbacv1.ClusterRole, registrations []string) (map[string]served, []string) {
+	serveRoles := map[string]served{}
 	var found []string
 	for _, role := range roles {
 		for _, rule := range role.Rules {
 			if !grantsServe(rule) {
 				continue
 			}
-			serveRoles[role.Name] = true
+			s := serveRoles[role.Name]
 			if len(rule.ResourceNames) == 0 {
+				s.all = true
 				found = append(found, fmt.Sprintf(
 					"ClusterRole %q grants serve on every registration: set resourceNames to the registrations of the chart",
 					role.Name,
@@ -129,14 +157,9 @@ func serveRules(roles []rbacv1.ClusterRole, registrations []string) (map[string]
 					found = append(found, fmt.Sprintf(
 						"ClusterRole %q grants serve on %q, which is not a registration of the chart", role.Name, name))
 				}
-				served[name] = true
+				s.names = append(s.names, name)
 			}
-		}
-	}
-
-	for _, name := range registrations {
-		if !served[name] {
-			found = append(found, fmt.Sprintf("no ClusterRole grants serve on the registration %q", name))
+			serveRoles[role.Name] = s
 		}
 	}
 
@@ -155,35 +178,61 @@ func anyOf(values []string, want string) bool {
 }
 
 // bindingProblems returns a problem for each binding of a serve ClusterRole
-// to a subject that is not a controller ServiceAccount of the chart, and for
-// each controller ServiceAccount that no binding names.
+// to a subject that is not a controller ServiceAccount of the chart, for each
+// controller that no binding names, and for each registration that the roles
+// bound to a controller do not serve.
 func bindingProblems(
 	bindings []rbacv1.ClusterRoleBinding,
-	serveRoles map[string]bool,
+	serveRoles map[string]served,
 	controllers []string,
-	namespace string,
+	registrations []string,
 ) []string {
 	var found []string
+	granted := map[string]served{}
 	bound := map[string]bool{}
 	for _, b := range bindings {
-		if b.RoleRef.Kind != "ClusterRole" || !serveRoles[b.RoleRef.Name] {
+		role, ok := serveRoles[b.RoleRef.Name]
+		if b.RoleRef.Kind != "ClusterRole" || !ok {
 			continue
 		}
 		for _, s := range b.Subjects {
-			if s.Kind == rbacv1.ServiceAccountKind && s.Namespace == namespace && slices.Contains(controllers, s.Name) {
-				bound[s.Name] = true
+			id := account(s.Namespace, s.Name)
+			if s.Kind != rbacv1.ServiceAccountKind || !slices.Contains(controllers, id) {
+				found = append(found, fmt.Sprintf(
+					"ClusterRoleBinding %q binds serve to %s %s, which runs no controller of the chart",
+					b.Name,
+					s.Kind,
+					id,
+				))
 				continue
 			}
-			found = append(found, fmt.Sprintf(
-				"ClusterRoleBinding %q binds serve to %s %s/%s, which runs no controller of the chart",
-				b.Name, s.Kind, s.Namespace, s.Name))
+			bound[id] = true
+			g := granted[id]
+			g.all = g.all || role.all
+			g.names = append(g.names, role.names...)
+			granted[id] = g
 		}
 	}
 
-	for _, name := range controllers {
-		if !bound[name] {
-			found = append(found, fmt.Sprintf(
-				"no ClusterRoleBinding binds serve to the controller ServiceAccount %s/%s", namespace, name))
+	for _, id := range controllers {
+		if !bound[id] {
+			found = append(
+				found,
+				fmt.Sprintf("no ClusterRoleBinding binds serve to the controller ServiceAccount %s", id),
+			)
+			continue
+		}
+		if granted[id].all {
+			continue
+		}
+		for _, name := range registrations {
+			if !slices.Contains(granted[id].names, name) {
+				found = append(found, fmt.Sprintf(
+					"no ClusterRole bound to the controller ServiceAccount %s grants serve on the registration %q",
+					id,
+					name,
+				))
+			}
 		}
 	}
 

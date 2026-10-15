@@ -115,7 +115,22 @@ func TestProblemsRefusesARegistrationWithoutServe(t *testing.T) {
 	objects := render(t, strings.Replace(goodRender, "resourceNames: [a, b]", "resourceNames: [a]", 1))
 
 	assert.Contains(t, problems(objects, []string{"a", "b"}, "plugins"),
-		`no ClusterRole grants serve on the registration "b"`)
+		`no ClusterRole bound to the controller ServiceAccount plugins/example grants serve on the registration "b"`)
+}
+
+func TestProblemsRefusesARegistrationThatOnlyAnUnboundRoleServes(t *testing.T) {
+	unbound := `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: example-serve-b}
+rules:
+  - apiGroups: [plugins.camunda.io]
+    resources: [pluginregistrations]
+    verbs: [serve]
+    resourceNames: [b]`
+	objects := render(t, strings.Replace(goodRender, "resourceNames: [a, b]", "resourceNames: [a]", 1), unbound)
+
+	assert.Contains(t, problems(objects, []string{"a", "b"}, "plugins"),
+		`no ClusterRole bound to the controller ServiceAccount plugins/example grants serve on the registration "b"`)
 }
 
 func TestProblemsRefusesABindingToAnotherServiceAccount(t *testing.T) {
@@ -138,7 +153,24 @@ func TestProblemsRefusesAControllerWithoutItsServiceAccount(t *testing.T) {
 	)
 
 	assert.Contains(t, problems(objects, []string{"a", "b"}, "plugins"),
-		`Deployment "example" runs as the ServiceAccount "example", which the chart does not render`)
+		`Deployment "example" runs as the ServiceAccount "plugins/example", which the chart does not render`)
+}
+
+func TestProblemsRefusesAServiceAccountInAnotherNamespace(t *testing.T) {
+	objects := render(
+		t,
+		strings.Replace(goodRender, "kind: ServiceAccount\nmetadata: {name: example, namespace: plugins}",
+			"kind: ServiceAccount\nmetadata: {name: example, namespace: other}", 1),
+	)
+
+	assert.Contains(t, problems(objects, []string{"a", "b"}, "plugins"),
+		`Deployment "example" runs as the ServiceAccount "plugins/example", which the chart does not render`)
+}
+
+func TestProblemsPlacesObjectsWithoutANamespaceInTheReleaseNamespace(t *testing.T) {
+	objects := render(t, strings.ReplaceAll(goodRender, "{name: example, namespace: plugins}", "{name: example}"))
+
+	assert.Empty(t, problems(objects, []string{"a", "b"}, "plugins"))
 }
 
 func TestProblemsRefusesAChartWithoutAController(t *testing.T) {
