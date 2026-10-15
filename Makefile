@@ -35,6 +35,43 @@ vet: ## Run go vet against the code.
 tidy: ## Run go mod tidy.
 	go mod tidy
 
+.PHONY: test
+test: fmt vet setup-envtest envtest-crds ## Run the unit tests and the envtest suites.
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" \
+	ENVTEST_CRDS="$(ENVTEST_CRDS_DIR)" \
+		go test $$(go list ./... | grep -v /test/e2e) -coverprofile cover.out
+
+.PHONY: test-api-ref
+test-api-ref: ## Check that a pseudo-version and a tag of the api module map to the operator ref of their CRD bases.
+	@got="$$($(MAKE) -s print-api-ref API_VERSION=v0.2.1-0.20261015084104-bb2edca2c2db)"; \
+		[ "$$got" = bb2edca2c2db ] || { echo "pseudo-version maps to '$$got', want bb2edca2c2db" >&2; exit 1; }
+	@got="$$($(MAKE) -s print-api-ref API_VERSION=v0.0.0-20261015084104-bb2edca2c2db)"; \
+		[ "$$got" = bb2edca2c2db ] || { echo "untagged pseudo-version maps to '$$got', want bb2edca2c2db" >&2; exit 1; }
+	@got="$$($(MAKE) -s print-api-ref API_VERSION=v0.3.0)"; \
+		[ "$$got" = api/v0.3.0 ] || { echo "tag maps to '$$got', want api/v0.3.0" >&2; exit 1; }
+	@got="$$($(MAKE) -s print-api-ref API_VERSION=v0.3.0-rc.1)"; \
+		[ "$$got" = api/v0.3.0-rc.1 ] || { echo "prerelease tag maps to '$$got', want api/v0.3.0-rc.1" >&2; exit 1; }
+
+.PHONY: chart-verify
+chart-verify: ## Lint and render the chart of each plugin, and check the serve rule of CONTRIBUTING.md.
+	@for p in $(PLUGINS); do \
+		test -f "charts/$$p/Chart.yaml" || { echo "cmd/$$p has no chart charts/$$p" >&2; exit 1; }; \
+		$(HELM) lint "charts/$$p" || exit 1; \
+		$(HELM) template verify "charts/$$p" --namespace $(CHART_NAMESPACE) \
+			| go run ./hack/chartcheck -values "charts/$$p/values.yaml" -namespace $(CHART_NAMESPACE) || exit 1; \
+		$(HELM) template verify "charts/$$p" --namespace $(CHART_NAMESPACE) -f hack/chartcheck/testdata/two-registrations.yaml \
+			| go run ./hack/chartcheck -values hack/chartcheck/testdata/two-registrations.yaml -namespace $(CHART_NAMESPACE) || exit 1; \
+		err="$$($(HELM) template verify "charts/$$p" --set registrations=null 2>&1 >/dev/null || true)"; \
+		case "$$err" in *"registrations must name at least one registration"*) ;; *) \
+			echo "charts/$$p renders without a registration" >&2; exit 1 ;; \
+		esac; \
+		echo "  charts/$$p refuses to render without a registration"; \
+	done
+
+.PHONY: list-plugins
+list-plugins: ## Print the plugins, every directory of cmd/, as a JSON list.
+	@printf '%s\n' $(PLUGINS) | jq -R . | jq -cs .
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint.
 	"$(GOLANGCI_LINT)" run
@@ -42,6 +79,10 @@ lint: golangci-lint ## Run golangci-lint.
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint and apply its fixes.
 	"$(GOLANGCI_LINT)" fmt && "$(GOLANGCI_LINT)" run --fix
+
+.PHONY: lint-renovate
+lint-renovate: ## Verify renovate.json5 with the validator of RENOVATE_VERSION. Needs npx.
+	npx --yes --package renovate@$(RENOVATE_VERSION) renovate-config-validator --strict renovate.json5
 
 .PHONY: lint-config
 lint-config: golangci-lint golangci-lint-schema ## Verify the golangci-lint configuration.
@@ -63,9 +104,38 @@ test-version-stamp: ## Check that a build with VERSION reports it, and that the 
 	@grep -qF -- '-X $(VERSION_PACKAGE).version=$${VERSION}' Dockerfile || \
 		{ echo "Dockerfile does not stamp $(VERSION_PACKAGE).version from ARG VERSION" >&2; exit 1; }
 
+##@ Build
+
+.PHONY: build
+build: fmt vet ## Build the binary of each plugin into bin/<plugin>.
+	@for p in $(PLUGINS); do go build -ldflags "$(VERSION_LDFLAGS)" -o "bin/$$p" "./cmd/$$p" || exit 1; done
+
+##@ Images
+
+CONTAINER_TOOL ?= docker
+PLUGIN ?= skeleton
+IMAGE_REPOSITORY ?= ghcr.io/konsole-is/camunda-operator-plugins
+IMG ?= $(IMAGE_REPOSITORY)/$(PLUGIN):$(VERSION)
+PLATFORMS ?= linux/amd64,linux/arm64
+# BUILDX_OUTPUT is --push for a release, or --load to scan one platform.
+BUILDX_OUTPUT ?= --push
+
+.PHONY: docker-build
+docker-build: ## Build the image of PLUGIN as IMG.
+	$(CONTAINER_TOOL) build --build-arg PLUGIN=$(PLUGIN) --build-arg VERSION=$(VERSION) -t $(IMG) .
+
+.PHONY: docker-buildx
+docker-buildx: ## Build the image of PLUGIN as IMG for PLATFORMS, and push or load it by BUILDX_OUTPUT.
+	$(CONTAINER_TOOL) buildx build $(BUILDX_OUTPUT) --platform=$(PLATFORMS) \
+		--build-arg PLUGIN=$(PLUGIN) --build-arg VERSION=$(VERSION) -t $(IMG) .
+
 ##@ Dependencies
 
 LOCALBIN ?= $(shell pwd)/bin
+
+# HELM is the helm of .tool-versions.
+HELM ?= helm
+CHART_NAMESPACE ?= camunda-operator-plugins
 $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
@@ -76,10 +146,66 @@ GOVULNCHECK = $(LOCALBIN)/govulncheck
 GOLANGCI_LINT_SCHEMA = $(LOCALBIN)/golangci.$(basename $(GOLANGCI_LINT_VERSION)).jsonschema.json
 
 GOLANGCI_LINT_VERSION ?= v2.8.0
+# RENOVATE_VERSION is the Renovate release whose validator lint-renovate runs
+# against renovate.json5.
+# renovate: datasource=npm depName=renovate
+RENOVATE_VERSION ?= 44.140.0
 # renovate: datasource=go depName=golang.org/x/vuln
 GOVULNCHECK_VERSION ?= v1.8.0
 # renovate: datasource=go depName=github.com/rhysd/actionlint
 ACTIONLINT_VERSION ?= v1.7.12
+
+ENVTEST ?= $(LOCALBIN)/setup-envtest
+
+# ENVTEST_VERSION is the release branch of controller-runtime that setup-envtest comes from.
+ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
+  [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually" >&2; exit 1; }; \
+  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
+# ENVTEST_K8S_VERSION is the Kubernetes minor of the envtest binaries, from k8s.io/api.
+ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
+  [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually" >&2; exit 1; }; \
+  printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
+
+API_MODULE := github.com/konsole-is/camunda-operator/api
+# API_VERSION is the version of the api module in go.mod.
+API_VERSION ?= $(shell go list -m -f '{{.Version}}' $(API_MODULE))
+# API_REF is the operator commit or tag whose CRD bases match API_VERSION: the
+# 12-character commit of a pseudo-version, or api/<version> for a tag. A
+# Renovate update of the api module moves the CRDs of envtest with it.
+API_REF = $(shell printf '%s\n' '$(API_VERSION)' | \
+  sed -E -e 's/^v[0-9]+\.[0-9]+\.[0-9]+-.*[0-9]{14}-([0-9a-f]{12})$$/\1/' -e t -e 's|^|api/|')
+ENVTEST_CRDS_DIR = $(LOCALBIN)/crds/$(subst /,_,$(API_REF))
+# ENVTEST_CRD_FILES are the CRD bases of the operator that the plugins read.
+# A plugin that reads a core.camunda.io kind adds its file here.
+ENVTEST_CRD_FILES = \
+	plugins.camunda.io_grants.yaml \
+	plugins.camunda.io_pluginregistrations.yaml \
+	plugins.camunda.io_pluginrequests.yaml \
+	plugins.camunda.io_pluginsections.yaml
+
+.PHONY: setup-envtest
+setup-envtest: envtest ## Download the binaries required for envtest in the local bin directory.
+	@"$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path > /dev/null
+
+.PHONY: envtest
+envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
+
+.PHONY: envtest-crds
+envtest-crds: ## Download the CRD bases of the operator ref that the api module names into bin/crds/<ref>.
+	@mkdir -p "$(ENVTEST_CRDS_DIR)"
+	@for f in $(ENVTEST_CRD_FILES); do \
+		if [ ! -s "$(ENVTEST_CRDS_DIR)/$$f" ]; then \
+			curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --max-time 60 -o "$(ENVTEST_CRDS_DIR)/$$f.tmp" \
+				"https://raw.githubusercontent.com/konsole-is/camunda-operator/$(API_REF)/config/crd/bases/$$f" && \
+				mv -f "$(ENVTEST_CRDS_DIR)/$$f.tmp" "$(ENVTEST_CRDS_DIR)/$$f" || exit 1; \
+		fi; \
+	done
+
+.PHONY: print-api-ref
+print-api-ref: ## Print the operator ref whose CRD bases envtest loads.
+	@echo "$(API_REF)"
 
 # govulncheck cannot load code that needs a newer Go than the Go that built it, so a change of Go builds it again.
 .PHONY: govulncheck
