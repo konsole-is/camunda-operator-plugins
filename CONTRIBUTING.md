@@ -16,7 +16,7 @@ A maintainer approves a plugin when all of these rules are true:
 1. The plugin passes the conformance suite of the operator in CI.
 2. The plugin has its own unit tests and its own envtest suite, and CI passes.
 3. The plugin has a docs page in `docs/plugins/`.
-4. The plugin imports only the published plugin API of the operator. That API is the module `github.com/konsole-is/camunda-operator/api`, and the conformance module in tests. `make lint` refuses an import of another package of the operator.
+4. The plugin imports only the published plugin API of the operator. That API is the module `github.com/konsole-is/camunda-operator/api`, and the conformance module in tests. `make lint` refuses an import of another package of the operator, and a `go.mod` that requires the root module of the operator.
 5. The plugin has the Apache-2.0 license, the license of this repository.
 
 ## 3. Code owner

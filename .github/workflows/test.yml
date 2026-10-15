@@ -44,3 +44,6 @@ jobs:
 
       - name: Check the operator ref of each form of the api version
         run: make test-api-ref
+
+      - name: Check that the published API check refuses the root module
+        run: make test-published-api

@@ -68,12 +68,33 @@ chart-verify: ## Lint and render the chart of each plugin, and check the serve r
 		echo "  charts/$$p refuses to render without a registration"; \
 	done
 
+# GOMOD_FILE is the go.mod that check-published-api reads. test-published-api
+# sets it to a copy that requires the root module of the operator.
+GOMOD_FILE ?= go.mod
+
+.PHONY: check-published-api
+check-published-api: ## Check that go.mod does not require the root module of the operator, which is not a published API.
+	@if go mod edit -json "$(GOMOD_FILE)" | jq -e '.Require[]? | select(.Path == "github.com/konsole-is/camunda-operator")' > /dev/null; then \
+		echo "$(GOMOD_FILE) requires github.com/konsole-is/camunda-operator, which is not a published API of the operator" >&2; \
+		exit 1; \
+	fi
+
+.PHONY: test-published-api
+test-published-api: ## Check that check-published-api refuses a go.mod that requires the root module of the operator.
+	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+		cp go.mod "$$tmp/go.mod"; \
+		go mod edit -require=github.com/konsole-is/camunda-operator@v0.2.0 "$$tmp/go.mod"; \
+		if $(MAKE) -s check-published-api GOMOD_FILE="$$tmp/go.mod" 2> /dev/null; then \
+			echo "check-published-api accepts a go.mod that requires the root module of the operator" >&2; \
+			exit 1; \
+		fi
+
 .PHONY: list-plugins
 list-plugins: ## Print the plugins, every directory of cmd/, as a JSON list.
 	@printf '%s\n' $(PLUGINS) | jq -R . | jq -cs .
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint.
+lint: golangci-lint check-published-api ## Run golangci-lint and check that go.mod requires only the published API.
 	"$(GOLANGCI_LINT)" run
 
 .PHONY: lint-fix
