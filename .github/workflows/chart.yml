@@ -1,0 +1,40 @@
+name: Chart
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Download the Go modules
+        run: hack/ci-retry.sh go mod download
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5.0.1
+        with:
+          version: v4.3.0
+
+      # Each plugin has a chart, each chart grants serve on its own
+      # registrations only, and no chart ships an admission policy.
+      - name: Verify the charts
+        run: make chart-verify

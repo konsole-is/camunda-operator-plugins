@@ -1,0 +1,111 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # A new vulnerability can be published after a merge, with no code change.
+  # The weekly run scans main again.
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+# The event is part of the group, so a push to main does not cancel the
+# weekly run on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      # govulncheck checks the stdlib of the Go that runs it. The golang
+      # builder image of the Dockerfile is newer than the go line of go.mod,
+      # so that line gives stdlib findings that no image has. .tool-versions
+      # holds the Go release line of the builder image.
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: .tool-versions
+
+      # The Go module proxy sometimes drops a connection. The retry keeps
+      # one dropped download from failing the job.
+      - name: Download the Go modules and govulncheck
+        run: |
+          hack/ci-retry.sh go mod download
+          hack/ci-retry.sh make govulncheck
+
+      - name: Run govulncheck
+        run: make vulncheck
+
+  plugins:
+    name: List the plugins
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.list.outputs.plugins }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+      - name: List the plugins
+        id: list
+        run: echo "plugins=$(make -s list-plugins)" >> "$GITHUB_OUTPUT"
+
+  image:
+    name: Scan the ${{ matrix.plugin }} image
+    needs: plugins
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload SARIF to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.plugins.outputs.plugins) }}
+    env:
+      REF: camunda-operator-plugins-${{ matrix.plugin }}:scan
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Build the image
+        run: make docker-build "PLUGIN=${{ matrix.plugin }}" "IMG=${REF}"
+
+      # The report holds every finding, with a fix or not.
+      #
+      # trivy-action is pinned to the commit of its tag, not to the tag, so a
+      # moved tag cannot change the code that runs with this token.
+      - name: Write the Trivy report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REF }}
+          format: sarif
+          output: trivy.sarif
+
+      # A pull request from a fork gets a read-only token, and the upload
+      # needs write access.
+      - name: Upload the report to code scanning
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ matrix.plugin }}
+
+      # A finding without a fix gives the pull request nothing to do, so only
+      # a HIGH or CRITICAL finding with a fix fails the job.
+      - name: Fail on a HIGH or CRITICAL finding with a fix
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_SKIP_DB_UPDATE: "true"
+        with:
+          image-ref: ${{ env.REF }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
