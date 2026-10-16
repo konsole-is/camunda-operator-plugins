@@ -1,0 +1,49 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Tidy downloads the modules that the later steps need, so it is
+      # retried when the module proxy drops a connection.
+      - name: Check that go.mod and go.sum are tidy
+        run: |
+          hack/ci-retry.sh make tidy
+          git diff --exit-code -- go.mod go.sum
+
+      # make test downloads the envtest binaries and the CRD bases of the
+      # operator ref that the api module names, then runs the unit tests and
+      # the envtest suites.
+      - name: Run the tests
+        run: make test
+
+      - name: Check that a release build reports its tag
+        run: make test-version-stamp
+
+      - name: Check the operator ref of each form of the api version
+        run: make test-api-ref
+
+      - name: Check that the published API check refuses the root module
+        run: make test-published-api

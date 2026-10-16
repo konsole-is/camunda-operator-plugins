@@ -1,0 +1,12 @@
+# Tools, envtest binaries, and the CRD bases that make envtest-crds downloads.
+bin/*
+# Chart packages of a local helm package.
+dist/
+*.test
+*.out
+go.work
+.idea
+.vscode
+*.swp
+*~
+*.kubeconfig

@@ -1,0 +1,11 @@
+apiVersion: v2
+name: skeleton
+description: The skeleton plugin of the Camunda operator. A new plugin copies its chart.
+type: application
+# The release sets version and appVersion to the version of its tag.
+version: 0.0.0-dev
+appVersion: "0.0.0-dev"
+kubeVersion: ">= 1.34.0-0"
+home: https://github.com/konsole-is/camunda-operator-plugins
+sources:
+  - https://github.com/konsole-is/camunda-operator-plugins

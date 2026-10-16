@@ -1,0 +1,156 @@
+name: Catalog
+
+# Opens a pull request on konsole-is/camunda-operator that sets the version of
+# every chart in fleet-manager/catalog/official-plugins.json, the catalog that
+# the fleet manager image ships. The Release workflow calls it for a release
+# that is not a prerelease. A maintainer runs it by hand for another base
+# branch, for example to test a release.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      base:
+        required: false
+        type: string
+        default: main
+      require_published:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      OPERATOR_CATALOG_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v0.1.0
+        required: true
+        type: string
+      base:
+        description: Base branch of the pull request in konsole-is/camunda-operator
+        required: true
+        default: main
+        type: string
+      require_published:
+        description: Stop when a chart of the catalog has no release at the version. Turn it off only for a test release.
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    name: Open the catalog pull request
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+      BASE: ${{ inputs.base }}
+      OPERATOR_REPO: konsole-is/camunda-operator
+      CATALOG: fleet-manager/catalog/official-plugins.json
+      # GITHUB_TOKEN can write only to this repository. The token needs
+      # contents: write and pull-requests: write on the operator repository.
+      GH_TOKEN: ${{ secrets.OPERATOR_CATALOG_TOKEN }}
+    steps:
+      - name: Check the token and the tag
+        run: |
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "The secret OPERATOR_CATALOG_TOKEN is not set." >&2
+            exit 1
+          fi
+          num='(0|[1-9][0-9]*)'
+          pre="(${num}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+          if [[ ! "${TAG}" =~ ^v${num}\.${num}\.${num}(-${pre}(\.${pre})*)?$ ]]; then
+            echo "Tag '${TAG}' is not a release tag such as v0.1.0 or v0.1.0-rc.1." >&2
+            exit 1
+          fi
+          echo "VERSION=${TAG#v}" >> "${GITHUB_ENV}"
+
+      - name: Read the catalog of the base branch
+        run: |
+          base_sha=$(gh api "repos/${OPERATOR_REPO}/git/ref/heads/${BASE}" --jq .object.sha)
+          gh api "repos/${OPERATOR_REPO}/contents/${CATALOG}?ref=${base_sha}" --jq .content | base64 -d > old.json
+          echo "BASE_SHA=${base_sha}" >> "${GITHUB_ENV}"
+
+      - name: Install Helm
+        if: inputs.require_published
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+
+      # Every chart of the catalog gets the one version, so a chart without a
+      # release at that version stops the run.
+      - name: Check that each chart of the catalog is published at the version
+        if: inputs.require_published
+        run: |
+          missing=()
+          while read -r chart; do
+            helm show chart "${chart}" --version "${VERSION}" > /dev/null 2>&1 || missing+=("${chart}")
+          done < <(jq -r '.charts[].chart' old.json)
+          if (( ${#missing[@]} > 0 )); then
+            echo "These charts of the catalog have no release ${VERSION}: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      # jq writes the layout that the test of the catalog checks, so the diff
+      # holds only the versions.
+      - name: Write the catalog with the version
+        id: write
+        run: |
+          jq --arg v "${VERSION}" \
+            '.charts |= map(.version = $v | .installCommand |= sub("--version [^ ]+"; "--version " + $v))' \
+            old.json > new.json
+          # An install command that does not name the new version exactly
+          # once stops the run, so the catalog never offers an old chart.
+          jq -e --arg v "${VERSION}" \
+            'all(.charts[]; .version == $v and (.installCommand | split(" ") | indices(["--version", $v]) | length == 1))' \
+            new.json > /dev/null
+          if cmp -s old.json new.json; then
+            echo "The catalog of ${BASE} already names ${VERSION}." >> "${GITHUB_STEP_SUMMARY}"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+
+      # The ruleset of the operator main branch requires signed commits.
+      # GitHub signs a commit of the createCommitOnBranch mutation, and it
+      # does not sign a git push from a runner.
+      - name: Open the pull request
+        if: steps.write.outputs.changed == 'true'
+        run: |
+          branch="chore/plugins-catalog-${VERSION}"
+          if gh api "repos/${OPERATOR_REPO}/git/ref/heads/${branch}" > /dev/null 2>&1; then
+            echo "Branch ${branch} exists on ${OPERATOR_REPO}. Close its pull request and delete it, then run again." >&2
+            exit 1
+          fi
+          gh api -X POST "repos/${OPERATOR_REPO}/git/refs" -f ref="refs/heads/${branch}" -f sha="${BASE_SHA}" > /dev/null
+          jq -n \
+            --arg repo "${OPERATOR_REPO}" \
+            --arg branch "${branch}" \
+            --arg head "${BASE_SHA}" \
+            --arg path "${CATALOG}" \
+            --arg contents "$(base64 -w0 new.json)" \
+            --arg headline "chore(fleet-manager): update the official plugin catalog to ${VERSION}" \
+            '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              variables: {input: {
+                branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+                expectedHeadOid: $head,
+                message: {headline: $headline},
+                fileChanges: {additions: [{path: $path, contents: $contents}]}
+              }}
+            }' > commit.json
+          gh api graphql --input commit.json > /dev/null
+          {
+            echo "The release ${TAG} of konsole-is/camunda-operator-plugins published every chart at ${VERSION}."
+            echo
+            echo "This sets the version and the install command of each chart in the catalog that the fleet manager image ships."
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > body.md
+          gh pr create --repo "${OPERATOR_REPO}" --base "${BASE}" --head "${branch}" \
+            --title "chore(fleet-manager): update the official plugin catalog to ${VERSION}" --body-file body.md \
+            >> "${GITHUB_STEP_SUMMARY}"

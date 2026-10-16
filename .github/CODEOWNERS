@@ -1,0 +1,9 @@
+# The maintainer reviews every change. Each plugin also names its
+# contributor, who reviews the changes to that plugin. CONTRIBUTING.md says
+# how a plugin gets a new owner.
+*                           @sourcehawk
+
+/cmd/skeleton/              @sourcehawk
+/internal/skeleton/         @sourcehawk
+/charts/skeleton/           @sourcehawk
+/docs/plugins/skeleton.md   @sourcehawk
