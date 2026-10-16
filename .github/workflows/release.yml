@@ -173,4 +173,4 @@ jobs:
       tag: ${{ github.ref_name }}
       base: main
     secrets:
-      OPERATOR_CATALOG_TOKEN: ${{ secrets.OPERATOR_CATALOG_TOKEN }}
+      CATALOG_APP_PRIVATE_KEY: ${{ secrets.CATALOG_APP_PRIVATE_KEY }}

@@ -53,3 +53,10 @@ A maintainer approves a plugin when all of these rules are true:
 2. The release publishes the image and the chart of every plugin, all at version `X.Y.Z`.
 3. The release then opens a pull request on `konsole-is/camunda-operator`. That pull request sets the versions in the catalog of official plugins that the fleet manager shows. It stops when a chart of the catalog has no release at the new version.
 4. A prerelease, for example `v0.2.0-rc.1`, publishes the images and the charts, but it does not change the catalog.
+
+The release opens the catalog pull request with a token of the GitHub App `camunda-operator-catalog`. To set up such an App, for example for a rebuilt repository:
+
+1. Create a GitHub App in the `konsole-is` organization, with the repository permissions Contents: Read and write, and Pull requests: Read and write.
+2. Install the App only on `konsole-is/camunda-operator`.
+3. In this repository, set the variable `CATALOG_APP_ID` to the App ID.
+4. In this repository, set the secret `CATALOG_APP_PRIVATE_KEY` to a private key of the App.

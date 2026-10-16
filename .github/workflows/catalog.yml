@@ -20,7 +20,7 @@ on:
         type: boolean
         default: true
     secrets:
-      OPERATOR_CATALOG_TOKEN:
+      CATALOG_APP_PRIVATE_KEY:
         required: true
   workflow_dispatch:
     inputs:
@@ -51,16 +51,24 @@ jobs:
       BASE: ${{ inputs.base }}
       OPERATOR_REPO: konsole-is/camunda-operator
       CATALOG: fleet-manager/catalog/official-plugins.json
-      # GITHUB_TOKEN can write only to this repository. The token needs
-      # contents: write and pull-requests: write on the operator repository.
-      GH_TOKEN: ${{ secrets.OPERATOR_CATALOG_TOKEN }}
     steps:
-      - name: Check the token and the tag
+      # GITHUB_TOKEN can write only to this repository, and a pull request
+      # that it opens starts no workflow on the operator repository. The
+      # commit of the pull request has the bot of the App as its author,
+      # because createCommitOnBranch uses the identity of the token.
+      - name: Create a token of the catalog App
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.CATALOG_APP_ID }}
+          private-key: ${{ secrets.CATALOG_APP_PRIVATE_KEY }}
+          owner: konsole-is
+          repositories: camunda-operator
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check the tag
         run: |
-          if [[ -z "${GH_TOKEN}" ]]; then
-            echo "The secret OPERATOR_CATALOG_TOKEN is not set." >&2
-            exit 1
-          fi
           num='(0|[1-9][0-9]*)'
           pre="(${num}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
           if [[ ! "${TAG}" =~ ^v${num}\.${num}\.${num}(-${pre}(\.${pre})*)?$ ]]; then
@@ -70,6 +78,8 @@ jobs:
           echo "VERSION=${TAG#v}" >> "${GITHUB_ENV}"
 
       - name: Read the catalog of the base branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           base_sha=$(gh api "repos/${OPERATOR_REPO}/git/ref/heads/${BASE}" --jq .object.sha)
           gh api "repos/${OPERATOR_REPO}/contents/${CATALOG}?ref=${base_sha}" --jq .content | base64 -d > old.json
@@ -120,6 +130,8 @@ jobs:
       # does not sign a git push from a runner.
       - name: Open the pull request
         if: steps.write.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           branch="chore/plugins-catalog-${VERSION}"
           if gh api "repos/${OPERATOR_REPO}/git/ref/heads/${branch}" > /dev/null 2>&1; then
