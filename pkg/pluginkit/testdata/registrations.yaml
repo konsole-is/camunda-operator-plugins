@@ -1,0 +1,29 @@
+- name: s3-bucket
+  sections: [backup-storage]
+  label: New S3 bucket
+  description: Creates one S3 bucket for each claim.
+  mode: Default
+  parameters:
+    type: object
+    properties:
+      size:
+        type: integer
+        minimum: 1
+  inputs:
+    - name: key
+      from: encryption-key/keyRef
+  outputs:
+    - key: bucket
+  grantTemplates:
+    - name: bucket-read-write
+      format: aws-iam-statement
+      requiresInputs: [key]
+      template:
+        Action: "s3:*"
+        Resource: "arn:aws:s3:::{{ .outputs.bucket }}"
+  deletionPolicies: [Delete, Orphan]
+- name: s3-bucket-internal
+  sections: [backup-storage]
+  label: Internal S3 bucket
+  mode: Optional
+  deletionPolicies: [Delete]

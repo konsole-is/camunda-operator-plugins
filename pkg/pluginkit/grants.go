@@ -25,8 +25,8 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v1 "github.com/konsole-is/camunda-operator/api/v1"
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
+	v1 "github.com/konsole-is/camunda-operator/api/v1"
 )
 
 // targetKindCluster is the target kind of a request whose grants name a
@@ -55,7 +55,11 @@ func renderGrants(
 	data TemplateData,
 ) ([]*pluginsv1alpha1.Grant, error) {
 	if len(reg.Spec.GrantTemplates) > 0 && req.Spec.Target.Kind != targetKindCluster {
-		return nil, fmt.Errorf("grants need a %s target, and the target is a %s", targetKindCluster, req.Spec.Target.Kind)
+		return nil, fmt.Errorf(
+			"grants need a %s target, and the target is a %s",
+			targetKindCluster,
+			req.Spec.Target.Kind,
+		)
 	}
 
 	var grants []*pluginsv1alpha1.Grant

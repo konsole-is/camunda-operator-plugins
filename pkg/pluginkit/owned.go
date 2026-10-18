@@ -65,7 +65,12 @@ func prepareOwned(
 
 	if !namespaced {
 		if u.GetNamespace() != "" {
-			return nil, fmt.Errorf("%s %q is cluster-scoped and cannot have the namespace %q", gvk.Kind, u.GetName(), u.GetNamespace())
+			return nil, fmt.Errorf(
+				"%s %q is cluster-scoped and cannot have the namespace %q",
+				gvk.Kind,
+				u.GetName(),
+				u.GetNamespace(),
+			)
 		}
 		return u, nil
 	}

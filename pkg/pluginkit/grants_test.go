@@ -112,7 +112,11 @@ func TestRenderGrantsRendersATemplateWhoseInputsHaveValues(t *testing.T) {
 		grantTemplate("bucket-key-use", `{"Action":"kms:Decrypt"}`, "key"),
 	)
 
-	grants, err := renderGrants(grantRequest(map[string]string{"key": "arn:aws:kms:eu-west-1:1:key/k"}), reg, TemplateData{})
+	grants, err := renderGrants(
+		grantRequest(map[string]string{"key": "arn:aws:kms:eu-west-1:1:key/k"}),
+		reg,
+		TemplateData{},
+	)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{
