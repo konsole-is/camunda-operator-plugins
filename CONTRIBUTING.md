@@ -7,7 +7,8 @@ This guide gives the rules for a plugin in this repository. The maintainers and 
 1. A plugin has one directory in each of these places: `cmd/<plugin>/`, `internal/<plugin>/`, and `charts/<plugin>/`. It also has one page, `docs/plugins/<plugin>.md`.
 2. To start a new plugin, copy the four parts of the skeleton plugin and rename them: `cmd/skeleton/`, `internal/skeleton/`, `charts/skeleton/`, and `docs/plugins/skeleton.md`.
 3. Code that two or more plugins use goes in `pkg/`.
-4. All plugins are in one Go module. A release gives every plugin the version of the repository.
+4. A plugin serves its requests through `pkg/pluginkit`. See [`docs/pluginkit.md`](docs/pluginkit.md).
+5. All plugins are in one Go module. A release gives every plugin the version of the repository.
 
 ## 2. When a plugin is approved
 

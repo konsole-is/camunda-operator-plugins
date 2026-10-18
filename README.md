@@ -19,16 +19,17 @@ The page of each plugin in [`docs/`](docs/index.md) gives its prerequisites and 
 
 ```
 go.mod              github.com/konsole-is/camunda-operator-plugins
+pkg/pluginkit/      the shared library of every plugin
 pkg/                code that two or more plugins use
 cmd/<plugin>/       the main package of each plugin
 internal/<plugin>/  the controller of each plugin
 charts/<plugin>/    the chart of each plugin
 test/e2e/           the journeys, behind the e2e build tag
-docs/               one page for each plugin
+docs/               one page for each plugin, and the pluginkit page
 hack/               the tools of the Makefile
 ```
 
-The `skeleton` plugin is the plugin that a new plugin copies. It serves no section.
+The `skeleton` plugin is the plugin that a new plugin copies. It writes one ConfigMap for each request, and it serves no section of the operator. [`docs/pluginkit.md`](docs/pluginkit.md) describes the library for plugin authors.
 
 ## Development
 

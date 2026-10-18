@@ -1,20 +1,21 @@
 # Skeleton
 
-The skeleton plugin is the plugin that a new plugin copies. It starts a controller that serves its health probes. The scheme of the controller holds the `plugins.camunda.io` kinds, but the controller reads nothing from the cluster. It serves no section yet.
+The skeleton plugin is the plugin that a new plugin copies. It serves its registrations through [pluginkit](../pluginkit.md) and writes one ConfigMap for each request. Its default section `skeleton` does not exist, so the operator does not accept the registration and the fleet manager never offers it. A new plugin sets the sections of its registrations to sections that exist.
 
 ## What it creates
 
-The skeleton creates nothing.
+- One PluginRegistration for each item of the chart value `registrations`.
+- One ConfigMap `<request>-skeleton` for each PluginRequest, in the namespace of the request.
 
 ## Prerequisites
 
-The skeleton needs nothing on the cluster, because it reads nothing. Its envtest suite loads the CRD bases of the operator, and `make test` downloads them.
+The skeleton needs the CRDs of the operator on the cluster. Its envtest suite loads the CRD bases of the operator, and `make test` downloads them.
 
 ## Chart values
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `registrations` | `[{name: skeleton}]` | The names of the PluginRegistrations that the controller serves. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
+| `registrations` | one registration `skeleton` for the section `skeleton` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
 | `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/skeleton` | The image of the controller. |
 | `image.tag` | the `appVersion` of the chart | The tag of the image. |
 | `resources` | 10m CPU and 64Mi memory requested, 128Mi memory limit | The resources of the controller container. |
@@ -25,7 +26,9 @@ The skeleton has no parameters, so a claim can change nothing.
 
 ## Outputs
 
-The skeleton publishes no outputs.
+| Key | Value |
+| --- | --- |
+| `configMapName` | The name of the ConfigMap that the skeleton writes for the request. |
 
 ## Grants
 
@@ -33,8 +36,15 @@ The skeleton writes no grants.
 
 ## Deletion
 
-The skeleton has no resources to delete.
+With the deletion policy `Delete`, the garbage collector deletes the ConfigMap with the request. With `Orphan`, the ConfigMap stays, without its owner reference to the request.
 
 ## Troubleshooting
 
-The skeleton sets no conditions, so it has no reasons to troubleshoot. When the controller Pod does not get ready, read its log for the error that stopped the manager.
+| Reason | Condition | What to do |
+| --- | --- | --- |
+| `InvalidParameters` | `OutputsReady` and `Ready` of the request | The default registration has no schema, so it does not get this reason. A registration of the chart values that adds a `parameters` schema gets it when the parameters of the request do not pass the schema. The message names the field. Correct the parameters of the claim, or the schema. |
+| `ReconcileError` | `Ready` of the request | The message gives the error. For the skeleton, the usual cause is a registration that does not declare the output `configMapName`. Add it to the `outputs` of the registration in the chart values. |
+
+The skeleton has no health check and deletes nothing itself, so its registration is never `Unhealthy` and a request never gets `DeleteFailed`.
+
+When the controller Pod does not get ready, read its log. The controller stops when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
