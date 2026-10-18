@@ -14,8 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command skeleton runs the skeleton plugin. With -version it prints the
-// version of the build and exits.
+// Command skeleton runs the skeleton plugin. It reads its registrations from
+// the file of -registrations. With -version it prints the version of the
+// build and exits.
 package main
 
 import (
@@ -28,6 +29,7 @@ import (
 
 	"github.com/konsole-is/camunda-operator-plugins/internal/skeleton"
 	"github.com/konsole-is/camunda-operator-plugins/internal/version"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 func main() {
@@ -45,6 +47,11 @@ func main() {
 		"0",
 		"The address of /metrics. 0 turns the metrics off.",
 	)
+	registrations := flag.String(
+		"registrations",
+		"/etc/plugin/registrations.yaml",
+		"The file of the registrations that the plugin publishes and serves.",
+	)
 	zapOpts := zap.Options{}
 	zapOpts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -54,8 +61,19 @@ func main() {
 		return
 	}
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
+	ctrl.SetLogger(pluginkit.NewLogger(&zapOpts))
 	log := ctrl.Log.WithName("setup")
+
+	var err error
+	if opts.Registrations, err = pluginkit.LoadRegistrations(*registrations); err != nil {
+		log.Error(err, "Could not load the registrations")
+		os.Exit(1)
+	}
+
+	if opts.ServiceAccount, err = pluginkit.ServiceAccountFromEnv(); err != nil {
+		log.Error(err, "Could not find the ServiceAccount of the controller")
+		os.Exit(1)
+	}
 
 	mgr, err := skeleton.NewManager(ctrl.GetConfigOrDie(), opts)
 	if err != nil {

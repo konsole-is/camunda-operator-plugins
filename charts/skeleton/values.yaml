@@ -6,11 +6,22 @@ image:
 
 imagePullSecrets: []
 
-# registrations are the PluginRegistrations that the controller serves. The
-# chart grants the controller the verb serve on each name, and on no other
-# registration. The chart refuses to render without one.
+# registrations are the PluginRegistrations that the controller writes at
+# startup and serves. Each item is a name and the fields of a registration
+# spec. The chart grants the controller the verb serve on each name, and on
+# no other registration. The chart refuses to render without one.
 registrations:
   - name: skeleton
+    # The section skeleton does not exist, so the registry controller does
+    # not accept the registration and the fleet manager never offers it.
+    sections: [skeleton]
+    label: Skeleton option
+    description: Writes one ConfigMap for each request. A new plugin copies it.
+    mode: Optional
+    deletionPolicies: [Delete, Orphan]
+    outputs:
+      - key: configMapName
+        description: The ConfigMap that the skeleton writes for the request.
 
 resources:
   requests:

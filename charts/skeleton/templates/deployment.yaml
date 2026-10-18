@@ -12,6 +12,8 @@ spec:
       {{- include "skeleton.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        checksum/registrations: {{ toYaml .Values.registrations | sha256sum }}
       labels:
         {{- include "skeleton.selectorLabels" . | nindent 8 }}
     spec:
@@ -28,6 +30,21 @@ spec:
         - name: controller
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -registrations=/etc/plugin/registrations.yaml
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_ACCOUNT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+          volumeMounts:
+            - name: registrations
+              mountPath: /etc/plugin
+              readOnly: true
           ports:
             - name: probes
               containerPort: 8081
@@ -48,3 +65,7 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      volumes:
+        - name: registrations
+          configMap:
+            name: {{ include "skeleton.fullname" . }}-registrations
