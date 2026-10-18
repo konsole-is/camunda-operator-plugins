@@ -17,6 +17,7 @@ limitations under the License.
 package pluginkit
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,7 +27,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/ptr"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -50,9 +50,7 @@ func wantLabels(extra map[string]string) map[string]string {
 		pluginsv1alpha1.LabelRegistration: "s3-bucket",
 		pluginsv1alpha1.LabelRequest:      "orders-backup-storage",
 	}
-	for k, v := range extra {
-		labels[k] = v
-	}
+	maps.Copy(labels, extra)
 	return labels
 }
 
@@ -69,8 +67,8 @@ func TestPrepareOwnedGivesANamespacedObjectAnOwnerReference(t *testing.T) {
 		Kind:               "PluginRequest",
 		Name:               "orders-backup-storage",
 		UID:                "uid-1",
-		Controller:         ptr.To(true),
-		BlockOwnerDeletion: ptr.To(true),
+		Controller:         new(true),
+		BlockOwnerDeletion: new(true),
 	}}, got.GetOwnerReferences())
 	assert.Equal(t, "ConfigMap", got.GetKind())
 	assert.Empty(t, cm.Labels, "the object of the plugin stays as it was")

@@ -73,7 +73,7 @@ func ParseTemplate(text string, kind TemplateKind) (*Template, error) {
 		return t, nil
 	}
 
-	for _, node := range tmpl.Tree.Root.Nodes {
+	for _, node := range tmpl.Root.Nodes {
 		if err := t.checkNode(node, kind); err != nil {
 			return nil, err
 		}
