@@ -33,9 +33,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
+	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
+
+// otherRegistration is a registration that the test plugin does not serve.
+const otherRegistration = "other"
 
 // readGrant returns the Grant of the template read of request.
 func readGrant(g Gomega, request *pluginsv1alpha1.PluginRequest) *pluginsv1alpha1.Grant {
@@ -308,12 +312,38 @@ var _ = Describe("the request reconciler", func() {
 
 	It("ignores a request of another registration", func() {
 		request := createRequest("other-registration", func(r *pluginsv1alpha1.PluginRequest) {
-			r.Labels[pluginsv1alpha1.LabelRegistration] = "other"
-			r.Spec.Registration = "other"
+			r.Labels[pluginsv1alpha1.LabelRegistration] = otherRegistration
+			r.Spec.Registration = otherRegistration
 		})
 
 		Consistently(func(g Gomega) {
 			g.Expect(readRequest(g, request).Finalizers).To(BeEmpty())
+		}).WithTimeout(2 * time.Second).Should(Succeed())
+	})
+
+	It("ignores a request of another registration label that a Grant event names", func() {
+		request := createRequest("other-label", func(r *pluginsv1alpha1.PluginRequest) {
+			r.Labels[pluginsv1alpha1.LabelRegistration] = otherRegistration
+		})
+		grant := &pluginsv1alpha1.Grant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "stray",
+				Namespace: request.Namespace,
+				Labels:    map[string]string{pluginsv1alpha1.LabelRequest: request.Name},
+			},
+			Spec: pluginsv1alpha1.GrantSpec{
+				Cluster:  v1.ClusterRef{Name: "orders"},
+				Template: "read",
+				Format:   pluginsv1alpha1.GrantFormatAWSIAMStatement,
+				Fragment: &apiextensionsv1.JSON{Raw: []byte(`{"Action":"s3:GetObject"}`)},
+			},
+		}
+		Expect(k8s.Create(ctx, grant)).To(Succeed())
+
+		Consistently(func(g Gomega) {
+			current := readRequest(g, request)
+			g.Expect(current.Finalizers).To(BeEmpty())
+			g.Expect(current.Status.Conditions).To(BeEmpty())
 		}).WithTimeout(2 * time.Second).Should(Succeed())
 	})
 

@@ -72,8 +72,10 @@ func (r *reconciler[P, I]) Reconcile(ctx context.Context, req ctrl.Request) (res
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// A Grant or an owned object can start a reconcile that the label
+	// predicate of the request did not pass.
 	registration, ok := r.registrations[request.Spec.Registration]
-	if !ok {
+	if !ok || request.Labels[pluginsv1alpha1.LabelRegistration] != request.Spec.Registration {
 		return ctrl.Result{}, nil
 	}
 
