@@ -168,6 +168,14 @@ func TestGrantNameStaysUniqueAndShort(t *testing.T) {
 		GrantName("orders-backup-storage", "bucket-read-write"))
 }
 
+func TestGrantNameDoesNotEndTheCutWithADot(t *testing.T) {
+	request := strings.Repeat("a", 53) + ".b"
+
+	name := GrantName(request, "read")
+
+	assert.NotContains(t, name, ".-")
+}
+
 func TestGrantNameDiffersForTwoRequestsWhoseNamesJoinAlike(t *testing.T) {
 	assert.NotEqual(t, GrantName("orders-backup", "key-read"), GrantName("orders-backup-key", "read"))
 }

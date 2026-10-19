@@ -39,7 +39,7 @@ const targetKindCluster = "CamundaCluster"
 func GrantName(request, template string) string {
 	name := request + "-" + template
 	if len(name) > 54 {
-		name = strings.TrimRight(name[:54], "-")
+		name = strings.TrimRight(name[:54], "-.")
 	}
 
 	sum := sha256.Sum256([]byte(request + "/" + template))
