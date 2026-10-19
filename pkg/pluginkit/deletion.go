@@ -60,7 +60,7 @@ func (r *reconciler[P, I]) delete(
 	}
 
 	// A deleted request is not checked against the schema, so that a changed
-	// registration never blocks the delete of a namespace.
+	// schema does not block its delete.
 	parameters := request.Spec.Parameters
 	if data, err := templateData(request); err == nil {
 		if rendered, err := renderParameters(registration.Spec.Parameters, parameters, data); err == nil {

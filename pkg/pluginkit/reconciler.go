@@ -101,12 +101,6 @@ func (r *reconciler[P, I]) Reconcile(ctx context.Context, req ctrl.Request) (res
 		return r.delete(ctx, request, registration)
 	}
 
-	if controllerutil.AddFinalizer(request, pluginsv1alpha1.FinalizerCleanup) {
-		if err := r.client.Update(ctx, request); err != nil {
-			return ctrl.Result{}, fmt.Errorf("adding the finalizer: %w", err)
-		}
-	}
-
 	return r.serve(ctx, rec, request, registration)
 }
 
@@ -148,6 +142,14 @@ func (r *reconciler[P, I]) serve(
 		stage(request, pluginsv1alpha1.ConditionOutputsReady, pluginsv1alpha1.ReasonInvalidParameters, err.Error())
 		stage(request, v1.ConditionReady, pluginsv1alpha1.ReasonInvalidParameters, err.Error())
 		return ctrl.Result{}, nil
+	}
+
+	// A request whose parameters never passed the schema holds no finalizer,
+	// so its delete never waits for a cleanup that cannot run.
+	if controllerutil.AddFinalizer(request, pluginsv1alpha1.FinalizerCleanup) {
+		if err := r.client.Update(ctx, request); err != nil {
+			return ctrl.Result{}, fmt.Errorf("adding the finalizer: %w", err)
+		}
 	}
 
 	pluginRequest, err := r.pluginRequest(request, registration, parameters, logf.FromContext(ctx))

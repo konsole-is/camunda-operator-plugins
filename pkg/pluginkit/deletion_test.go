@@ -202,6 +202,20 @@ var _ = Describe("the deletion of a request", func() {
 		Expect(cm.OwnerReferences).NotTo(ContainElement(HaveField("UID", uid)))
 	})
 
+	It("deletes a request at once whose parameters never passed the schema", func() {
+		request := createRequest("never-valid", func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = &apiextensionsv1.JSON{Raw: []byte(`{"size":"big"}`)}
+		})
+		Eventually(func(g Gomega) {
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters))
+		}).Should(Succeed())
+		Expect(readRequest(Default, request).Finalizers).To(BeEmpty())
+
+		Expect(k8s.Delete(ctx, request)).To(Succeed())
+
+		Eventually(gone(request)).Should(BeTrue())
+	})
+
 	It("calls Delete for a request whose parameters fail the schema", func() {
 		request := servedWithKey("delete-invalid-parameters")
 		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) {

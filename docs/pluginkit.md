@@ -62,9 +62,9 @@ pluginkit serves no request before all registrations are applied.
 
 pluginkit serves each `PluginRequest` whose label `plugins.camunda.io/registration` names a registration of the `Config`. For each request, it does these steps in this order:
 
-1. It adds the finalizer `plugins.camunda.io/cleanup`.
-2. It validates `spec.parameters` against the schema of the registration, with the validator of the Kubernetes API server. The error names each failing field, for example `spec.parameters.size`. The `x-kubernetes-validations` rules of the schema are not checked.
-3. It renders each parameter whose schema has `"x-fleet-template": true`.
+1. It validates `spec.parameters` against the schema of the registration, with the validator of the Kubernetes API server. The error names each failing field, for example `spec.parameters.size`. The `x-kubernetes-validations` rules of the schema are not checked.
+2. It renders each parameter whose schema has `"x-fleet-template": true`.
+3. It adds the finalizer `plugins.camunda.io/cleanup`. A request whose parameters never passed the schema has no finalizer, so its delete does not wait.
 4. It calls `Reconcile`.
 5. It renders the grant templates of the registration, and applies the objects and the Grants.
 6. It deletes each Grant of the request that it no longer renders.
@@ -106,7 +106,7 @@ When another writer changed the request after the read, the status write fails w
 
 ### Deletion
 
-When a request is deleted, pluginkit calls `Delete` or `Orphan`, by `spec.deletionPolicy`. It decodes the parameters without the schema check, so a changed schema cannot block the delete of a namespace. When the template parameters render, the plugin gets the same values as in `Reconcile`.
+When a request is deleted, pluginkit calls `Delete` or `Orphan`, by `spec.deletionPolicy`. It decodes the parameters without the schema check, so a changed schema does not block the delete. When the template parameters render, the plugin gets the same values as in `Reconcile`. When the parameters do not decode into `P`, the plugin cannot apply the policy: the finalizer stays, and `Ready` is `False` with reason `InvalidParameters`. Correct `spec.parameters`, and the delete continues.
 
 - `Delete`: pluginkit deletes each Grant with the label `plugins.camunda.io/request: <request>` in the namespace of the request. It does not rely on the owner reference, because a user can remove it. The garbage collector deletes the namespaced objects.
 - `Orphan`: pluginkit removes the owner references to the request from the Grants and from the namespaced objects of `Owns`. They keep their labels. A cluster-scoped object has no owner reference, so it stays as it is.
@@ -140,7 +140,7 @@ registrations:
       - key: bucket
 ```
 
-The chart runs one replica with the Deployment strategy `Recreate`, so that two controllers never write the Grants of one request. A chart that runs more replicas turns on leader election in the manager.
+A rolling update runs the old and the new controller together, so the chart turns on leader election: only the replica that holds the Lease publishes the registrations and serves the requests. The skeleton passes `-leader-elect` and `-leader-election-id=<release>`, and ships a Role and a RoleBinding for `leases` in the release namespace, as `charts/skeleton/templates/leader-election.yaml` shows. `make chart-verify` checks both.
 
 The chart sets the variables `POD_NAMESPACE` and `SERVICE_ACCOUNT_NAME` from the downward API. `pluginkit.ServiceAccountFromEnv` reads them.
 
@@ -156,5 +156,6 @@ The controller needs this RBAC, as `charts/skeleton/templates/rbac.yaml` shows:
 | `grants` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
 | `events.k8s.io` `events` | `create`, `patch` |
 | each kind of `Owns` | `get`, `list`, `watch`, `create`, `update`, `patch` |
+| `coordination.k8s.io` `leases`, in the release namespace only | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
 
 The chart also keeps the `serve` role of the chart rule in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
