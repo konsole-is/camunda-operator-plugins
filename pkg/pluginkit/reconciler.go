@@ -17,9 +17,11 @@ limitations under the License.
 package pluginkit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -205,8 +207,10 @@ func templateData(request *pluginsv1alpha1.PluginRequest) (TemplateData, error) 
 		Parameters:     map[string]any{},
 	}
 
-	if request.Spec.Parameters != nil {
-		if err := decodeInto(request.Spec.Parameters.Raw, &data.Parameters); err != nil {
+	if request.Spec.Parameters != nil && len(request.Spec.Parameters.Raw) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(request.Spec.Parameters.Raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&data.Parameters); err != nil {
 			return TemplateData{}, fmt.Errorf("decoding spec.parameters: %w", err)
 		}
 	}
@@ -336,8 +340,8 @@ func (r *reconciler[P, I]) outputs(
 	return b.Build()
 }
 
-// deleteUnwantedGrants deletes each Grant that request owns and that is not
-// in wanted, and returns the Grants of the request that stay.
+// deleteUnwantedGrants deletes each Grant with the request label of request
+// that is not in wanted, and returns the Grants of the request that stay.
 func (r *reconciler[P, I]) deleteUnwantedGrants(
 	ctx context.Context,
 	request *pluginsv1alpha1.PluginRequest,
@@ -355,7 +359,7 @@ func (r *reconciler[P, I]) deleteUnwantedGrants(
 
 	var current []pluginsv1alpha1.Grant
 	for _, g := range listed {
-		if names[g.Name] || !ownedBy(&g, request) {
+		if names[g.Name] {
 			current = append(current, g)
 			continue
 		}
@@ -388,26 +392,26 @@ func (r *reconciler[P, I]) grantsOf(
 	return list.Items, nil
 }
 
-func ownedBy(obj metav1.Object, request *pluginsv1alpha1.PluginRequest) bool {
-	for _, ref := range obj.GetOwnerReferences() {
-		if ref.UID == request.UID {
-			return true
-		}
-	}
-	return false
-}
-
 // stageResult stages the status fields that the plugin returned.
 func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
-	if !equality.Semantic.DeepEqual(request.Status.Summary, res.Summary) {
+	// The CRD defaults an empty severity to Info, so the stored summary
+	// compares equal only with the same default.
+	summary := slices.Clone(res.Summary)
+	for i := range summary {
+		if summary[i].Severity == "" {
+			summary[i].Severity = pluginsv1alpha1.SeverityInfo
+		}
+	}
+
+	if !equality.Semantic.DeepEqual(request.Status.Summary, summary) {
 		request.Status.SummaryTime = nil
-		if len(res.Summary) > 0 {
+		if len(summary) > 0 {
 			request.Status.SummaryTime = &metav1.Time{Time: time.Now()}
 		}
 	}
 
 	request.Status.Outputs = res.Outputs
-	request.Status.Summary = res.Summary
+	request.Status.Summary = summary
 	request.Status.Links = res.Links
 	request.Status.PodSelector = res.PodSelector
 	request.Status.Resources = res.Resources

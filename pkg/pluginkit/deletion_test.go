@@ -87,6 +87,8 @@ var _ = Describe("the deletion of a request", func() {
 
 		Eventually(gone(request)).Should(BeTrue())
 		Expect(gone(sc)()).To(BeTrue(), "the plugin deletes its cluster-scoped object")
+		Expect(plugin.deletedPolicy(request.Namespace)).To(Equal("trust orders-camunda"),
+			"Delete gets the parameters that Reconcile got")
 		Expect(grantsOf(Default, request)).To(BeEmpty())
 
 		// envtest runs no garbage collector, which deletes the ConfigMap in a

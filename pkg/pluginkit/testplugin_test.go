@@ -55,6 +55,9 @@ type testPlugin struct {
 	// sawRegistrationFirst is 1 when the registration existed at the first
 	// call of Reconcile, and 2 when it did not.
 	sawRegistrationFirst int
+	// deletedPolicies holds the policy parameter of each request that Delete
+	// served, by namespace.
+	deletedPolicies map[string]string
 }
 
 func (p *testPlugin) setNotReady(w *pluginkit.Waiting) {
@@ -109,9 +112,21 @@ func (p *testPlugin) Reconcile(
 	}, nil
 }
 
+func (p *testPlugin) deletedPolicy(namespace string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.deletedPolicies[namespace]
+}
+
 func (p *testPlugin) Delete(ctx context.Context, req pluginkit.Request[testParams, map[string]string]) error {
 	p.mu.Lock()
 	err := p.deleteErr
+	if err == nil {
+		if p.deletedPolicies == nil {
+			p.deletedPolicies = map[string]string{}
+		}
+		p.deletedPolicies[req.Object.Namespace] = req.Parameters.Policy
+	}
 	p.mu.Unlock()
 	if err != nil {
 		return err

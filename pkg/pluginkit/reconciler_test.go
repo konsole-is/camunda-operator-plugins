@@ -210,6 +210,14 @@ var _ = Describe("the request reconciler", func() {
 		Consistently(func(g Gomega) {
 			g.Expect(readRequest(g, request).ResourceVersion).To(Equal(version))
 		}).WithTimeout(3 * time.Second).Should(Succeed())
+
+		// summaryTime has whole seconds, so a reconcile in a later second
+		// would write a new one if it saw the stored summary as changed.
+		summaryTime := readRequest(Default, request).Status.SummaryTime
+		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) { r.Labels["touch"] = "1" })
+		Consistently(func(g Gomega) {
+			g.Expect(readRequest(g, request).Status.SummaryTime).To(Equal(summaryTime))
+		}).WithTimeout(2 * time.Second).Should(Succeed())
 	})
 
 	It("ignores a request of another registration", func() {

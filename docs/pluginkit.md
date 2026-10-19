@@ -106,7 +106,7 @@ When another writer changed the request after the read, the status write fails w
 
 ### Deletion
 
-When a request is deleted, pluginkit calls `Delete` or `Orphan`, by `spec.deletionPolicy`. It decodes the parameters without the schema check, so a changed schema cannot block the delete of a namespace.
+When a request is deleted, pluginkit calls `Delete` or `Orphan`, by `spec.deletionPolicy`. It decodes the parameters without the schema check, so a changed schema cannot block the delete of a namespace. When the template parameters render, the plugin gets the same values as in `Reconcile`.
 
 - `Delete`: pluginkit deletes each Grant with the label `plugins.camunda.io/request: <request>` in the namespace of the request. It does not rely on the owner reference, because a user can remove it. The garbage collector deletes the namespaced objects.
 - `Orphan`: pluginkit removes the owner references to the request from the Grants and from the namespaced objects of `Owns`. They keep their labels. A cluster-scoped object has no owner reference, so it stays as it is.
@@ -150,6 +150,7 @@ The controller needs this RBAC, as `charts/skeleton/templates/rbac.yaml` shows:
 | `pluginregistrations/status`, with the same `resourceNames` | `update` |
 | `pluginrequests` | `get`, `list`, `watch`, `update`, `patch` |
 | `pluginrequests/status` | `update` |
+| `pluginrequests/finalizers` | `update`, because the owner references of the objects block the delete of the request |
 | `grants` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
 | `events.k8s.io` `events` | `create`, `patch` |
 | each kind of `Owns` | `get`, `list`, `watch`, `create`, `update`, `patch` |

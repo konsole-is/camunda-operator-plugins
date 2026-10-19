@@ -59,7 +59,14 @@ func (r *reconciler[P, I]) delete(
 
 	// A deleted request is not checked against the schema, so that a changed
 	// registration never blocks the delete of a namespace.
-	pluginRequest, err := r.pluginRequest(request, registration, request.Spec.Parameters, log)
+	parameters := request.Spec.Parameters
+	if data, err := templateData(request); err == nil {
+		if rendered, err := renderParameters(registration.Spec.Parameters, parameters, data); err == nil {
+			parameters = rendered
+		}
+	}
+
+	pluginRequest, err := r.pluginRequest(request, registration, parameters, log)
 	if err != nil {
 		stage(request, v1.ConditionReady, pluginsv1alpha1.ReasonInvalidParameters, err.Error())
 		return ctrl.Result{}, err
