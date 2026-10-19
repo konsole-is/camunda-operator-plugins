@@ -73,7 +73,7 @@ func TestRenderGrantsWritesOneGrantForEachTemplate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, grants, 2)
 	g := grants[0]
-	assert.Equal(t, "orders-backup-storage-bucket-read-write", g.Name)
+	assert.Equal(t, GrantName("orders-backup-storage", "bucket-read-write"), g.Name)
 	assert.Equal(t, "team-a", g.Namespace)
 	assert.Equal(t, map[string]string{
 		pluginsv1alpha1.LabelRegistration: "s3-bucket",
@@ -101,7 +101,7 @@ func TestRenderGrantsSkipsATemplateWhoseInputHasNoValue(t *testing.T) {
 			grants, err := renderGrants(grantRequest(inputs), reg, TemplateData{})
 
 			require.NoError(t, err)
-			assert.Equal(t, []string{"orders-backup-storage-bucket-read-write"}, grantNames(grants))
+			assert.Equal(t, []string{GrantName("orders-backup-storage", "bucket-read-write")}, grantNames(grants))
 		})
 	}
 }
@@ -120,8 +120,8 @@ func TestRenderGrantsRendersATemplateWhoseInputsHaveValues(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"orders-backup-storage-bucket-read-write",
-		"orders-backup-storage-bucket-key-use",
+		GrantName("orders-backup-storage", "bucket-read-write"),
+		GrantName("orders-backup-storage", "bucket-key-use"),
 	}, grantNames(grants))
 }
 
@@ -164,7 +164,12 @@ func TestGrantNameStaysUniqueAndShort(t *testing.T) {
 	assert.NotEqual(t, a, b)
 	assert.LessOrEqual(t, len(a), 63)
 
-	assert.Equal(t, "orders-backup-storage-bucket-read-write", GrantName("orders-backup-storage", "bucket-read-write"))
+	assert.Regexp(t, `^orders-backup-storage-bucket-read-write-[0-9a-f]{8}$`,
+		GrantName("orders-backup-storage", "bucket-read-write"))
+}
+
+func TestGrantNameDiffersForTwoRequestsWhoseNamesJoinAlike(t *testing.T) {
+	assert.NotEqual(t, GrantName("orders-backup", "key-read"), GrantName("orders-backup-key", "read"))
 }
 
 func TestGrantNameDoesNotEndTheCutWithADash(t *testing.T) {

@@ -34,16 +34,16 @@ import (
 const targetKindCluster = "CamundaCluster"
 
 // GrantName returns the name of the Grant of a request for one grant
-// template. The name has at most 63 characters, and two templates of one
-// request get two names.
+// template. The name has at most 63 characters, and two pairs of request and
+// template get two names.
 func GrantName(request, template string) string {
 	name := request + "-" + template
-	if len(name) <= 63 {
-		return name
+	if len(name) > 54 {
+		name = strings.TrimRight(name[:54], "-")
 	}
 
 	sum := sha256.Sum256([]byte(request + "/" + template))
-	return strings.TrimRight(name[:54], "-") + "-" + hex.EncodeToString(sum[:])[:8]
+	return name + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
 // renderGrants returns one Grant for each grant template of reg whose
