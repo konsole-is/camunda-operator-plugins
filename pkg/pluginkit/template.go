@@ -63,17 +63,28 @@ type Template struct {
 // {{ .outputs.<key> }}, and in a metric query also {{ .pods }}. Each other
 // construct is an error that names it.
 func ParseTemplate(text string, kind TemplateKind) (*Template, error) {
+	// text/template drops comments and moves definitions out of the root,
+	// so the check parses the text with its own tree.
+	tree := parse.New("")
+	tree.Mode = parse.ParseComments | parse.SkipFuncCheck
+	trees := map[string]*parse.Tree{}
+	if _, err := tree.Parse(text, "", "", trees); err != nil {
+		return nil, err
+	}
+
+	for name := range trees {
+		if name != "" {
+			return nil, constructError("define")
+		}
+	}
+
 	tmpl, err := template.New("").Option("missingkey=error").Parse(text)
 	if err != nil {
 		return nil, err
 	}
 
 	t := &Template{tmpl: tmpl}
-	if tmpl.Tree == nil {
-		return t, nil
-	}
-
-	for _, node := range tmpl.Root.Nodes {
+	for _, node := range tree.Root.Nodes {
 		if err := t.checkNode(node, kind); err != nil {
 			return nil, err
 		}

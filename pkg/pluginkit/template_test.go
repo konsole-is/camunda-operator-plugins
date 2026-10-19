@@ -52,6 +52,9 @@ func TestParseTemplate(t *testing.T) {
 		{"a variable fails", "{{ $x := .namespace }}", TemplateGrant, "variable"},
 		{"invalid syntax fails", "{{ .namespace", TemplateGrant, "unclosed action"},
 		{"plain text passes", "arn:aws:s3:::bucket", TemplateGrant, ""},
+		{"a comment fails", "{{/* note */}}", TemplateGrant, "comment"},
+		{"a define fails", `{{ define "x" }}{{ if .unknown }}a{{ end }}{{ end }}`, TemplateGrant, "define"},
+		{"a block fails", `{{ block "x" . }}a{{ end }}`, TemplateGrant, "define"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,14 +134,14 @@ func TestRenderJSONKeepsAQuoteInsideItsString(t *testing.T) {
 func TestRenderJSONRendersNestedStringsAndKeepsOtherValues(t *testing.T) {
 	got, err := RenderJSON(
 		[]byte(`{"Action":["s3:GetObject","{{ .parameters.extra }}"],`+
-			`"Condition":{"StringEquals":{"aws:ns":"{{ .namespace }}"}},"Max":5,"Enabled":true,"None":null}`),
+			`"Condition":{"StringEquals":{"aws:ns":"{{ .namespace }}"}},"Max":5,"Enabled":true,"None":null,"Empty":""}`),
 		TemplateGrant,
 		TemplateData{Namespace: "team-a", Parameters: map[string]any{"extra": "s3:PutObject"}},
 	)
 
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"Action":["s3:GetObject","s3:PutObject"],`+
-		`"Condition":{"StringEquals":{"aws:ns":"team-a"}},"Max":5,"Enabled":true,"None":null}`, string(got))
+		`"Condition":{"StringEquals":{"aws:ns":"team-a"}},"Max":5,"Enabled":true,"None":null,"Empty":""}`, string(got))
 }
 
 func TestRenderJSONNamesAnUnknownPlaceholder(t *testing.T) {
