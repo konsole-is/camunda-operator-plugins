@@ -140,6 +140,10 @@ func (r *reconciler[P, I]) serve(
 	if err == nil {
 		parameters, err = renderParameters(registration.Spec.Parameters, request.Spec.Parameters, data)
 	}
+	if err == nil {
+		// Grant templates read the rendered values, as the plugin does.
+		err = setTemplateParameters(&data, parameters)
+	}
 	if err != nil {
 		stage(request, pluginsv1alpha1.ConditionOutputsReady, pluginsv1alpha1.ReasonInvalidParameters, err.Error())
 		stage(request, v1.ConditionReady, pluginsv1alpha1.ReasonInvalidParameters, err.Error())
@@ -210,15 +214,27 @@ func templateData(request *pluginsv1alpha1.PluginRequest) (TemplateData, error) 
 		Parameters:     map[string]any{},
 	}
 
-	if request.Spec.Parameters != nil && len(request.Spec.Parameters.Raw) > 0 {
-		decoder := json.NewDecoder(bytes.NewReader(request.Spec.Parameters.Raw))
-		decoder.UseNumber()
-		if err := decoder.Decode(&data.Parameters); err != nil {
-			return TemplateData{}, fmt.Errorf("decoding spec.parameters: %w", err)
-		}
+	if err := setTemplateParameters(&data, request.Spec.Parameters); err != nil {
+		return TemplateData{}, err
 	}
 
 	return data, nil
+}
+
+// setTemplateParameters sets the parameters of data from parameters. Large
+// integers stay exact.
+func setTemplateParameters(data *TemplateData, parameters *apiextensionsv1.JSON) error {
+	data.Parameters = map[string]any{}
+	if parameters == nil || len(parameters.Raw) == 0 {
+		return nil
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(parameters.Raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&data.Parameters); err != nil {
+		return fmt.Errorf("decoding spec.parameters: %w", err)
+	}
+	return nil
 }
 
 // stage sets one condition of request for its current generation.

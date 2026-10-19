@@ -67,6 +67,7 @@ var _ = Describe("the request reconciler", func() {
 		Eventually(func(g Gomega) {
 			g.Expect(readRequest(g, request).Finalizers).To(ContainElement(pluginsv1alpha1.FinalizerCleanup))
 		}).Should(Succeed())
+		Eventually(plugin.firstSawRegistration).ShouldNot(BeZero())
 		Expect(plugin.firstSawRegistration()).To(Equal(1))
 	})
 
@@ -171,7 +172,9 @@ var _ = Describe("the request reconciler", func() {
 			pluginsv1alpha1.LabelCluster:      "orders",
 		}))
 		Expect(grant.OwnerReferences).To(ConsistOf(HaveField("UID", current.UID)))
-		Expect(grant.Spec.Fragment.Raw).To(MatchJSON(`{"Action":"s3:GetObject","Resource":"orders-test-data"}`))
+		Expect(grant.Spec.Fragment.Raw).To(MatchJSON(
+			`{"Sid":"trust orders-camunda","Action":"s3:GetObject","Resource":"orders-test-data"}`,
+		))
 
 		// The spec plays the identity extension. Only a reconcile that read
 		// this Grant status can write GrantRejected.

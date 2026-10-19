@@ -172,7 +172,8 @@ func testRegistration() pluginsv1alpha1.PluginRegistration {
 					Name:   "read",
 					Format: pluginsv1alpha1.GrantFormatAWSIAMStatement,
 					Template: &apiextensionsv1.JSON{
-						Raw: []byte(`{"Action":"s3:GetObject","Resource":"{{ .outputs.configMap }}"}`),
+						Raw: []byte(`{"Sid":"{{ .parameters.policy }}","Action":"s3:GetObject",` +
+							`"Resource":"{{ .outputs.configMap }}"}`),
 					},
 				},
 				{
