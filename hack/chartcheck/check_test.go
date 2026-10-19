@@ -278,10 +278,11 @@ func TestProblemsAcceptsTheLeaderElectionFlagWithAValue(t *testing.T) {
 
 func TestProblemsReadsTheLeaderElectionFlagAsTheControllerDoes(t *testing.T) {
 	cases := map[string]string{
-		"a positional argument": "args: [leader-elect]",
-		"a later false":         "args: [-leader-elect, -leader-elect=false]",
-		"after the terminator":  "args: [--, -leader-elect]",
-		"after a positional":    "args: [run, -leader-elect]",
+		"a positional argument":              "args: [leader-elect]",
+		"a later false":                      "args: [-leader-elect, -leader-elect=false]",
+		"after the terminator":               "args: [--, -leader-elect]",
+		"after a positional":                 "args: [run, -leader-elect]",
+		"a later false after a spaced value": "args: [-leader-elect, -leader-election-id, example, -leader-elect=false]",
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -291,6 +292,30 @@ func TestProblemsReadsTheLeaderElectionFlagAsTheControllerDoes(t *testing.T) {
 				`Deployment "example" does not pass -leader-elect, so a rolling update runs two writers`)
 		})
 	}
+}
+
+func TestProblemsReadsAStringFlagWithItsValueInTheNextArgument(t *testing.T) {
+	for _, args := range []string{
+		"args: [-registrations, /etc/plugin/registrations.yaml, -leader-elect]",
+		"args: [-leader-elect, -zap-log-level, debug]",
+	} {
+		objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", args, 1))
+
+		assert.Empty(t, problems(objects, []string{"a", "b"}, "plugins"), args)
+	}
+
+	named := strings.Replace(
+		goodRender,
+		"args: [-leader-elect]",
+		"args: [-leader-elect, -leader-election-id, example]",
+		1,
+	)
+	named = strings.Replace(named, "verbs: [get, list, watch, create, update, patch, delete]", `verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [example]`, 1)
+	assert.Empty(t, problems(render(t, named), []string{"a", "b"}, "plugins"))
 }
 
 func TestProblemsAcceptsLeasePermissionsSplitAcrossRules(t *testing.T) {

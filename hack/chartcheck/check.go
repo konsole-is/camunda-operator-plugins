@@ -328,16 +328,24 @@ func leaderElectionProblems(
 	return found
 }
 
+// boolFlags are the flags of a plugin command that take no separate value.
+var boolFlags = []string{"leader-elect", "version", "zap-devel"}
+
 // leaderElection reads -leader-elect and -leader-election-id from args as the
 // flag package of Go does: the last value wins, and parsing stops at "--" or
 // at the first argument that is not a flag.
 func leaderElection(args []string) (elect bool, lease string) {
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" || len(arg) < 2 || arg[0] != '-' {
 			break
 		}
 
 		name, value, hasValue := strings.Cut(strings.TrimPrefix(arg[1:], "-"), "=")
+		if !hasValue && !slices.Contains(boolFlags, name) && i+1 < len(args) {
+			i++
+			value, hasValue = args[i], true
+		}
 		switch name {
 		case "leader-elect":
 			elect = true
