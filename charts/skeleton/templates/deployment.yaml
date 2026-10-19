@@ -7,6 +7,10 @@ metadata:
     {{- include "skeleton.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # The controller runs without leader election, so an old and a new Pod
+  # must never run at the same time.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "skeleton.selectorLabels" . | nindent 6 }}

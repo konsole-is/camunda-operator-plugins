@@ -140,6 +140,8 @@ registrations:
       - key: bucket
 ```
 
+The chart runs one replica with the Deployment strategy `Recreate`, so that two controllers never write the Grants of one request. A chart that runs more replicas turns on leader election in the manager.
+
 The chart sets the variables `POD_NAMESPACE` and `SERVICE_ACCOUNT_NAME` from the downward API. `pluginkit.ServiceAccountFromEnv` reads them.
 
 The controller needs this RBAC, as `charts/skeleton/templates/rbac.yaml` shows:
