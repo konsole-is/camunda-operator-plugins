@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -174,6 +175,16 @@ func TestGrantNameDoesNotEndTheCutWithADot(t *testing.T) {
 	name := GrantName(request, "read")
 
 	assert.NotContains(t, name, ".-")
+}
+
+func TestGrantNameIsAValidNameForAnyTemplateName(t *testing.T) {
+	for _, template := range []string{"ReadBucket", "bucket/read", "read_all", "-read-"} {
+		name := GrantName("orders-backup-storage", template)
+
+		assert.Empty(t, validation.IsDNS1123Subdomain(name), "template %q gives %q", template, name)
+		assert.LessOrEqual(t, len(name), 63)
+	}
+	assert.NotEqual(t, GrantName("orders", "ReadBucket"), GrantName("orders", "readbucket"))
 }
 
 func TestGrantNameDiffersForTwoRequestsWhoseNamesJoinAlike(t *testing.T) {

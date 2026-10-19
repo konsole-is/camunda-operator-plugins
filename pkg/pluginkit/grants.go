@@ -37,9 +37,17 @@ const targetKindCluster = "CamundaCluster"
 // template. The name has at most 63 characters, and two pairs of request and
 // template get two names.
 func GrantName(request, template string) string {
-	name := request + "-" + template
+	name := strings.Map(func(r rune) rune {
+		if 'a' <= r && r <= 'z' || '0' <= r && r <= '9' {
+			return r
+		}
+		if 'A' <= r && r <= 'Z' {
+			return r - 'A' + 'a'
+		}
+		return '-'
+	}, request+"-"+template)
 	if len(name) > 54 {
-		name = strings.TrimRight(name[:54], "-.")
+		name = strings.TrimRight(name[:54], "-")
 	}
 
 	sum := sha256.Sum256([]byte(request + "/" + template))
