@@ -162,6 +162,8 @@ func (r *reconciler[P, I]) serve(
 	}
 
 	if res.Pending != nil {
+		res.Outputs = request.Status.Outputs
+		stageResult(request, res)
 		stage(request, pluginsv1alpha1.ConditionOutputsReady, res.Pending.Reason, res.Pending.Message)
 		r.stageReady(request, nil, nil)
 		return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil
@@ -185,13 +187,14 @@ func (r *reconciler[P, I]) serve(
 		return ctrl.Result{}, err
 	}
 
+	stageResult(request, res)
+
 	current, err := r.deleteUnwantedGrants(ctx, request, grants)
 	if err != nil {
 		stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
 		return ctrl.Result{}, err
 	}
 
-	stageResult(request, res)
 	r.stageReady(request, current, res.NotReady)
 
 	return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil

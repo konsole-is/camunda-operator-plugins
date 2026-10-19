@@ -26,7 +26,7 @@ The fields of `Result`:
 | --- | --- |
 | `Outputs` | Writes them to `status.outputs`. Each key must be an output of the registration. Another key is an error. |
 | `Objects` | Applies them with server-side apply, and adds the labels `plugins.camunda.io/registration` and `plugins.camunda.io/request`. A namespaced object gets an owner reference to the request and must be in the namespace of the request. A cluster-scoped object gets the labels only. |
-| `Pending` | A `*pluginkit.Waiting` with a `Reason` and a `Message`. When set, the outputs are not ready. `OutputsReady` and `Ready` are `False` with its reason, and the outputs of the last reconcile stay. pluginkit applies no object and no Grant, keeps the Grants that exist, and still writes the status. Set `RequeueAfter` too, to look again. |
+| `Pending` | A `*pluginkit.Waiting` with a `Reason` and a `Message`. When set, the outputs are not ready. `OutputsReady` and `Ready` are `False` with its reason, and the outputs of the last reconcile stay. pluginkit applies no object and no Grant, and keeps the Grants that exist. It still writes `Summary`, `Links`, `PodSelector`, and `Resources`. Set `RequeueAfter` too, to look again. |
 | `NotReady` | A `*pluginkit.Waiting`. When set, `Ready` is `False` with its reason. `OutputsReady` comes from the applied objects. |
 | `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. |
 | `RequeueAfter` | Reconciles the request again after this time. Use it to wait for a resource outside the cluster. |
@@ -83,7 +83,7 @@ A grant template, and a parameter marked with `"x-fleet-template": true`, can ho
 | `{{ .parameters.<name> }}` | One parameter of the request. |
 | `{{ .outputs.<key> }}` | One output that `Reconcile` returned. A template parameter is rendered before `Reconcile`, so it has no outputs. |
 
-A metric query can hold the same placeholders and also `{{ .pods }}`, the pods of the request as a regular expression. A grant template and a parameter cannot hold `{{ .pods }}`. Every other construct is an error that names it, for example `{{ if }}`, a pipeline, a function, a variable, or an unknown placeholder. A placeholder whose parameter or output has no value is an error too. `pluginkit.ParseTemplate` checks a template, so a plugin can test the templates and the metric queries of its chart.
+A metric query can hold the same placeholders and also `{{ .pods }}`, the pods of the request as a regular expression. A grant template and a parameter cannot hold `{{ .pods }}`. Every other construct is an error that names it, for example `{{ if }}`, `{{ define }}`, a comment, a pipeline, a function, a variable, or an unknown placeholder. A placeholder whose parameter or output has no value is an error too. `pluginkit.ParseTemplate` checks a template, so a plugin can test the templates and the metric queries of its chart.
 
 pluginkit renders each string of the JSON of a template on its own. A value with a quote stays inside its string.
 

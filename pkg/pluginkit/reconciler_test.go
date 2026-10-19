@@ -99,6 +99,37 @@ var _ = Describe("the request reconciler", func() {
 		}).Should(Succeed())
 	})
 
+	It("keeps the outputs and reports the summary of a pending request", func() {
+		request := createRequest("pending")
+		waitReady(request)
+		plugin.setPending(&pluginkit.Waiting{Reason: "WaitingForBucket", Message: "creating"})
+		DeferCleanup(func() { plugin.setPending(nil) })
+
+		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) { r.Labels["touch"] = "1" })
+
+		Eventually(func(g Gomega) {
+			current := readRequest(g, request)
+			outputs := meta.FindStatusCondition(current.Status.Conditions, pluginsv1alpha1.ConditionOutputsReady)
+			g.Expect(outputs).NotTo(BeNil())
+			g.Expect(outputs.Reason).To(Equal("WaitingForBucket"))
+			g.Expect(current.Status.Outputs).To(HaveKeyWithValue("configMap", testRequestName+"-data"))
+			g.Expect(current.Status.Summary).To(ConsistOf(HaveField("Label", "Size")))
+		}).Should(Succeed())
+	})
+
+	It("reports the summary of a request that was never served", func() {
+		plugin.setPending(&pluginkit.Waiting{Reason: "WaitingForBucket", Message: "creating"})
+		DeferCleanup(func() { plugin.setPending(nil) })
+		request := createRequest("pending-first")
+
+		Eventually(func(g Gomega) {
+			current := readRequest(g, request)
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal("WaitingForBucket"))
+			g.Expect(current.Status.Outputs).To(BeEmpty())
+			g.Expect(current.Status.Summary).To(ConsistOf(HaveField("Label", "Size")))
+		}).Should(Succeed())
+	})
+
 	It("labels and owns what it applies", func() {
 		request := createRequest("labels-and-owns")
 		waitReady(request)

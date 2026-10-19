@@ -82,7 +82,8 @@ type Result struct {
 	Outputs map[string]string
 	// Pending, when set, says that the outputs are not ready yet.
 	// OutputsReady and Ready are False with its reason, the outputs of the
-	// last reconcile stay, and pluginkit applies nothing.
+	// last reconcile stay, and pluginkit applies nothing. Summary, Links,
+	// PodSelector and Resources are still written.
 	Pending *Waiting
 	// NotReady, when set, makes Ready False with its reason, while
 	// OutputsReady comes from the applied objects.

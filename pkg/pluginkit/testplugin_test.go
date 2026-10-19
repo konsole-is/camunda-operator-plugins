@@ -51,6 +51,7 @@ type testPlugin struct {
 
 	mu        sync.Mutex
 	notReady  *pluginkit.Waiting
+	pending   *pluginkit.Waiting
 	deleteErr error
 	// sawRegistrationFirst is 1 when the registration existed at the first
 	// call of Reconcile, and 2 when it did not.
@@ -64,6 +65,12 @@ func (p *testPlugin) setNotReady(w *pluginkit.Waiting) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.notReady = w
+}
+
+func (p *testPlugin) setPending(w *pluginkit.Waiting) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pending = w
 }
 
 func (p *testPlugin) setDeleteErr(err error) {
@@ -98,6 +105,7 @@ func (p *testPlugin) Reconcile(
 	return pluginkit.Result{
 		Outputs:  map[string]string{"configMap": req.Object.Name + "-data"},
 		NotReady: p.notReady,
+		Pending:  p.pending,
 		Objects: []client.Object{
 			&corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Name: req.Object.Name + "-data"},
