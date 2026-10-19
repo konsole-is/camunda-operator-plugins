@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/go-logr/logr v1.4.3
-	github.com/konsole-is/camunda-operator/api v0.2.1-0.20261015084104-bb2edca2c2db
+	github.com/konsole-is/camunda-operator/api v0.2.1-0.20261019091406-a5af637e5e49
 	github.com/onsi/ginkgo/v2 v2.33.0
 	github.com/onsi/gomega v1.44.0
 	github.com/sourcehawk/operator-component-framework v0.24.0
@@ -96,5 +96,3 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
-
-replace github.com/konsole-is/camunda-operator/api => /tmp/claude-1000/-home-aegir-Documents-personal-camunda-operator/d1f0ff93-7c40-4a55-bc61-0c7350bbc54b/scratchpad/operator-owners/api
