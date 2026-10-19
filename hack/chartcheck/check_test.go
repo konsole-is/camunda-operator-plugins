@@ -73,6 +73,11 @@ subjects:
   - {kind: ServiceAccount, name: example, namespace: plugins}
 `
 
+// noLeaderElection is the problem of goodRender when its controller does not
+// elect a leader.
+const noLeaderElection = `the container controller of Deployment "example" does not pass -leader-elect, ` +
+	`so a rolling update runs two writers`
+
 func render(t *testing.T, docs ...string) []*unstructured.Unstructured {
 	t.Helper()
 	objects, err := readObjects(strings.NewReader(strings.Join(docs, "\n---\n")))
@@ -264,7 +269,7 @@ func TestProblemsRefusesAControllerWithoutLeaderElection(t *testing.T) {
 	objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", "args: []", 1))
 
 	assert.Equal(t, []string{
-		`Deployment "example" does not pass -leader-elect, so a rolling update runs two writers`,
+		noLeaderElection,
 	}, problems(objects, []string{"a", "b"}, "plugins"))
 }
 
@@ -288,8 +293,11 @@ func TestProblemsReadsTheLeaderElectionFlagAsTheControllerDoes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", args, 1))
 
-			assert.Contains(t, problems(objects, []string{"a", "b"}, "plugins"),
-				`Deployment "example" does not pass -leader-elect, so a rolling update runs two writers`)
+			assert.Contains(
+				t,
+				problems(objects, []string{"a", "b"}, "plugins"),
+				noLeaderElection,
+			)
 		})
 	}
 }
@@ -316,6 +324,35 @@ func TestProblemsReadsAStringFlagWithItsValueInTheNextArgument(t *testing.T) {
     verbs: [get, update]
     resourceNames: [example]`, 1)
 	assert.Empty(t, problems(render(t, named), []string{"a", "b"}, "plugins"))
+}
+
+func TestProblemsReadsTheFlagsOfTheControllerContainerOnly(t *testing.T) {
+	sidecar := strings.Replace(goodRender,
+		"containers: [{name: controller, image: example, args: [-leader-elect]}]",
+		"containers: [{name: controller, image: example, args: [-leader-elect=false]}, "+
+			"{name: sidecar, image: example, args: [-leader-elect]}]", 1)
+
+	assert.Contains(
+		t,
+		problems(render(t, sidecar), []string{"a", "b"}, "plugins"),
+		noLeaderElection,
+	)
+
+	lease := strings.Replace(goodRender,
+		"containers: [{name: controller, image: example, args: [-leader-elect]}]",
+		"containers: [{name: controller, image: example, args: [-leader-elect, -leader-election-id=other]}, "+
+			"{name: sidecar, image: example, args: [-leader-election-id=example]}]", 1)
+	lease = strings.Replace(lease, "verbs: [get, list, watch, create, update, patch, delete]", `verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [example]`, 1)
+
+	assert.Contains(
+		t,
+		problems(render(t, lease), []string{"a", "b"}, "plugins"),
+		`no Role bound to the controller ServiceAccount plugins/example in plugins grants the leases of leader election`,
+	)
 }
 
 func TestProblemsAcceptsLeasePermissionsSplitAcrossRules(t *testing.T) {

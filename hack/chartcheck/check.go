@@ -304,14 +304,19 @@ func leaderElectionProblems(
 ) []string {
 	var found []string
 	for _, d := range deployments {
-		elect, lease := false, ""
+		var elect bool
+		var lease string
 		for _, c := range d.Spec.Template.Spec.Containers {
-			e, l := leaderElection(c.Args)
-			elect, lease = elect || e, cmp.Or(l, lease)
+			if c.Name == controllerContainer {
+				elect, lease = leaderElection(c.Args)
+			}
 		}
 		if !elect {
 			found = append(found, fmt.Sprintf(
-				"Deployment %q does not pass -leader-elect, so a rolling update runs two writers", d.Name))
+				"the container controller of Deployment %q does not pass -leader-elect, "+
+					"so a rolling update runs two writers",
+				d.Name,
+			))
 			continue
 		}
 
@@ -327,6 +332,10 @@ func leaderElectionProblems(
 
 	return found
 }
+
+// controllerContainer is the name of the container of a plugin Deployment
+// that runs the controller.
+const controllerContainer = "controller"
 
 // boolFlags are the flags of a plugin command that take no separate value.
 var boolFlags = []string{"leader-elect", "version", "zap-devel"}

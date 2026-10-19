@@ -41,7 +41,7 @@ A maintainer approves a plugin when all of these rules are true:
 5. A plugin chart ships no `ValidatingAdmissionPolicy` and no `ValidatingAdmissionPolicyBinding`.
 6. The chart binds only the ClusterRoles that it ships, and none of them has an `aggregationRule`. A role from outside the chart, such as `cluster-admin`, can give `serve` on every registration, and an aggregated role takes the rules of such roles.
 
-7. The controller runs with `-leader-elect`. The chart ships a Role and a RoleBinding that let the controller ServiceAccount take its Lease in the release namespace. A rolling update runs the old and the new Pod together, and only the leader writes.
+7. The container `controller` runs with `-leader-elect`. The chart ships a Role and a RoleBinding that let the controller ServiceAccount take its Lease in the release namespace. A rolling update runs the old and the new Pod together, and only the leader writes.
 
 `make chart-verify` checks these rules for the chart of each plugin.
 
