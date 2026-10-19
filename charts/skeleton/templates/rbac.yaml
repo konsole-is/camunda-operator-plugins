@@ -65,6 +65,11 @@ rules:
   - apiGroups: ["plugins.camunda.io"]
     resources: ["pluginrequests/status"]
     verbs: ["update"]
+  # An owner reference with blockOwnerDeletion needs update on the
+  # finalizers of the owner.
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginrequests/finalizers"]
+    verbs: ["update"]
   - apiGroups: ["plugins.camunda.io"]
     resources: ["grants"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
