@@ -360,7 +360,8 @@ func (r *reconciler[P, I]) outputs(
 }
 
 // deleteUnwantedGrants deletes each Grant with the request label of request
-// that is not in wanted, and returns the Grants of the request that stay.
+// that is not in wanted, and returns the Grants of the request that still
+// exist, also those that are deleting.
 func (r *reconciler[P, I]) deleteUnwantedGrants(
 	ctx context.Context,
 	request *pluginsv1alpha1.PluginRequest,
@@ -376,10 +377,8 @@ func (r *reconciler[P, I]) deleteUnwantedGrants(
 		names[g.Name] = true
 	}
 
-	var current []pluginsv1alpha1.Grant
 	for _, g := range listed {
-		if names[g.Name] {
-			current = append(current, g)
+		if names[g.Name] || !g.DeletionTimestamp.IsZero() {
 			continue
 		}
 
@@ -390,7 +389,7 @@ func (r *reconciler[P, I]) deleteUnwantedGrants(
 			"Deleted Grant %s, which the request no longer needs", g.Name)
 	}
 
-	return current, nil
+	return r.grantsOf(ctx, request)
 }
 
 // grantsOf lists the Grants with the request label of request in its

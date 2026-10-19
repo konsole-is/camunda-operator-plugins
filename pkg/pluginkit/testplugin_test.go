@@ -49,9 +49,10 @@ type testPlugin struct {
 	reader client.Reader
 	client client.Client
 
-	mu        sync.Mutex
-	notReady  *pluginkit.Waiting
-	pending   *pluginkit.Waiting
+	mu       sync.Mutex
+	notReady *pluginkit.Waiting
+	pending  *pluginkit.Waiting
+	// deleteErr is the error of Delete and of Orphan.
 	deleteErr error
 	// sawRegistrationFirst is 1 when the registration existed at the first
 	// call of Reconcile, and 2 when it did not.
@@ -149,7 +150,9 @@ func (p *testPlugin) Delete(ctx context.Context, req pluginkit.Request[testParam
 }
 
 func (p *testPlugin) Orphan(context.Context, pluginkit.Request[testParams, map[string]string]) error {
-	return nil
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.deleteErr
 }
 
 func storageClassName(req *pluginsv1alpha1.PluginRequest) string {

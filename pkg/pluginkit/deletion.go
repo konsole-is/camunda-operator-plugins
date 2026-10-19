@@ -19,10 +19,12 @@ package pluginkit
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -134,7 +136,8 @@ func (r *reconciler[P, I]) deleteGrants(ctx context.Context, request *pluginsv1a
 }
 
 // orphan removes the owner references to request from its Grants and from the
-// objects of the namespaced kinds of Config.Owns. They keep their labels.
+// objects of the namespaced kinds of Config.Owns, also from an object that lost
+// its labels. They keep their labels.
 func (r *reconciler[P, I]) orphan(ctx context.Context, request *pluginsv1alpha1.PluginRequest) error {
 	kinds := append([]client.Object{&pluginsv1alpha1.Grant{}}, r.namespacedOwns...)
 
@@ -147,14 +150,17 @@ func (r *reconciler[P, I]) orphan(ctx context.Context, request *pluginsv1alpha1.
 
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(gvk.GroupVersion().WithKind(gvk.Kind + "List"))
-		if err := r.reader.List(ctx, list, client.InNamespace(request.Namespace), client.MatchingLabels{
-			pluginsv1alpha1.LabelRegistration: request.Spec.Registration,
-			pluginsv1alpha1.LabelRequest:      request.Name,
-		}); err != nil {
+		if err := r.reader.List(ctx, list, client.InNamespace(request.Namespace)); err != nil {
 			return fmt.Errorf("listing the %s objects of the request: %w", gvk.Kind, err)
 		}
 
 		for i := range list.Items {
+			if !slices.ContainsFunc(list.Items[i].GetOwnerReferences(), func(ref metav1.OwnerReference) bool {
+				return ref.UID == request.UID
+			}) {
+				continue
+			}
+
 			released, err := r.release(ctx, &list.Items[i], request)
 			if err != nil {
 				return err

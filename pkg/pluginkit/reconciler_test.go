@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
@@ -210,6 +211,45 @@ var _ = Describe("the request reconciler", func() {
 		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Inputs = nil })
 		Eventually(grantExists(request, "key-use")).Should(BeFalse())
 		Expect(grantExists(request, "read")()).To(BeTrue())
+	})
+
+	It("reports a rejected grant that is still deleting", func() {
+		request := createRequest("grant-deleting", func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Inputs = map[string]string{"key": "k"}
+		})
+		waitReady(request)
+		key := client.ObjectKey{Namespace: request.Namespace, Name: pluginkit.GrantName(request.Name, "key-use")}
+		Eventually(func(g Gomega) {
+			var grant pluginsv1alpha1.Grant
+			g.Expect(k8s.Get(ctx, key, &grant)).To(Succeed())
+			controllerutil.AddFinalizer(&grant, "example.com/hold")
+			g.Expect(k8s.Update(ctx, &grant)).To(Succeed())
+		}).Should(Succeed())
+		Eventually(func(g Gomega) {
+			var grant pluginsv1alpha1.Grant
+			g.Expect(k8s.Get(ctx, key, &grant)).To(Succeed())
+			meta.SetStatusCondition(&grant.Status.Conditions, metav1.Condition{
+				Type: "Ready", Status: metav1.ConditionFalse, Reason: pluginsv1alpha1.ReasonRejected, Message: "no",
+			})
+			g.Expect(k8s.Status().Update(ctx, &grant)).To(Succeed())
+		}).Should(Succeed())
+
+		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Inputs = nil })
+
+		Eventually(func(g Gomega) {
+			var grant pluginsv1alpha1.Grant
+			g.Expect(k8s.Get(ctx, key, &grant)).To(Succeed())
+			g.Expect(grant.DeletionTimestamp).NotTo(BeNil())
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginsv1alpha1.ReasonGrantRejected))
+		}).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			var grant pluginsv1alpha1.Grant
+			g.Expect(k8s.Get(ctx, key, &grant)).To(Succeed())
+			controllerutil.RemoveFinalizer(&grant, "example.com/hold")
+			g.Expect(k8s.Update(ctx, &grant)).To(Succeed())
+		}).Should(Succeed())
+		waitReady(request)
 	})
 
 	It("refuses parameters that fail the schema", func() {

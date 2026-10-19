@@ -172,6 +172,36 @@ var _ = Describe("the deletion of a request", func() {
 		Expect(gone(sc)()).To(BeFalse())
 	})
 
+	It("releases an object of the Orphan policy that lost its labels", func() {
+		request := servedWithKey("orphan-relabeled", func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.DeletionPolicy = pluginsv1alpha1.DeletionPolicyOrphan
+		})
+		uid := readRequest(Default, request).UID
+		plugin.setDeleteErr(errors.New("not yet"))
+		DeferCleanup(func() { plugin.setDeleteErr(nil) })
+
+		// The failing Orphan holds the request, so that no reconcile applies
+		// the labels again.
+		Expect(k8s.Delete(ctx, request)).To(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginkit.ReasonDeleteFailed))
+		}).Should(Succeed())
+		key := client.ObjectKey{Namespace: request.Namespace, Name: testRequestName + "-data"}
+		Eventually(func(g Gomega) {
+			var cm corev1.ConfigMap
+			g.Expect(k8s.Get(ctx, key, &cm)).To(Succeed())
+			delete(cm.Labels, pluginsv1alpha1.LabelRequest)
+			g.Expect(k8s.Update(ctx, &cm)).To(Succeed())
+		}).Should(Succeed())
+
+		plugin.setDeleteErr(nil)
+
+		Eventually(gone(request)).Should(BeTrue())
+		var cm corev1.ConfigMap
+		Expect(k8s.Get(ctx, key, &cm)).To(Succeed())
+		Expect(cm.OwnerReferences).NotTo(ContainElement(HaveField("UID", uid)))
+	})
+
 	It("calls Delete for a request whose parameters fail the schema", func() {
 		request := servedWithKey("delete-invalid-parameters")
 		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) {
