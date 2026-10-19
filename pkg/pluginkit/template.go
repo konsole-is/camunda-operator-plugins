@@ -72,8 +72,8 @@ func ParseTemplate(text string, kind TemplateKind) (*Template, error) {
 		return nil, err
 	}
 
-	for name := range trees {
-		if name != "" {
+	for name, t := range trees {
+		if name != "" || t != tree {
 			return nil, constructError("define")
 		}
 	}

@@ -55,6 +55,7 @@ func TestParseTemplate(t *testing.T) {
 		{"a comment fails", "{{/* note */}}", TemplateGrant, "comment"},
 		{"a define fails", `{{ define "x" }}{{ if .unknown }}a{{ end }}{{ end }}`, TemplateGrant, "define"},
 		{"a block fails", `{{ block "x" . }}a{{ end }}`, TemplateGrant, "define"},
+		{"a define of the root fails", `{{ define "" }}{{ printf "%s" .namespace }}{{ end }}`, TemplateGrant, "define"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
