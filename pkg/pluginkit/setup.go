@@ -17,13 +17,17 @@ limitations under the License.
 package pluginkit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -68,7 +72,7 @@ func Setup[P, I any](mgr ctrl.Manager, cfg Config, plugin Plugin[P, I]) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		Named(cfg.Name).
 		For(&pluginsv1alpha1.PluginRequest{}, builder.WithPredicates(registrationLabel(r.registrations))).
-		Owns(&pluginsv1alpha1.Grant{})
+		Watches(&pluginsv1alpha1.Grant{}, handler.EnqueueRequestsFromMapFunc(requestOfGrant))
 	for _, obj := range cfg.Owns {
 		namespaced, err := mgr.GetClient().IsObjectNamespaced(obj)
 		if err != nil {
@@ -94,4 +98,14 @@ func registrationLabel(registrations map[string]*pluginsv1alpha1.PluginRegistrat
 		_, ok := registrations[obj.GetLabels()[pluginsv1alpha1.LabelRegistration]]
 		return ok
 	})
+}
+
+// requestOfGrant maps a Grant to the request of its request label, so that a
+// Grant without its owner reference still reconciles its request.
+func requestOfGrant(_ context.Context, grant client.Object) []reconcile.Request {
+	name := grant.GetLabels()[pluginsv1alpha1.LabelRequest]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: grant.GetNamespace(), Name: name}}}
 }

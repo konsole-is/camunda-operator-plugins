@@ -243,6 +243,18 @@ var _ = Describe("the request reconciler", func() {
 			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginsv1alpha1.ReasonGrantRejected))
 		}).Should(Succeed())
 
+		// Without its owner reference, only the request label ties the Grant
+		// to the request when it goes.
+		Eventually(func(g Gomega) {
+			var grant pluginsv1alpha1.Grant
+			g.Expect(k8s.Get(ctx, key, &grant)).To(Succeed())
+			grant.OwnerReferences = nil
+			g.Expect(k8s.Update(ctx, &grant)).To(Succeed())
+		}).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginsv1alpha1.ReasonGrantRejected))
+		}).WithTimeout(time.Second).Should(Succeed())
+
 		Eventually(func(g Gomega) {
 			var grant pluginsv1alpha1.Grant
 			g.Expect(k8s.Get(ctx, key, &grant)).To(Succeed())
