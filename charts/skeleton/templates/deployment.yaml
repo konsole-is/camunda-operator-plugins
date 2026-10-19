@@ -7,10 +7,6 @@ metadata:
     {{- include "skeleton.labels" . | nindent 4 }}
 spec:
   replicas: 1
-  # The controller runs without leader election, so an old and a new Pod
-  # must never run at the same time.
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
       {{- include "skeleton.selectorLabels" . | nindent 6 }}
@@ -36,6 +32,8 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - -registrations=/etc/plugin/registrations.yaml
+            - -leader-elect
+            - -leader-election-id={{ include "skeleton.fullname" . }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

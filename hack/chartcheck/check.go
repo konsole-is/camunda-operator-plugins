@@ -19,8 +19,10 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -60,6 +62,8 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	var deployments []appsv1.Deployment
 	var roles []rbacv1.ClusterRole
 	var bindings []rbacv1.ClusterRoleBinding
+	var leaseRoles []rbacv1.Role
+	var roleBindings []rbacv1.RoleBinding
 	var refs []roleRef
 	for _, o := range objects {
 		var err error
@@ -92,9 +96,16 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &b)
 			bindings = append(bindings, b)
 			refs = append(refs, roleRef{kind: o.GetKind(), name: b.Name, ref: b.RoleRef})
+		case "Role":
+			var r rbacv1.Role
+			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &r)
+			r.Namespace = inNamespace(r.Namespace, namespace)
+			leaseRoles = append(leaseRoles, r)
 		case "RoleBinding":
 			var b rbacv1.RoleBinding
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &b)
+			b.Namespace = inNamespace(b.Namespace, namespace)
+			roleBindings = append(roleBindings, b)
 			refs = append(refs, roleRef{kind: o.GetKind(), name: b.Name, ref: b.RoleRef})
 		}
 		if err != nil {
@@ -108,6 +119,7 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	found = append(found, roleProblems...)
 	found = append(found, unknownRoles(refs, roles)...)
 	found = append(found, bindingProblems(bindings, serveRoles, controllers, registrations)...)
+	found = append(found, leaderElectionProblems(deployments, leaseRoles, roleBindings, controllers)...)
 
 	return found
 }
@@ -278,4 +290,72 @@ func bindingProblems(
 	}
 
 	return found
+}
+
+// leaderElectionProblems returns a problem for each Deployment that does not
+// pass -leader-elect, and for each controller ServiceAccount that no Role of
+// its namespace lets take the leader election Lease. Without election, a
+// rolling update runs the old and the new controller as two writers.
+func leaderElectionProblems(
+	deployments []appsv1.Deployment,
+	roles []rbacv1.Role,
+	bindings []rbacv1.RoleBinding,
+	controllers []string,
+) []string {
+	var found []string
+	for _, d := range deployments {
+		if !slices.ContainsFunc(d.Spec.Template.Spec.Containers, leaderElects) {
+			found = append(found, fmt.Sprintf(
+				"Deployment %q does not pass -leader-elect, so a rolling update runs two writers", d.Name))
+		}
+	}
+
+	for _, id := range controllers {
+		if !leaseBound(id, roles, bindings) {
+			namespace, _, _ := strings.Cut(id, "/")
+			found = append(found, fmt.Sprintf(
+				"no Role bound to the controller ServiceAccount %s in %s grants the leases of leader election",
+				id,
+				namespace,
+			))
+		}
+	}
+
+	return found
+}
+
+func leaderElects(c corev1.Container) bool {
+	return slices.ContainsFunc(c.Args, func(arg string) bool {
+		flag := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+		return flag == "leader-elect" || flag == "leader-elect=true"
+	})
+}
+
+// leaseBound reports whether a Role of the namespace of id, bound to id, lets
+// it take a Lease.
+func leaseBound(id string, roles []rbacv1.Role, bindings []rbacv1.RoleBinding) bool {
+	namespace, _, _ := strings.Cut(id, "/")
+	for _, b := range bindings {
+		if b.Namespace != namespace || b.RoleRef.Kind != "Role" {
+			continue
+		}
+
+		bound := slices.ContainsFunc(b.Subjects, func(s rbacv1.Subject) bool {
+			return s.Kind == rbacv1.ServiceAccountKind && account(inNamespace(s.Namespace, namespace), s.Name) == id
+		})
+		granted := slices.ContainsFunc(roles, func(r rbacv1.Role) bool {
+			return r.Namespace == namespace && r.Name == b.RoleRef.Name && slices.ContainsFunc(r.Rules, grantsLeases)
+		})
+		if bound && granted {
+			return true
+		}
+	}
+
+	return false
+}
+
+func grantsLeases(rule rbacv1.PolicyRule) bool {
+	return anyOf(rule.APIGroups, "coordination.k8s.io") &&
+		anyOf(rule.Resources, "leases") &&
+		anyOf(rule.Verbs, "get") && anyOf(rule.Verbs, "create") && anyOf(rule.Verbs, "update")
 }

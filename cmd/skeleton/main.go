@@ -14,9 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command skeleton runs the skeleton plugin. It reads its registrations from
-// the file of -registrations. With -version it prints the version of the
-// build and exits.
+// Command skeleton runs the skeleton plugin. With -version it prints the
+// version of the build and exits.
 package main
 
 import (
@@ -46,6 +45,18 @@ func main() {
 		"metrics-bind-address",
 		"0",
 		"The address of /metrics. 0 turns the metrics off.",
+	)
+	flag.BoolVar(
+		&opts.LeaderElection,
+		"leader-elect",
+		false,
+		"Run the controller only in the replica that holds the leader election Lease.",
+	)
+	flag.StringVar(
+		&opts.LeaderElectionID,
+		"leader-election-id",
+		"skeleton.plugins.camunda.io",
+		"The name of the leader election Lease, in the namespace of the controller.",
 	)
 	registrations := flag.String(
 		"registrations",

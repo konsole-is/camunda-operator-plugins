@@ -51,6 +51,10 @@ type Options struct {
 	Registrations []pluginsv1alpha1.PluginRegistration
 	// ServiceAccount is the ServiceAccount of the controller.
 	ServiceAccount pluginsv1alpha1.ServiceAccountRef
+	// LeaderElection makes only the replica that holds the Lease
+	// LeaderElectionID write. It needs a LeaderElectionID.
+	LeaderElection   bool
+	LeaderElectionID string
 }
 
 // NewManager returns a manager for cfg that publishes and serves the
@@ -71,6 +75,8 @@ func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 		Scheme:                 scheme,
 		HealthProbeBindAddress: opts.HealthProbeAddress,
 		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddress},
+		LeaderElection:         opts.LeaderElection,
+		LeaderElectionID:       opts.LeaderElectionID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating the manager: %w", err)

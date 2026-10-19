@@ -39,7 +39,7 @@ spec:
   template:
     spec:
       serviceAccountName: example
-      containers: [{name: controller, image: example}]
+      containers: [{name: controller, image: example, args: [-leader-elect]}]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -54,6 +54,21 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata: {name: example-serve}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: example-serve}
+subjects:
+  - {kind: ServiceAccount, name: example, namespace: plugins}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: example-leader-election, namespace: plugins}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: example-leader-election, namespace: plugins}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: example-leader-election}
 subjects:
   - {kind: ServiceAccount, name: example, namespace: plugins}
 `
@@ -243,6 +258,47 @@ items:
 		`the chart renders ValidatingAdmissionPolicyBinding "grants": `+
 			`the operator chart holds the one grant admission policy`,
 	)
+}
+
+func TestProblemsRefusesAControllerWithoutLeaderElection(t *testing.T) {
+	objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", "args: []", 1))
+
+	assert.Equal(t, []string{
+		`Deployment "example" does not pass -leader-elect, so a rolling update runs two writers`,
+	}, problems(objects, []string{"a", "b"}, "plugins"))
+}
+
+func TestProblemsAcceptsTheLeaderElectionFlagWithAValue(t *testing.T) {
+	for _, flag := range []string{"--leader-elect", "-leader-elect=true", "--leader-elect=true"} {
+		objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", "args: ["+flag+"]", 1))
+
+		assert.Empty(t, problems(objects, []string{"a", "b"}, "plugins"), flag)
+	}
+}
+
+func TestProblemsRefusesLeaderElectionWithoutALeaseRole(t *testing.T) {
+	cases := map[string]string{
+		"no lease rule": strings.Replace(goodRender, "resources: [leases]", "resources: [configmaps]", 1),
+		"a role in another namespace": strings.Replace(goodRender,
+			"kind: Role\nmetadata: {name: example-leader-election, namespace: plugins}",
+			"kind: Role\nmetadata: {name: example-leader-election, namespace: other}", 1),
+		"a binding to another account": strings.Replace(goodRender,
+			"roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: example-leader-election}\n"+
+				"subjects:\n  - {kind: ServiceAccount, name: example, namespace: plugins}",
+			"roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: example-leader-election}\n"+
+				"subjects:\n  - {kind: ServiceAccount, name: other, namespace: plugins}", 1),
+	}
+	for name, chart := range cases {
+		t.Run(name, func(t *testing.T) {
+			require.NotEqual(t, goodRender, chart)
+
+			assert.Contains(
+				t,
+				problems(render(t, chart), []string{"a", "b"}, "plugins"),
+				`no Role bound to the controller ServiceAccount plugins/example in plugins grants the leases of leader election`,
+			)
+		})
+	}
 }
 
 func TestProblemsRefusesAChartWithoutAController(t *testing.T) {

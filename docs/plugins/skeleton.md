@@ -6,6 +6,7 @@ The skeleton plugin is the plugin that a new plugin copies. It serves its regist
 
 - One PluginRegistration for each item of the chart value `registrations`.
 - One ConfigMap `<request>-skeleton` for each PluginRequest, in the namespace of the request.
+- One Lease `<release>` in the release namespace. Only the replica that holds it writes, so a rolling update never runs two writers.
 
 ## Prerequisites
 
@@ -44,7 +45,8 @@ With the deletion policy `Delete`, the garbage collector deletes the ConfigMap w
 | --- | --- | --- |
 | `InvalidParameters` | `OutputsReady` and `Ready` of the request | The default registration has no schema, so it does not get this reason. A registration of the chart values that adds a `parameters` schema gets it when the parameters of the request do not pass the schema. The message names the field. Correct the parameters of the claim, or the schema. |
 | `ReconcileError` | `Ready` of the request | The message gives the error. For the skeleton, the usual cause is a registration that does not declare the output `configMapName`. Add it to the `outputs` of the registration in the chart values. |
+| `DeleteFailed` | `Ready` of a deleted request | pluginkit could not list or delete the Grants of the request, or could not remove an owner reference. The message gives the error. The finalizer stays, and pluginkit tries again. |
 
-The skeleton has no health check and deletes nothing itself, so its registration is never `Unhealthy` and a request never gets `DeleteFailed`.
+The skeleton has no health check, so its registration is never `Unhealthy`.
 
 When the controller Pod does not get ready, read its log. The controller stops when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
