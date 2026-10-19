@@ -17,12 +17,13 @@ limitations under the License.
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -119,7 +120,7 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	found = append(found, roleProblems...)
 	found = append(found, unknownRoles(refs, roles)...)
 	found = append(found, bindingProblems(bindings, serveRoles, controllers, registrations)...)
-	found = append(found, leaderElectionProblems(deployments, leaseRoles, roleBindings, controllers)...)
+	found = append(found, leaderElectionProblems(deployments, leaseRoles, roleBindings)...)
 
 	return found
 }
@@ -293,30 +294,33 @@ func bindingProblems(
 }
 
 // leaderElectionProblems returns a problem for each Deployment that does not
-// pass -leader-elect, and for each controller ServiceAccount that no Role of
-// its namespace lets take the leader election Lease. Without election, a
-// rolling update runs the old and the new controller as two writers.
+// pass -leader-elect, and for each one whose ServiceAccount no Role of its
+// namespace lets take the leader election Lease. Without election, a rolling
+// update runs the old and the new controller as two writers.
 func leaderElectionProblems(
 	deployments []appsv1.Deployment,
 	roles []rbacv1.Role,
 	bindings []rbacv1.RoleBinding,
-	controllers []string,
 ) []string {
 	var found []string
 	for _, d := range deployments {
-		if !slices.ContainsFunc(d.Spec.Template.Spec.Containers, leaderElects) {
+		elect, lease := false, ""
+		for _, c := range d.Spec.Template.Spec.Containers {
+			e, l := leaderElection(c.Args)
+			elect, lease = elect || e, cmp.Or(l, lease)
+		}
+		if !elect {
 			found = append(found, fmt.Sprintf(
 				"Deployment %q does not pass -leader-elect, so a rolling update runs two writers", d.Name))
+			continue
 		}
-	}
 
-	for _, id := range controllers {
-		if !leaseBound(id, roles, bindings) {
-			namespace, _, _ := strings.Cut(id, "/")
+		name := cmp.Or(d.Spec.Template.Spec.ServiceAccountName, "default")
+		if !leaseGranted(d.Namespace, name, lease, roles, bindings) {
 			found = append(found, fmt.Sprintf(
 				"no Role bound to the controller ServiceAccount %s in %s grants the leases of leader election",
-				id,
-				namespace,
+				account(d.Namespace, name),
+				d.Namespace,
 			))
 		}
 	}
@@ -324,38 +328,65 @@ func leaderElectionProblems(
 	return found
 }
 
-func leaderElects(c corev1.Container) bool {
-	return slices.ContainsFunc(c.Args, func(arg string) bool {
-		flag := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
-		return flag == "leader-elect" || flag == "leader-elect=true"
-	})
-}
-
-// leaseBound reports whether a Role of the namespace of id, bound to id, lets
-// it take a Lease.
-func leaseBound(id string, roles []rbacv1.Role, bindings []rbacv1.RoleBinding) bool {
-	namespace, _, _ := strings.Cut(id, "/")
-	for _, b := range bindings {
-		if b.Namespace != namespace || b.RoleRef.Kind != "Role" {
-			continue
+// leaderElection reads -leader-elect and -leader-election-id from args as the
+// flag package of Go does: the last value wins, and parsing stops at "--" or
+// at the first argument that is not a flag.
+func leaderElection(args []string) (elect bool, lease string) {
+	for _, arg := range args {
+		if arg == "--" || len(arg) < 2 || arg[0] != '-' {
+			break
 		}
 
-		bound := slices.ContainsFunc(b.Subjects, func(s rbacv1.Subject) bool {
-			return s.Kind == rbacv1.ServiceAccountKind && account(inNamespace(s.Namespace, namespace), s.Name) == id
-		})
-		granted := slices.ContainsFunc(roles, func(r rbacv1.Role) bool {
-			return r.Namespace == namespace && r.Name == b.RoleRef.Name && slices.ContainsFunc(r.Rules, grantsLeases)
-		})
-		if bound && granted {
-			return true
+		name, value, hasValue := strings.Cut(strings.TrimPrefix(arg[1:], "-"), "=")
+		switch name {
+		case "leader-elect":
+			elect = true
+			if hasValue {
+				b, err := strconv.ParseBool(value)
+				elect = err == nil && b
+			}
+		case "leader-election-id":
+			lease = value
 		}
 	}
 
-	return false
+	return elect, lease
 }
 
-func grantsLeases(rule rbacv1.PolicyRule) bool {
-	return anyOf(rule.APIGroups, "coordination.k8s.io") &&
-		anyOf(rule.Resources, "leases") &&
-		anyOf(rule.Verbs, "get") && anyOf(rule.Verbs, "create") && anyOf(rule.Verbs, "update")
+// leaseGranted reports whether the Roles bound to the ServiceAccount name in
+// namespace let it create a Lease, and get and update the Lease lease.
+func leaseGranted(namespace, name, lease string, roles []rbacv1.Role, bindings []rbacv1.RoleBinding) bool {
+	var rules []rbacv1.PolicyRule
+	for _, b := range bindings {
+		bound := slices.ContainsFunc(b.Subjects, func(s rbacv1.Subject) bool {
+			return s.Kind == rbacv1.ServiceAccountKind && s.Name == name &&
+				inNamespace(s.Namespace, namespace) == namespace
+		})
+		if b.Namespace != namespace || b.RoleRef.Kind != "Role" || !bound {
+			continue
+		}
+		for _, r := range roles {
+			if r.Namespace == namespace && r.Name == b.RoleRef.Name {
+				rules = append(rules, r.Rules...)
+			}
+		}
+	}
+
+	allows := func(verb string, names ...string) bool {
+		return slices.ContainsFunc(rules, func(rule rbacv1.PolicyRule) bool {
+			if !anyOf(rule.APIGroups, "coordination.k8s.io") || !anyOf(rule.Resources, "leases") ||
+				!anyOf(rule.Verbs, verb) {
+				return false
+			}
+			return len(rule.ResourceNames) == 0 ||
+				slices.ContainsFunc(names, func(n string) bool { return slices.Contains(rule.ResourceNames, n) })
+		})
+	}
+
+	named := []string{}
+	if lease != "" {
+		named = append(named, lease)
+	}
+	// RBAC cannot limit a create by name, so only a rule without names grants it.
+	return allows("create") && allows("get", named...) && allows("update", named...)
 }

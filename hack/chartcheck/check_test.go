@@ -276,6 +276,71 @@ func TestProblemsAcceptsTheLeaderElectionFlagWithAValue(t *testing.T) {
 	}
 }
 
+func TestProblemsReadsTheLeaderElectionFlagAsTheControllerDoes(t *testing.T) {
+	cases := map[string]string{
+		"a positional argument": "args: [leader-elect]",
+		"a later false":         "args: [-leader-elect, -leader-elect=false]",
+		"after the terminator":  "args: [--, -leader-elect]",
+		"after a positional":    "args: [run, -leader-elect]",
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", args, 1))
+
+			assert.Contains(t, problems(objects, []string{"a", "b"}, "plugins"),
+				`Deployment "example" does not pass -leader-elect, so a rolling update runs two writers`)
+		})
+	}
+}
+
+func TestProblemsAcceptsLeasePermissionsSplitAcrossRules(t *testing.T) {
+	split := strings.Replace(goodRender, `  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]`, `  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [example]`, 1)
+	split = strings.Replace(split, "args: [-leader-elect]", "args: [-leader-elect, -leader-election-id=example]", 1)
+
+	assert.Empty(t, problems(render(t, split), []string{"a", "b"}, "plugins"))
+}
+
+func TestProblemsRefusesLeasePermissionsThatCannotTakeTheLease(t *testing.T) {
+	rule := `  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]`
+	cases := map[string]string{
+		"a create with a name": rule + "\n    resourceNames: [example]",
+		"an update of another name": `  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [other]`,
+	}
+	for name, rules := range cases {
+		t.Run(name, func(t *testing.T) {
+			chart := strings.Replace(goodRender, rule, rules, 1)
+			chart = strings.Replace(
+				chart,
+				"args: [-leader-elect]",
+				"args: [-leader-elect, -leader-election-id=example]",
+				1,
+			)
+
+			assert.Contains(
+				t,
+				problems(render(t, chart), []string{"a", "b"}, "plugins"),
+				`no Role bound to the controller ServiceAccount plugins/example in plugins grants the leases of leader election`,
+			)
+		})
+	}
+}
+
 func TestProblemsRefusesLeaderElectionWithoutALeaseRole(t *testing.T) {
 	cases := map[string]string{
 		"no lease rule": strings.Replace(goodRender, "resources: [leases]", "resources: [configmaps]", 1),
