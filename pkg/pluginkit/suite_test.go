@@ -100,6 +100,9 @@ var _ = BeforeSuite(func() {
 		Registrations:  []pluginsv1alpha1.PluginRegistration{testRegistration()},
 		ServiceAccount: pluginsv1alpha1.ServiceAccountRef{Namespace: "plugins", Name: "test-plugin"},
 		Owns:           []client.Object{&corev1.ConfigMap{}, &storagev1.StorageClass{}},
+		Watches: []pluginkit.Watch{
+			{Object: &corev1.Secret{}, Requests: requestsNamingSecret(mgr.GetClient())},
+		},
 		Health:         health.check,
 		HealthInterval: 200 * time.Millisecond,
 	}, plugin)).To(Succeed())

@@ -18,6 +18,7 @@ package pluginkit_test
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,8 +26,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
@@ -41,6 +45,9 @@ const (
 type testParams struct {
 	Size   int    `json:"size"`
 	Policy string `json:"policy"`
+	// Secret names a Secret. The plugin returns its key value as the output
+	// input.
+	Secret string `json:"secret"`
 }
 
 // testPlugin writes one ConfigMap and one StorageClass for each request. Its
@@ -60,6 +67,8 @@ type testPlugin struct {
 	// deletedPolicies holds the policy parameter of each request that Delete
 	// served, by namespace.
 	deletedPolicies map[string]string
+	// reconciles counts the calls of Reconcile, by namespace.
+	reconciles map[string]int
 }
 
 func (p *testPlugin) setNotReady(w *pluginkit.Waiting) {
@@ -86,6 +95,12 @@ func (p *testPlugin) firstSawRegistration() int {
 	return p.sawRegistrationFirst
 }
 
+func (p *testPlugin) reconcileCount(namespace string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reconciles[namespace]
+}
+
 func (p *testPlugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[testParams, map[string]string],
@@ -101,10 +116,28 @@ func (p *testPlugin) Reconcile(
 		}
 	}
 
+	if p.reconciles == nil {
+		p.reconciles = map[string]int{}
+	}
+	p.reconciles[req.Object.Namespace]++
+
 	req.Log.Info("Served PluginRequest")
 
+	outputs := map[string]string{"configMap": req.Object.Name + "-data"}
+	if req.Parameters.Secret != "" {
+		var secret corev1.Secret
+		key := client.ObjectKey{Namespace: req.Object.Namespace, Name: req.Parameters.Secret}
+		err := p.reader.Get(ctx, key, &secret)
+		switch {
+		case err == nil:
+			outputs["input"] = string(secret.Data["value"])
+		case !apierrors.IsNotFound(err):
+			return pluginkit.Result{}, err
+		}
+	}
+
 	return pluginkit.Result{
-		Outputs:  map[string]string{"configMap": req.Object.Name + "-data"},
+		Outputs:  outputs,
 		NotReady: p.notReady,
 		Pending:  p.pending,
 		Objects: []client.Object{
@@ -155,6 +188,28 @@ func (p *testPlugin) Orphan(context.Context, pluginkit.Request[testParams, map[s
 	return p.deleteErr
 }
 
+// requestsNamingSecret maps a Secret to the requests in its namespace whose
+// parameter secret names it.
+func requestsNamingSecret(c client.Reader) handler.MapFunc {
+	return func(ctx context.Context, secret client.Object) []reconcile.Request {
+		var list pluginsv1alpha1.PluginRequestList
+		if err := c.List(ctx, &list, client.InNamespace(secret.GetNamespace())); err != nil {
+			return nil
+		}
+
+		var requests []reconcile.Request
+		for _, request := range list.Items {
+			var params testParams
+			if request.Spec.Parameters != nil &&
+				json.Unmarshal(request.Spec.Parameters.Raw, &params) == nil &&
+				params.Secret == secret.GetName() {
+				requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&request)})
+			}
+		}
+		return requests
+	}
+}
+
 func storageClassName(req *pluginsv1alpha1.PluginRequest) string {
 	return "pluginkit-test-" + req.Namespace + "-" + req.Name
 }
@@ -167,9 +222,10 @@ func testRegistration() pluginsv1alpha1.PluginRegistration {
 			Label:    "Test plugin",
 			Mode:     pluginsv1alpha1.ModeOptional,
 			Parameters: &apiextensionsv1.JSON{Raw: []byte(`{"type":"object","properties":{` +
-				`"size":{"type":"integer","minimum":1},"policy":{"type":"string","x-fleet-template":true}}}`)},
+				`"size":{"type":"integer","minimum":1},"policy":{"type":"string","x-fleet-template":true},` +
+				`"secret":{"type":"string"}}}`)},
 			Inputs:  []pluginsv1alpha1.InputDecl{{Name: "key", From: "encryption-key/keyRef"}},
-			Outputs: []pluginsv1alpha1.OutputDecl{{Key: "configMap"}},
+			Outputs: []pluginsv1alpha1.OutputDecl{{Key: "configMap"}, {Key: "input"}},
 			GrantTemplates: []pluginsv1alpha1.GrantTemplate{
 				{
 					Name:   "read",

@@ -63,6 +63,20 @@ func condition(g Gomega, request *pluginsv1alpha1.PluginRequest, conditionType s
 	return *cond
 }
 
+// settledReconciles waits until the test plugin serves no more requests in
+// namespace for a second, and returns its count of reconciles there.
+func settledReconciles(namespace string) int {
+	GinkgoHelper()
+	var count int
+	Eventually(func() bool {
+		before := plugin.reconcileCount(namespace)
+		time.Sleep(time.Second)
+		count = plugin.reconcileCount(namespace)
+		return count == before
+	}).Should(BeTrue())
+	return count
+}
+
 var _ = Describe("the request reconciler", func() {
 	It("writes the registration before it serves the first request", func() {
 		request := &pluginsv1alpha1.PluginRequest{
@@ -345,6 +359,46 @@ var _ = Describe("the request reconciler", func() {
 			g.Expect(current.Finalizers).To(BeEmpty())
 			g.Expect(current.Status.Conditions).To(BeEmpty())
 		}).WithTimeout(2 * time.Second).Should(Succeed())
+	})
+
+	It("reconciles a request again when a watched object that it names changes", func() {
+		request := createRequest("watched", func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = &apiextensionsv1.JSON{Raw: []byte(`{"size":1,"policy":"read","secret":"orders-input"}`)}
+		})
+		waitReady(request)
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "orders-input", Namespace: request.Namespace},
+			StringData: map[string]string{"value": "first"},
+		}
+		Expect(k8s.Create(ctx, secret)).To(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(readRequest(g, request).Status.Outputs).To(HaveKeyWithValue("input", "first"))
+		}).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			var current corev1.Secret
+			g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(secret), &current)).To(Succeed())
+			current.StringData = map[string]string{"value": "second"}
+			g.Expect(k8s.Update(ctx, &current)).To(Succeed())
+		}).Should(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(readRequest(g, request).Status.Outputs).To(HaveKeyWithValue("input", "second"))
+		}).Should(Succeed())
+	})
+
+	It("starts no reconcile for a watched object that maps to no request", func() {
+		request := createRequest("unwatched")
+		waitReady(request)
+		settled := settledReconciles(request.Namespace)
+
+		Expect(k8s.Create(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: request.Namespace},
+		})).To(Succeed())
+
+		Consistently(func() int {
+			return plugin.reconcileCount(request.Namespace)
+		}).WithTimeout(2 * time.Second).Should(Equal(settled))
 	})
 
 	It("logs JSON lines that carry the request key", func() {

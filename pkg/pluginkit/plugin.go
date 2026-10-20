@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -136,4 +137,18 @@ type Config struct {
 	// HealthInterval is the time between two health checks. Zero is 30
 	// seconds.
 	HealthInterval time.Duration
+	// Watches reconciles requests again when objects that the plugin does
+	// not own change, for example a Secret that a request names. Each kind
+	// must be in the scheme of the manager, and the ServiceAccount of the
+	// plugin needs list and watch on it. A mapped request of a registration
+	// that the plugin does not serve is ignored.
+	Watches []Watch
+}
+
+// Watch reconciles requests again when an object of one kind changes.
+type Watch struct {
+	// Object is one object of the kind to watch.
+	Object client.Object
+	// Requests returns the requests to reconcile for a changed object.
+	Requests handler.MapFunc
 }

@@ -44,7 +44,34 @@ err := pluginkit.Setup(mgr, pluginkit.Config{
 }, plugin)
 ```
 
-`Owns` holds one object of each kind that `Result.Objects` returns, namespaced and cluster-scoped. A change to an object of a namespaced kind starts a reconcile of its request. pluginkit does not watch a cluster-scoped kind, so a plugin that waits for one returns `RequeueAfter`. `Health` checks the plugin, for example its cloud credentials. A nil `Health` is always healthy.
+`Owns` holds one object of each kind that `Result.Objects` returns, namespaced and cluster-scoped. A change to an object of a namespaced kind starts a reconcile of its request. pluginkit does not watch a cluster-scoped kind of `Owns`. To wait for one, add a `Watch` or return `RequeueAfter`. `Health` checks the plugin, for example its cloud credentials. A nil `Health` is always healthy.
+
+`Watches` starts a reconcile when an object that the plugin does not own changes. Examples are a Secret that a request names, the target `CamundaCluster`, and a cluster-scoped object that the plugin applies. A `pluginkit.Watch` holds one object of the kind to watch, and a `Requests` function. The function maps a changed object to the requests to reconcile. pluginkit ignores a request of a registration that the plugin does not serve. `Setup` refuses a `Watch` without an `Object` or a `Requests` function.
+
+Each kind of `Watches` must be in the scheme of the manager. The manager caches each object of the kind in the cluster, and the ServiceAccount of the plugin needs `list` and `watch` on the kind. This `Watch` reconciles each request whose parameters name a changed Secret. `secretOf` is a function of the plugin that reads the name of the Secret from the parameters of a request.
+
+```go
+c := mgr.GetClient()
+err := pluginkit.Setup(mgr, pluginkit.Config{
+	// ...
+	Watches: []pluginkit.Watch{{
+		Object: &corev1.Secret{},
+		Requests: func(ctx context.Context, secret client.Object) []reconcile.Request {
+			var list pluginsv1alpha1.PluginRequestList
+			if err := c.List(ctx, &list, client.InNamespace(secret.GetNamespace())); err != nil {
+				return nil
+			}
+			var requests []reconcile.Request
+			for _, request := range list.Items {
+				if secretOf(&request) == secret.GetName() {
+					requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&request)})
+				}
+			}
+			return requests
+		},
+	}},
+}, plugin)
+```
 
 Use `pluginkit.NewLogger` for the logger of the manager. It writes JSON lines, also in development mode.
 
@@ -156,6 +183,7 @@ The controller needs this RBAC, as `charts/skeleton/templates/rbac.yaml` shows:
 | `grants` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
 | `events.k8s.io` `events` | `create`, `patch` |
 | each kind of `Owns` | `get`, `list`, `watch`, `create`, `update`, `patch` |
+| each kind of `Watches` | `list`, `watch`, and each other verb that the plugin uses on the kind |
 | `coordination.k8s.io` `leases`, in the release namespace only | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
 
 The chart also keeps the `serve` role of the chart rule in [`CONTRIBUTING.md`](../CONTRIBUTING.md).

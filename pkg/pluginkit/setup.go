@@ -35,8 +35,9 @@ import (
 // Setup adds the plugin to mgr: a Publisher of the registrations of cfg, and
 // a controller named cfg.Name that serves each PluginRequest whose
 // registration label names one of them. The scheme of mgr must hold the
-// plugins.camunda.io kinds and each kind of cfg.Owns. Setup refuses a cfg
-// without a name or without a registration, and a nil plugin.
+// plugins.camunda.io kinds and each kind of cfg.Owns and cfg.Watches. Setup
+// refuses a cfg without a name or without a registration, a Watch without an
+// Object or a Requests function, and a nil plugin.
 func Setup[P, I any](mgr ctrl.Manager, cfg Config, plugin Plugin[P, I]) error {
 	if cfg.Name == "" {
 		return errors.New("pluginkit: the Config needs a Name")
@@ -44,6 +45,12 @@ func Setup[P, I any](mgr ctrl.Manager, cfg Config, plugin Plugin[P, I]) error {
 
 	if len(cfg.Registrations) == 0 {
 		return errors.New("pluginkit: the Config needs at least one registration")
+	}
+
+	for i, w := range cfg.Watches {
+		if w.Object == nil || w.Requests == nil {
+			return fmt.Errorf("pluginkit: Watches[%d] needs an Object and a Requests function", i)
+		}
 	}
 
 	if plugin == nil {
@@ -82,6 +89,10 @@ func Setup[P, I any](mgr ctrl.Manager, cfg Config, plugin Plugin[P, I]) error {
 			b = b.Owns(obj)
 			r.namespacedOwns = append(r.namespacedOwns, obj)
 		}
+	}
+
+	for _, w := range cfg.Watches {
+		b = b.Watches(w.Object, handler.EnqueueRequestsFromMapFunc(w.Requests))
 	}
 
 	if err := b.Complete(r); err != nil {
