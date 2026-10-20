@@ -23,8 +23,11 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+
+	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
 	"github.com/konsole-is/camunda-operator-plugins/internal/skeleton"
 )
@@ -49,7 +52,12 @@ var _ = BeforeSuite(func() {
 	cfg, err := testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 
-	mgr, err = skeleton.NewManager(cfg, skeleton.Options{HealthProbeAddress: "0", MetricsAddress: "0"})
+	mgr, err = skeleton.NewManager(cfg, skeleton.Options{
+		HealthProbeAddress: "0",
+		MetricsAddress:     "0",
+		Registrations:      []pluginsv1alpha1.PluginRegistration{skeletonRegistration()},
+		ServiceAccount:     pluginsv1alpha1.ServiceAccountRef{Namespace: "camunda-operator-plugins", Name: "skeleton"},
+	})
 	Expect(err).NotTo(HaveOccurred())
 
 	ctx, cancel = context.WithCancel(context.Background())
@@ -63,3 +71,18 @@ var _ = AfterSuite(func() {
 	cancel()
 	Expect(testEnv.Stop()).To(Succeed())
 })
+
+// skeletonRegistration is the default registration of the chart of the
+// skeleton.
+func skeletonRegistration() pluginsv1alpha1.PluginRegistration {
+	return pluginsv1alpha1.PluginRegistration{
+		ObjectMeta: metav1.ObjectMeta{Name: "skeleton"},
+		Spec: pluginsv1alpha1.PluginRegistrationSpec{
+			Sections:         []string{"skeleton"},
+			Label:            "Skeleton option",
+			Mode:             pluginsv1alpha1.ModeOptional,
+			DeletionPolicies: []pluginsv1alpha1.DeletionPolicy{pluginsv1alpha1.DeletionPolicyDelete},
+			Outputs:          []pluginsv1alpha1.OutputDecl{{Key: "configMapName"}},
+		},
+	}
+}

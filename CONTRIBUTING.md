@@ -7,7 +7,8 @@ This guide gives the rules for a plugin in this repository. The maintainers and 
 1. A plugin has one directory in each of these places: `cmd/<plugin>/`, `internal/<plugin>/`, and `charts/<plugin>/`. It also has one page, `docs/plugins/<plugin>.md`.
 2. To start a new plugin, copy the four parts of the skeleton plugin and rename them: `cmd/skeleton/`, `internal/skeleton/`, `charts/skeleton/`, and `docs/plugins/skeleton.md`.
 3. Code that two or more plugins use goes in `pkg/`.
-4. All plugins are in one Go module. A release gives every plugin the version of the repository.
+4. A plugin serves its requests through `pkg/pluginkit`. See [`docs/pluginkit.md`](docs/pluginkit.md).
+5. All plugins are in one Go module. A release gives every plugin the version of the repository.
 
 ## 2. When a plugin is approved
 
@@ -39,6 +40,8 @@ A maintainer approves a plugin when all of these rules are true:
 4. The operator chart holds the one grant admission policy. Before it admits a `Grant`, the policy checks that the writer has `serve` on the registration of the `Grant`.
 5. A plugin chart ships no `ValidatingAdmissionPolicy` and no `ValidatingAdmissionPolicyBinding`.
 6. The chart binds only the ClusterRoles that it ships, and none of them has an `aggregationRule`. A role from outside the chart, such as `cluster-admin`, can give `serve` on every registration, and an aggregated role takes the rules of such roles.
+
+7. The container `controller` runs with `-leader-elect`. The chart ships a Role and a RoleBinding that let the controller ServiceAccount take its Lease in the release namespace. A rolling update runs the old and the new Pod together, and only the leader writes.
 
 `make chart-verify` checks these rules for the chart of each plugin.
 

@@ -34,3 +34,63 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "skeleton.fullname" . }}
     namespace: {{ .Release.Namespace }}
+---
+# The controller applies its registrations, keeps their Ready condition,
+# serves their requests, and writes the Grants and the ConfigMaps of the
+# requests.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "skeleton.clusterName" . }}-controller
+  labels:
+    {{- include "skeleton.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginregistrations"]
+    verbs: ["get", "create", "patch"]
+    resourceNames:
+      {{- range .Values.registrations }}
+      - {{ required "each registration needs a name" .name | quote }}
+      {{- end }}
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginregistrations/status"]
+    verbs: ["update"]
+    resourceNames:
+      {{- range .Values.registrations }}
+      - {{ .name | quote }}
+      {{- end }}
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginrequests"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginrequests/status"]
+    verbs: ["update"]
+  # An owner reference with blockOwnerDeletion needs update on the
+  # finalizers of the owner.
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginrequests/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["grants"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "skeleton.clusterName" . }}-controller
+  labels:
+    {{- include "skeleton.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "skeleton.clusterName" . }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "skeleton.fullname" . }}
+    namespace: {{ .Release.Namespace }}

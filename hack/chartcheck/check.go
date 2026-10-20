@@ -17,8 +17,11 @@ limitations under the License.
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -60,6 +63,8 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	var deployments []appsv1.Deployment
 	var roles []rbacv1.ClusterRole
 	var bindings []rbacv1.ClusterRoleBinding
+	var leaseRoles []rbacv1.Role
+	var roleBindings []rbacv1.RoleBinding
 	var refs []roleRef
 	for _, o := range objects {
 		var err error
@@ -92,9 +97,16 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &b)
 			bindings = append(bindings, b)
 			refs = append(refs, roleRef{kind: o.GetKind(), name: b.Name, ref: b.RoleRef})
+		case "Role":
+			var r rbacv1.Role
+			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &r)
+			r.Namespace = inNamespace(r.Namespace, namespace)
+			leaseRoles = append(leaseRoles, r)
 		case "RoleBinding":
 			var b rbacv1.RoleBinding
 			err = runtime.DefaultUnstructuredConverter.FromUnstructured(o.Object, &b)
+			b.Namespace = inNamespace(b.Namespace, namespace)
+			roleBindings = append(roleBindings, b)
 			refs = append(refs, roleRef{kind: o.GetKind(), name: b.Name, ref: b.RoleRef})
 		}
 		if err != nil {
@@ -108,6 +120,7 @@ func problems(objects []*unstructured.Unstructured, registrations []string, name
 	found = append(found, roleProblems...)
 	found = append(found, unknownRoles(refs, roles)...)
 	found = append(found, bindingProblems(bindings, serveRoles, controllers, registrations)...)
+	found = append(found, leaderElectionProblems(deployments, leaseRoles, roleBindings)...)
 
 	return found
 }
@@ -278,4 +291,119 @@ func bindingProblems(
 	}
 
 	return found
+}
+
+// leaderElectionProblems returns a problem for each Deployment that does not
+// pass -leader-elect, and for each one whose ServiceAccount no Role of its
+// namespace lets take the leader election Lease. Without election, a rolling
+// update runs the old and the new controller as two writers.
+func leaderElectionProblems(
+	deployments []appsv1.Deployment,
+	roles []rbacv1.Role,
+	bindings []rbacv1.RoleBinding,
+) []string {
+	var found []string
+	for _, d := range deployments {
+		var elect bool
+		var lease string
+		for _, c := range d.Spec.Template.Spec.Containers {
+			if c.Name == controllerContainer {
+				elect, lease = leaderElection(c.Args)
+			}
+		}
+		if !elect {
+			found = append(found, fmt.Sprintf(
+				"the container controller of Deployment %q does not pass -leader-elect, "+
+					"so a rolling update runs two writers",
+				d.Name,
+			))
+			continue
+		}
+
+		name := cmp.Or(d.Spec.Template.Spec.ServiceAccountName, "default")
+		if !leaseGranted(d.Namespace, name, lease, roles, bindings) {
+			found = append(found, fmt.Sprintf(
+				"no Role bound to the controller ServiceAccount %s in %s grants the leases of leader election",
+				account(d.Namespace, name),
+				d.Namespace,
+			))
+		}
+	}
+
+	return found
+}
+
+// controllerContainer is the name of the container of a plugin Deployment
+// that runs the controller.
+const controllerContainer = "controller"
+
+// boolFlags are the flags of a plugin command that take no separate value.
+var boolFlags = []string{"leader-elect", "version", "zap-devel"}
+
+// leaderElection reads -leader-elect and -leader-election-id from args as the
+// flag package of Go does: the last value wins, and parsing stops at "--" or
+// at the first argument that is not a flag.
+func leaderElection(args []string) (elect bool, lease string) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" || len(arg) < 2 || arg[0] != '-' {
+			break
+		}
+
+		name, value, hasValue := strings.Cut(strings.TrimPrefix(arg[1:], "-"), "=")
+		if !hasValue && !slices.Contains(boolFlags, name) && i+1 < len(args) {
+			i++
+			value, hasValue = args[i], true
+		}
+		switch name {
+		case "leader-elect":
+			elect = true
+			if hasValue {
+				b, err := strconv.ParseBool(value)
+				elect = err == nil && b
+			}
+		case "leader-election-id":
+			lease = value
+		}
+	}
+
+	return elect, lease
+}
+
+// leaseGranted reports whether the Roles bound to the ServiceAccount name in
+// namespace let it create a Lease, and get and update the Lease lease.
+func leaseGranted(namespace, name, lease string, roles []rbacv1.Role, bindings []rbacv1.RoleBinding) bool {
+	var rules []rbacv1.PolicyRule
+	for _, b := range bindings {
+		bound := slices.ContainsFunc(b.Subjects, func(s rbacv1.Subject) bool {
+			return s.Kind == rbacv1.ServiceAccountKind && s.Name == name &&
+				inNamespace(s.Namespace, namespace) == namespace
+		})
+		if b.Namespace != namespace || b.RoleRef.Kind != "Role" || !bound {
+			continue
+		}
+		for _, r := range roles {
+			if r.Namespace == namespace && r.Name == b.RoleRef.Name {
+				rules = append(rules, r.Rules...)
+			}
+		}
+	}
+
+	allows := func(verb string, names ...string) bool {
+		return slices.ContainsFunc(rules, func(rule rbacv1.PolicyRule) bool {
+			if !anyOf(rule.APIGroups, "coordination.k8s.io") || !anyOf(rule.Resources, "leases") ||
+				!anyOf(rule.Verbs, verb) {
+				return false
+			}
+			return len(rule.ResourceNames) == 0 ||
+				slices.ContainsFunc(names, func(n string) bool { return slices.Contains(rule.ResourceNames, n) })
+		})
+	}
+
+	named := []string{}
+	if lease != "" {
+		named = append(named, lease)
+	}
+	// RBAC cannot limit a create by name, so only a rule without names grants it.
+	return allows("create") && allows("get", named...) && allows("update", named...)
 }

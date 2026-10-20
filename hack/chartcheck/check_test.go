@@ -39,7 +39,7 @@ spec:
   template:
     spec:
       serviceAccountName: example
-      containers: [{name: controller, image: example}]
+      containers: [{name: controller, image: example, args: [-leader-elect]}]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -56,7 +56,27 @@ metadata: {name: example-serve}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: example-serve}
 subjects:
   - {kind: ServiceAccount, name: example, namespace: plugins}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: example-leader-election, namespace: plugins}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: example-leader-election, namespace: plugins}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: example-leader-election}
+subjects:
+  - {kind: ServiceAccount, name: example, namespace: plugins}
 `
+
+// noLeaderElection is the problem of goodRender when its controller does not
+// elect a leader.
+const noLeaderElection = `the container controller of Deployment "example" does not pass -leader-elect, ` +
+	`so a rolling update runs two writers`
 
 func render(t *testing.T, docs ...string) []*unstructured.Unstructured {
 	t.Helper()
@@ -243,6 +263,169 @@ items:
 		`the chart renders ValidatingAdmissionPolicyBinding "grants": `+
 			`the operator chart holds the one grant admission policy`,
 	)
+}
+
+func TestProblemsRefusesAControllerWithoutLeaderElection(t *testing.T) {
+	objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", "args: []", 1))
+
+	assert.Equal(t, []string{
+		noLeaderElection,
+	}, problems(objects, []string{"a", "b"}, "plugins"))
+}
+
+func TestProblemsAcceptsTheLeaderElectionFlagWithAValue(t *testing.T) {
+	for _, flag := range []string{"--leader-elect", "-leader-elect=true", "--leader-elect=true"} {
+		objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", "args: ["+flag+"]", 1))
+
+		assert.Empty(t, problems(objects, []string{"a", "b"}, "plugins"), flag)
+	}
+}
+
+func TestProblemsReadsTheLeaderElectionFlagAsTheControllerDoes(t *testing.T) {
+	cases := map[string]string{
+		"a positional argument":              "args: [leader-elect]",
+		"a later false":                      "args: [-leader-elect, -leader-elect=false]",
+		"after the terminator":               "args: [--, -leader-elect]",
+		"after a positional":                 "args: [run, -leader-elect]",
+		"a later false after a spaced value": "args: [-leader-elect, -leader-election-id, example, -leader-elect=false]",
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", args, 1))
+
+			assert.Contains(
+				t,
+				problems(objects, []string{"a", "b"}, "plugins"),
+				noLeaderElection,
+			)
+		})
+	}
+}
+
+func TestProblemsReadsAStringFlagWithItsValueInTheNextArgument(t *testing.T) {
+	for _, args := range []string{
+		"args: [-registrations, /etc/plugin/registrations.yaml, -leader-elect]",
+		"args: [-leader-elect, -zap-log-level, debug]",
+	} {
+		objects := render(t, strings.Replace(goodRender, "args: [-leader-elect]", args, 1))
+
+		assert.Empty(t, problems(objects, []string{"a", "b"}, "plugins"), args)
+	}
+
+	named := strings.Replace(
+		goodRender,
+		"args: [-leader-elect]",
+		"args: [-leader-elect, -leader-election-id, example]",
+		1,
+	)
+	named = strings.Replace(named, "verbs: [get, list, watch, create, update, patch, delete]", `verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [example]`, 1)
+	assert.Empty(t, problems(render(t, named), []string{"a", "b"}, "plugins"))
+}
+
+func TestProblemsReadsTheFlagsOfTheControllerContainerOnly(t *testing.T) {
+	sidecar := strings.Replace(goodRender,
+		"containers: [{name: controller, image: example, args: [-leader-elect]}]",
+		"containers: [{name: controller, image: example, args: [-leader-elect=false]}, "+
+			"{name: sidecar, image: example, args: [-leader-elect]}]", 1)
+
+	assert.Contains(
+		t,
+		problems(render(t, sidecar), []string{"a", "b"}, "plugins"),
+		noLeaderElection,
+	)
+
+	lease := strings.Replace(goodRender,
+		"containers: [{name: controller, image: example, args: [-leader-elect]}]",
+		"containers: [{name: controller, image: example, args: [-leader-elect, -leader-election-id=other]}, "+
+			"{name: sidecar, image: example, args: [-leader-election-id=example]}]", 1)
+	lease = strings.Replace(lease, "verbs: [get, list, watch, create, update, patch, delete]", `verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [example]`, 1)
+
+	assert.Contains(
+		t,
+		problems(render(t, lease), []string{"a", "b"}, "plugins"),
+		`no Role bound to the controller ServiceAccount plugins/example in plugins grants the leases of leader election`,
+	)
+}
+
+func TestProblemsAcceptsLeasePermissionsSplitAcrossRules(t *testing.T) {
+	split := strings.Replace(goodRender, `  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]`, `  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [example]`, 1)
+	split = strings.Replace(split, "args: [-leader-elect]", "args: [-leader-elect, -leader-election-id=example]", 1)
+
+	assert.Empty(t, problems(render(t, split), []string{"a", "b"}, "plugins"))
+}
+
+func TestProblemsRefusesLeasePermissionsThatCannotTakeTheLease(t *testing.T) {
+	rule := `  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]`
+	cases := map[string]string{
+		"a create with a name": rule + "\n    resourceNames: [example]",
+		"an update of another name": `  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, update]
+    resourceNames: [other]`,
+	}
+	for name, rules := range cases {
+		t.Run(name, func(t *testing.T) {
+			chart := strings.Replace(goodRender, rule, rules, 1)
+			chart = strings.Replace(
+				chart,
+				"args: [-leader-elect]",
+				"args: [-leader-elect, -leader-election-id=example]",
+				1,
+			)
+
+			assert.Contains(
+				t,
+				problems(render(t, chart), []string{"a", "b"}, "plugins"),
+				`no Role bound to the controller ServiceAccount plugins/example in plugins grants the leases of leader election`,
+			)
+		})
+	}
+}
+
+func TestProblemsRefusesLeaderElectionWithoutALeaseRole(t *testing.T) {
+	cases := map[string]string{
+		"no lease rule": strings.Replace(goodRender, "resources: [leases]", "resources: [configmaps]", 1),
+		"a role in another namespace": strings.Replace(goodRender,
+			"kind: Role\nmetadata: {name: example-leader-election, namespace: plugins}",
+			"kind: Role\nmetadata: {name: example-leader-election, namespace: other}", 1),
+		"a binding to another account": strings.Replace(goodRender,
+			"roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: example-leader-election}\n"+
+				"subjects:\n  - {kind: ServiceAccount, name: example, namespace: plugins}",
+			"roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: example-leader-election}\n"+
+				"subjects:\n  - {kind: ServiceAccount, name: other, namespace: plugins}", 1),
+	}
+	for name, chart := range cases {
+		t.Run(name, func(t *testing.T) {
+			require.NotEqual(t, goodRender, chart)
+
+			assert.Contains(
+				t,
+				problems(render(t, chart), []string{"a", "b"}, "plugins"),
+				`no Role bound to the controller ServiceAccount plugins/example in plugins grants the leases of leader election`,
+			)
+		})
+	}
 }
 
 func TestProblemsRefusesAChartWithoutAController(t *testing.T) {

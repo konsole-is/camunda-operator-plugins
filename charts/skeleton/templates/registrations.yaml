@@ -1,0 +1,12 @@
+# The controller reads its registrations from this file at startup, and
+# applies them as PluginRegistrations.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "skeleton.fullname" . }}-registrations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "skeleton.labels" . | nindent 4 }}
+data:
+  registrations.yaml: |
+    {{- toYaml .Values.registrations | nindent 4 }}

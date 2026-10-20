@@ -22,7 +22,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -69,6 +71,45 @@ var _ = Describe("the skeleton manager", func() {
 		Expect(read.Spec.Parameters.Raw).To(MatchJSON(want.Parameters.Raw))
 		read.Spec.Parameters, want.Parameters = nil, nil
 		Expect(read.Spec).To(Equal(*want))
+	})
+
+	It("serves a request with one ConfigMap", func() {
+		k8s := mgr.GetClient()
+		Expect(k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}})).To(Succeed())
+		request := &pluginsv1alpha1.PluginRequest{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "orders-skeleton",
+				Namespace: "team-a",
+				Labels: map[string]string{
+					pluginsv1alpha1.LabelSection:      "skeleton",
+					pluginsv1alpha1.LabelRegistration: "skeleton",
+				},
+			},
+			Spec: pluginsv1alpha1.PluginRequestSpec{
+				Section:      "skeleton",
+				Registration: "skeleton",
+				ClaimRef: pluginsv1alpha1.ClaimRef{
+					Kind: pluginsv1alpha1.ClaimKindCamundaClusterClaim,
+					Name: "orders",
+				},
+				Target:         pluginsv1alpha1.TargetRef{Kind: "CamundaCluster", Name: "orders"},
+				DeletionPolicy: pluginsv1alpha1.DeletionPolicyDelete,
+			},
+		}
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+
+		var read pluginsv1alpha1.PluginRequest
+		Eventually(func(g Gomega) {
+			g.Expect(mgr.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(request), &read)).To(Succeed())
+			g.Expect(meta.IsStatusConditionTrue(read.Status.Conditions, "OutputsReady")).To(BeTrue())
+			g.Expect(meta.IsStatusConditionTrue(read.Status.Conditions, "Ready")).To(BeTrue())
+		}).WithTimeout(20 * time.Second).Should(Succeed())
+
+		var configMap corev1.ConfigMap
+		key := client.ObjectKey{Namespace: "team-a", Name: read.Status.Outputs["configMapName"]}
+		Expect(mgr.GetAPIReader().Get(ctx, key, &configMap)).To(Succeed())
+		Expect(configMap.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequest, "orders-skeleton"))
+		Expect(configMap.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRegistration, "skeleton"))
 	})
 
 	It("refuses a registration that the CRD refuses", func() {

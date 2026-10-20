@@ -28,6 +28,7 @@ import (
 
 	"github.com/konsole-is/camunda-operator-plugins/internal/skeleton"
 	"github.com/konsole-is/camunda-operator-plugins/internal/version"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 func main() {
@@ -45,6 +46,23 @@ func main() {
 		"0",
 		"The address of /metrics. 0 turns the metrics off.",
 	)
+	flag.BoolVar(
+		&opts.LeaderElection,
+		"leader-elect",
+		false,
+		"Run the controller only in the replica that holds the leader election Lease.",
+	)
+	flag.StringVar(
+		&opts.LeaderElectionID,
+		"leader-election-id",
+		"skeleton.plugins.camunda.io",
+		"The name of the leader election Lease, in the namespace of the controller.",
+	)
+	registrations := flag.String(
+		"registrations",
+		"/etc/plugin/registrations.yaml",
+		"The file of the registrations that the plugin publishes and serves.",
+	)
 	zapOpts := zap.Options{}
 	zapOpts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -54,8 +72,19 @@ func main() {
 		return
 	}
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
+	ctrl.SetLogger(pluginkit.NewLogger(&zapOpts))
 	log := ctrl.Log.WithName("setup")
+
+	var err error
+	if opts.Registrations, err = pluginkit.LoadRegistrations(*registrations); err != nil {
+		log.Error(err, "Could not load the registrations")
+		os.Exit(1)
+	}
+
+	if opts.ServiceAccount, err = pluginkit.ServiceAccountFromEnv(); err != nil {
+		log.Error(err, "Could not find the ServiceAccount of the controller")
+		os.Exit(1)
+	}
 
 	mgr, err := skeleton.NewManager(ctrl.GetConfigOrDie(), opts)
 	if err != nil {
