@@ -29,7 +29,7 @@ docs/               one page for each plugin, and the pluginkit page
 hack/               the tools of the Makefile
 ```
 
-The `skeleton` plugin is the plugin that a new plugin copies. It writes one ConfigMap for each request, and it serves no section of the operator. [`docs/pluginkit.md`](docs/pluginkit.md) describes the library for plugin authors.
+The `gateway-access` plugin serves the access section: it gives a cluster or a management plane host names, and routes them through a Gateway API Gateway. [`docs/pluginkit.md`](docs/pluginkit.md) describes the library for plugin authors.
 
 ## Development
 
