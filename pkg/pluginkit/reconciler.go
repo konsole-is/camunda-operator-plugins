@@ -50,6 +50,9 @@ const (
 	conflictRequeue  = time.Second
 )
 
+// kindGrant is the kind of a status.resources row of a Grant.
+const kindGrant = "Grant"
+
 // reconciler serves the PluginRequests of the registrations of one plugin.
 type reconciler[P, I any] struct {
 	client         client.Client
@@ -170,7 +173,14 @@ func (r *reconciler[P, I]) serve(
 	}
 
 	if res.Pending != nil {
+		current, err := r.grantsOf(ctx, request)
+		if err != nil {
+			stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
+			return ctrl.Result{}, err
+		}
+
 		res.Outputs = request.Status.Outputs
+		res.Resources = withGrantRows(res.Resources, current)
 		stageResult(request, res)
 		stage(request, pluginsv1alpha1.ConditionOutputsReady, res.Pending.Reason, res.Pending.Message)
 		r.stageReady(request, nil, nil)
@@ -203,6 +213,7 @@ func (r *reconciler[P, I]) serve(
 		return ctrl.Result{}, err
 	}
 
+	request.Status.Resources = withGrantRows(request.Status.Resources, current)
 	r.stageReady(request, current, res.NotReady)
 
 	return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil
@@ -394,6 +405,26 @@ func (r *reconciler[P, I]) deleteUnwantedGrants(
 	}
 
 	return r.grantsOf(ctx, request)
+}
+
+// withGrantRows returns rows with a row added for each of grants that rows
+// does not list. rows itself does not change.
+func withGrantRows(rows []pluginsv1alpha1.ResourceRef, grants []pluginsv1alpha1.Grant) []pluginsv1alpha1.ResourceRef {
+	all := slices.Clone(rows)
+	for _, g := range grants {
+		listed := slices.ContainsFunc(rows, func(r pluginsv1alpha1.ResourceRef) bool {
+			return r.Kind == kindGrant && r.Name == g.Name
+		})
+		if !listed {
+			// pluginkit removes only the owner reference of a Grant on Orphan.
+			all = append(all, pluginsv1alpha1.ResourceRef{
+				Kind:     kindGrant,
+				Name:     g.Name,
+				OnOrphan: pluginsv1alpha1.OnOrphanKept,
+			})
+		}
+	}
+	return all
 }
 
 // grantsOf lists the Grants with the request label of request in its
