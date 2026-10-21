@@ -207,3 +207,16 @@ func TestRouteWaiting_NamesTheFirstRouteByKindThenName(t *testing.T) {
 	require.NotNil(t, waiting)
 	assert.Equal(t, "GRPCRoute orders-access-grpc: no", waiting.Message)
 }
+
+func TestRouteWaiting_ChangedRouteIsPendingUntilItsNewSpecIsApplied(t *testing.T) {
+	p := validParams()
+	parent := ParentRef(p)
+	desired := clusterRoutes(t, p)[:1]
+	before := ClusterRoutes("orders-access", p, testHosts(t), embeddedEndpoints())[:1]
+	live := liveByKey(liveCopy(before[0], 1, parent, accepted(1)))
+
+	n, waiting := RouteWaiting(desired, live, parent)
+	assert.Equal(t, 0, n)
+	require.NotNil(t, waiting)
+	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
+}

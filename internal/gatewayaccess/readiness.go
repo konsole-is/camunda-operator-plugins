@@ -52,8 +52,8 @@ func KeyOf(obj client.Object) RouteKey {
 
 // RouteWaiting returns how many routes of desired the Gateway of parent
 // accepted, and why the others are not accepted. A route counts when its
-// live copy reports Accepted=True and ResolvedRefs=True for parent, both for
-// its current generation. waiting is nil when every route counts. Otherwise
+// live copy has the spec of desired and reports Accepted=True and
+// ResolvedRefs=True for parent, both for its current generation. waiting is nil when every route counts. Otherwise
 // it describes the first route, by kind and then by name, that does not: the
 // reason Pending while the Gateway has not reported on the route, or the
 // reason and the message of its False condition.
@@ -62,16 +62,14 @@ func RouteWaiting(
 	live map[RouteKey]client.Object,
 	parent gatewayv1.ParentReference,
 ) (accepted int, waiting *pluginkit.Waiting) {
-	keys := make([]RouteKey, 0, len(desired))
-	for _, obj := range desired {
-		keys = append(keys, KeyOf(obj))
-	}
-	slices.SortFunc(keys, func(a, b RouteKey) int {
-		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name))
+	sorted := slices.Clone(desired)
+	slices.SortFunc(sorted, func(a, b client.Object) int {
+		ka, kb := KeyOf(a), KeyOf(b)
+		return cmp.Or(cmp.Compare(ka.Kind, kb.Kind), cmp.Compare(ka.Name, kb.Name))
 	})
 
-	for _, key := range keys {
-		w := routeWaiting(key, live[key], parent)
+	for _, obj := range sorted {
+		w := routeWaiting(obj, live[KeyOf(obj)], parent)
 		if w == nil {
 			accepted++
 		} else if waiting == nil {
@@ -82,7 +80,8 @@ func RouteWaiting(
 	return accepted, waiting
 }
 
-func routeWaiting(key RouteKey, obj client.Object, parent gatewayv1.ParentReference) *pluginkit.Waiting {
+func routeWaiting(desired, obj client.Object, parent gatewayv1.ParentReference) *pluginkit.Waiting {
+	key := KeyOf(desired)
 	pending := &pluginkit.Waiting{
 		Reason: string(gatewayv1.RouteReasonPending),
 		Message: fmt.Sprintf(
@@ -93,7 +92,9 @@ func routeWaiting(key RouteKey, obj client.Object, parent gatewayv1.ParentRefere
 			parent.Name,
 		),
 	}
-	if obj == nil {
+	// The conditions of a live copy with an older spec are about that spec,
+	// until the apply of this reconcile gives the route a new generation.
+	if obj == nil || obj.GetAnnotations()[annotationSpecHash] != desired.GetAnnotations()[annotationSpecHash] {
 		return pending
 	}
 
