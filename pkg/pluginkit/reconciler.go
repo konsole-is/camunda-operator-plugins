@@ -180,7 +180,7 @@ func (r *reconciler[P, I]) serve(
 		}
 
 		res.Outputs = request.Status.Outputs
-		res.Resources = withGrantRows(res.Resources, current)
+		res.Resources = withGrantRows(res.Resources, grantRows(current))
 		stageResult(request, res)
 		stage(request, pluginsv1alpha1.ConditionOutputsReady, res.Pending.Reason, res.Pending.Message)
 		r.stageReady(request, nil, nil)
@@ -205,10 +205,18 @@ func (r *reconciler[P, I]) serve(
 		return ctrl.Result{}, err
 	}
 
+	previous := request.Status.Resources
 	stageResult(request, res)
 
-	current, err := r.deleteUnwantedGrants(ctx, request, grants)
-	request.Status.Resources = withGrantRows(request.Status.Resources, current)
+	listed, err := r.grantsOf(ctx, request)
+	if err != nil {
+		request.Status.Resources = withGrantRows(request.Status.Resources, previous)
+		stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
+		return ctrl.Result{}, err
+	}
+
+	current, err := r.deleteUnwantedGrants(ctx, request, listed, grants)
+	request.Status.Resources = withGrantRows(request.Status.Resources, grantRows(current))
 	if err != nil {
 		stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
 		return ctrl.Result{}, err
@@ -374,20 +382,15 @@ func (r *reconciler[P, I]) outputs(
 	return b.Build()
 }
 
-// deleteUnwantedGrants deletes each Grant with the request label of request
+// deleteUnwantedGrants deletes each Grant of listed, the Grants of request,
 // that is not in wanted, and returns the Grants of the request that still
-// exist, also those that are deleting. An error after the first list comes
-// with the Grants of that list.
+// exist, also those that are deleting. With an error, it returns listed.
 func (r *reconciler[P, I]) deleteUnwantedGrants(
 	ctx context.Context,
 	request *pluginsv1alpha1.PluginRequest,
+	listed []pluginsv1alpha1.Grant,
 	wanted []*pluginsv1alpha1.Grant,
 ) ([]pluginsv1alpha1.Grant, error) {
-	listed, err := r.grantsOf(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-
 	names := map[string]bool{}
 	for _, g := range wanted {
 		names[g.Name] = true
@@ -412,24 +415,32 @@ func (r *reconciler[P, I]) deleteUnwantedGrants(
 	return current, nil
 }
 
-// withGrantRows returns rows with a row added for each of grants that rows
-// does not list. rows itself does not change.
-func withGrantRows(rows []pluginsv1alpha1.ResourceRef, grants []pluginsv1alpha1.Grant) []pluginsv1alpha1.ResourceRef {
+// withGrantRows returns rows with each Grant row of extra that rows does not
+// list. rows itself does not change.
+func withGrantRows(rows, extra []pluginsv1alpha1.ResourceRef) []pluginsv1alpha1.ResourceRef {
 	all := slices.Clone(rows)
-	for _, g := range grants {
+	for _, e := range extra {
 		listed := slices.ContainsFunc(rows, func(r pluginsv1alpha1.ResourceRef) bool {
-			return r.Kind == kindGrant && r.Name == g.Name
+			return r.Kind == e.Kind && r.Name == e.Name
 		})
-		if !listed {
-			// pluginkit removes only the owner reference of a Grant on Orphan.
-			all = append(all, pluginsv1alpha1.ResourceRef{
-				Kind:     kindGrant,
-				Name:     g.Name,
-				OnOrphan: pluginsv1alpha1.OnOrphanKept,
-			})
+		if e.Kind == kindGrant && !listed {
+			all = append(all, e)
 		}
 	}
 	return all
+}
+
+func grantRows(grants []pluginsv1alpha1.Grant) []pluginsv1alpha1.ResourceRef {
+	rows := make([]pluginsv1alpha1.ResourceRef, 0, len(grants))
+	for _, g := range grants {
+		// pluginkit removes only the owner reference of a Grant on Orphan.
+		rows = append(rows, pluginsv1alpha1.ResourceRef{
+			Kind:     kindGrant,
+			Name:     g.Name,
+			OnOrphan: pluginsv1alpha1.OnOrphanKept,
+		})
+	}
+	return rows
 }
 
 // grantsOf lists the Grants with the request label of request in its

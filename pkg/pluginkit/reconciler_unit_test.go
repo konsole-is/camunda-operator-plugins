@@ -61,7 +61,8 @@ func TestDeleteUnwantedGrantsDeletesAGrantWithoutItsOwnerReference(t *testing.T)
 	c := fake.NewClientBuilder().WithScheme(ownedScheme(t)).WithObjects(kept, unowned).Build()
 	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
 
-	current, err := r.deleteUnwantedGrants(context.Background(), request, []*pluginsv1alpha1.Grant{kept})
+	listed := []pluginsv1alpha1.Grant{*kept, *unowned}
+	current, err := r.deleteUnwantedGrants(context.Background(), request, listed, []*pluginsv1alpha1.Grant{kept})
 
 	require.NoError(t, err)
 	require.Len(t, current, 1)
@@ -90,7 +91,8 @@ func TestDeleteUnwantedGrantsReturnsTheListedGrantsWhenADeleteFails(t *testing.T
 		Build()
 	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
 
-	current, err := r.deleteUnwantedGrants(context.Background(), request, []*pluginsv1alpha1.Grant{kept})
+	listed := []pluginsv1alpha1.Grant{*kept, *unwanted}
+	current, err := r.deleteUnwantedGrants(context.Background(), request, listed, []*pluginsv1alpha1.Grant{kept})
 
 	require.Error(t, err)
 	names := make([]string, 0, len(current))
@@ -117,50 +119,53 @@ func TestStageResultKeepsSummaryTimeWhenOnlyTheDefaultSeverityDiffers(t *testing
 
 func TestWithGrantRows(t *testing.T) {
 	bucket := pluginsv1alpha1.ResourceRef{Kind: "S3Bucket", Name: "orders", OnOrphan: pluginsv1alpha1.OnOrphanKept}
-	grant := func(name string) pluginsv1alpha1.Grant {
-		return pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{Name: name}}
-	}
 	grantRow := func(name string) pluginsv1alpha1.ResourceRef {
 		return pluginsv1alpha1.ResourceRef{Kind: "Grant", Name: name, OnOrphan: pluginsv1alpha1.OnOrphanKept}
 	}
 
 	cases := []struct {
-		name   string
-		rows   []pluginsv1alpha1.ResourceRef
-		grants []pluginsv1alpha1.Grant
-		want   []pluginsv1alpha1.ResourceRef
+		name  string
+		rows  []pluginsv1alpha1.ResourceRef
+		extra []pluginsv1alpha1.ResourceRef
+		want  []pluginsv1alpha1.ResourceRef
 	}{
 		{
-			name: "no grants keep the rows of the plugin",
+			name: "no grant rows keep the rows of the plugin",
 			rows: []pluginsv1alpha1.ResourceRef{bucket},
 			want: []pluginsv1alpha1.ResourceRef{bucket},
 		},
 		{
-			name:   "each grant gets a row after the rows of the plugin",
-			rows:   []pluginsv1alpha1.ResourceRef{bucket},
-			grants: []pluginsv1alpha1.Grant{grant("orders-read"), grant("orders-key-use")},
-			want:   []pluginsv1alpha1.ResourceRef{bucket, grantRow("orders-read"), grantRow("orders-key-use")},
+			name:  "each grant row comes after the rows of the plugin",
+			rows:  []pluginsv1alpha1.ResourceRef{bucket},
+			extra: []pluginsv1alpha1.ResourceRef{grantRow("orders-read"), grantRow("orders-key-use")},
+			want:  []pluginsv1alpha1.ResourceRef{bucket, grantRow("orders-read"), grantRow("orders-key-use")},
 		},
 		{
-			name:   "a grant gets a row when the plugin returns no rows",
-			grants: []pluginsv1alpha1.Grant{grant("orders-read")},
-			want:   []pluginsv1alpha1.ResourceRef{grantRow("orders-read")},
+			name:  "a grant row is added when the plugin returns no rows",
+			extra: []pluginsv1alpha1.ResourceRef{grantRow("orders-read")},
+			want:  []pluginsv1alpha1.ResourceRef{grantRow("orders-read")},
 		},
 		{
 			name: "a grant that the plugin lists gets no second row",
 			rows: []pluginsv1alpha1.ResourceRef{
 				{Kind: "Grant", Name: "orders-read", Role: "read", OnOrphan: pluginsv1alpha1.OnOrphanKept},
 			},
-			grants: []pluginsv1alpha1.Grant{grant("orders-read")},
+			extra: []pluginsv1alpha1.ResourceRef{grantRow("orders-read")},
 			want: []pluginsv1alpha1.ResourceRef{
 				{Kind: "Grant", Name: "orders-read", Role: "read", OnOrphan: pluginsv1alpha1.OnOrphanKept},
 			},
+		},
+		{
+			name:  "the rows of a read status keep their grant rows and drop the others",
+			rows:  []pluginsv1alpha1.ResourceRef{bucket},
+			extra: []pluginsv1alpha1.ResourceRef{{Kind: "S3Bucket", Name: "old"}, grantRow("orders-read")},
+			want:  []pluginsv1alpha1.ResourceRef{bucket, grantRow("orders-read")},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, withGrantRows(tc.rows, tc.grants))
+			assert.Equal(t, tc.want, withGrantRows(tc.rows, tc.extra))
 		})
 	}
 }
@@ -169,8 +174,21 @@ func TestWithGrantRowsKeepsTheRowsOfThePlugin(t *testing.T) {
 	rows := make([]pluginsv1alpha1.ResourceRef, 1, 4)
 	rows[0] = pluginsv1alpha1.ResourceRef{Kind: "S3Bucket", Name: "orders", OnOrphan: pluginsv1alpha1.OnOrphanKept}
 
-	withGrantRows(rows, []pluginsv1alpha1.Grant{{ObjectMeta: metav1.ObjectMeta{Name: "orders-read"}}})
+	withGrantRows(rows, []pluginsv1alpha1.ResourceRef{{Kind: "Grant", Name: "orders-read"}})
 
 	assert.Equal(t, "orders", rows[:2][0].Name)
 	assert.Empty(t, rows[:2][1], "the spare capacity of the rows of the plugin stays unwritten")
+}
+
+func TestGrantRows(t *testing.T) {
+	grants := []pluginsv1alpha1.Grant{
+		{ObjectMeta: metav1.ObjectMeta{Name: "orders-read"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "orders-key-use"}},
+	}
+
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{
+		{Kind: "Grant", Name: "orders-read", OnOrphan: pluginsv1alpha1.OnOrphanKept},
+		{Kind: "Grant", Name: "orders-key-use", OnOrphan: pluginsv1alpha1.OnOrphanKept},
+	}, grantRows(grants))
+	assert.Empty(t, grantRows(nil))
 }
