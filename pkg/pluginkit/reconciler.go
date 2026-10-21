@@ -208,12 +208,12 @@ func (r *reconciler[P, I]) serve(
 	stageResult(request, res)
 
 	current, err := r.deleteUnwantedGrants(ctx, request, grants)
+	request.Status.Resources = withGrantRows(request.Status.Resources, current)
 	if err != nil {
 		stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
 		return ctrl.Result{}, err
 	}
 
-	request.Status.Resources = withGrantRows(request.Status.Resources, current)
 	r.stageReady(request, current, res.NotReady)
 
 	return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil
@@ -376,7 +376,8 @@ func (r *reconciler[P, I]) outputs(
 
 // deleteUnwantedGrants deletes each Grant with the request label of request
 // that is not in wanted, and returns the Grants of the request that still
-// exist, also those that are deleting.
+// exist, also those that are deleting. An error after the first list comes
+// with the Grants of that list.
 func (r *reconciler[P, I]) deleteUnwantedGrants(
 	ctx context.Context,
 	request *pluginsv1alpha1.PluginRequest,
@@ -398,13 +399,17 @@ func (r *reconciler[P, I]) deleteUnwantedGrants(
 		}
 
 		if err := r.client.Delete(ctx, &g, client.Preconditions{UID: &g.UID}); client.IgnoreNotFound(err) != nil {
-			return nil, fmt.Errorf("deleting Grant %q: %w", g.Name, err)
+			return listed, fmt.Errorf("deleting Grant %q: %w", g.Name, err)
 		}
 		r.events.Eventf(request, &g, corev1.EventTypeNormal, eventReasonGrantDeleted, eventActionDelete,
 			"Deleted Grant %s, which the request no longer needs", g.Name)
 	}
 
-	return r.grantsOf(ctx, request)
+	current, err := r.grantsOf(ctx, request)
+	if err != nil {
+		return listed, err
+	}
+	return current, nil
 }
 
 // withGrantRows returns rows with a row added for each of grants that rows

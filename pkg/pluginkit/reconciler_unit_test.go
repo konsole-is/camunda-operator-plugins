@@ -18,6 +18,7 @@ package pluginkit
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -66,6 +68,36 @@ func TestDeleteUnwantedGrantsDeletesAGrantWithoutItsOwnerReference(t *testing.T)
 	assert.Equal(t, "wanted", current[0].Name)
 	err = c.Get(context.Background(), client.ObjectKeyFromObject(unowned), &pluginsv1alpha1.Grant{})
 	assert.True(t, apierrors.IsNotFound(err), "the Grant without an owner reference is deleted, got %v", err)
+}
+
+func TestDeleteUnwantedGrantsReturnsTheListedGrantsWhenADeleteFails(t *testing.T) {
+	request := ownedRequest()
+	labels := map[string]string{pluginsv1alpha1.LabelRequest: request.Name}
+	kept := &pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{
+		Name: "wanted", Namespace: request.Namespace, Labels: labels,
+	}}
+	unwanted := &pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{
+		Name: "unwanted", Namespace: request.Namespace, Labels: labels,
+	}}
+	c := fake.NewClientBuilder().
+		WithScheme(ownedScheme(t)).
+		WithObjects(kept, unwanted).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+				return errors.New("the API server refused the delete")
+			},
+		}).
+		Build()
+	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
+
+	current, err := r.deleteUnwantedGrants(context.Background(), request, []*pluginsv1alpha1.Grant{kept})
+
+	require.Error(t, err)
+	names := make([]string, 0, len(current))
+	for _, g := range current {
+		names = append(names, g.Name)
+	}
+	assert.ElementsMatch(t, []string{"wanted", "unwanted"}, names)
 }
 
 func TestStageResultKeepsSummaryTimeWhenOnlyTheDefaultSeverityDiffers(t *testing.T) {
