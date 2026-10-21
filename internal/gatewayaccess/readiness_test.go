@@ -234,3 +234,58 @@ func TestRouteWaiting_TerminatingRouteIsPending(t *testing.T) {
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
 }
+
+func TestRouteWaiting_RouteThatAnotherWriterChangedIsPending(t *testing.T) {
+	p := validParams()
+	parent := ParentRef(p)
+	desired := clusterRoutes(t, p)[:1]
+	drifted := liveCopy(desired[0], 2, parent, accepted(2))
+	route, ok := drifted.(*gatewayv1.HTTPRoute)
+	require.True(t, ok)
+	route.Spec.Rules[0].BackendRefs[0].Name = "other-service"
+
+	n, waiting := RouteWaiting(desired, liveByKey(drifted), parent)
+	assert.Equal(t, 0, n)
+	require.NotNil(t, waiting)
+	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
+}
+
+func TestRouteWaiting_DefaultsOfTheServerDoNotMakeARoutePending(t *testing.T) {
+	p := validParams()
+	parent := ParentRef(p)
+	desired := clusterRoutes(t, p)
+	live := make([]client.Object, 0, len(desired))
+	for _, obj := range desired {
+		copied := liveCopy(obj, 1, parent, accepted(1))
+		setBackendDefaults(copied)
+		live = append(live, copied)
+	}
+
+	n, waiting := RouteWaiting(desired, liveByKey(live...), parent)
+	assert.Equal(t, 2, n)
+	assert.Nil(t, waiting)
+}
+
+// setBackendDefaults writes the group, the kind, and the weight that the API
+// server defaults on each backend of route.
+func setBackendDefaults(route client.Object) {
+	defaults := func(ref *gatewayv1.BackendRef) {
+		ref.Group = new(gatewayv1.Group(""))
+		ref.Kind = new(gatewayv1.Kind("Service"))
+		ref.Weight = new(int32(1))
+	}
+	switch r := route.(type) {
+	case *gatewayv1.HTTPRoute:
+		for i := range r.Spec.Rules {
+			for j := range r.Spec.Rules[i].BackendRefs {
+				defaults(&r.Spec.Rules[i].BackendRefs[j].BackendRef)
+			}
+		}
+	case *gatewayv1.GRPCRoute:
+		for i := range r.Spec.Rules {
+			for j := range r.Spec.Rules[i].BackendRefs {
+				defaults(&r.Spec.Rules[i].BackendRefs[j].BackendRef)
+			}
+		}
+	}
+}

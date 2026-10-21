@@ -92,9 +92,9 @@ func routeWaiting(desired, obj client.Object, parent gatewayv1.ParentReference) 
 			parent.Name,
 		),
 	}
-	// The conditions of a live copy with an older spec are about that spec,
+	// The conditions of a live copy with another spec are about that spec,
 	// until the apply of this reconcile gives the route a new generation.
-	if obj == nil || obj.GetAnnotations()[annotationSpecHash] != desired.GetAnnotations()[annotationSpecHash] {
+	if obj == nil || !slices.Equal(routeShape(obj, obj.GetNamespace()), routeShape(desired, obj.GetNamespace())) {
 		return pending
 	}
 
@@ -124,6 +124,71 @@ func routeWaiting(desired, obj client.Object, parent gatewayv1.ParentReference) 
 	}
 
 	return nil
+}
+
+// routeShape describes the fields of a route in namespace that the plugin
+// sets, with the defaults of the API server filled in. A built route and a
+// live copy of it have the same shape.
+func routeShape(obj client.Object, namespace string) []string {
+	var parents []gatewayv1.ParentReference
+	var hostnames []gatewayv1.Hostname
+	var shape []string
+	switch r := obj.(type) {
+	case *gatewayv1.HTTPRoute:
+		parents, hostnames = r.Spec.ParentRefs, r.Spec.Hostnames
+		for i, rule := range r.Spec.Rules {
+			for _, m := range rule.Matches {
+				var path gatewayv1.HTTPPathMatch
+				if m.Path != nil {
+					path = *m.Path
+				}
+				shape = append(shape, fmt.Sprintf(
+					"rule %d path %s %s",
+					i,
+					ptr.Deref(path.Type, gatewayv1.PathMatchPathPrefix),
+					ptr.Deref(path.Value, "/"),
+				))
+			}
+			for _, b := range rule.BackendRefs {
+				shape = append(shape, fmt.Sprintf("rule %d backend %s", i, backendShape(b.BackendRef)))
+			}
+		}
+	case *gatewayv1.GRPCRoute:
+		parents, hostnames = r.Spec.ParentRefs, r.Spec.Hostnames
+		for i, rule := range r.Spec.Rules {
+			shape = append(shape, fmt.Sprintf("rule %d matches %d", i, len(rule.Matches)))
+			for _, b := range rule.BackendRefs {
+				shape = append(shape, fmt.Sprintf("rule %d backend %s", i, backendShape(b.BackendRef)))
+			}
+		}
+	}
+
+	for _, h := range hostnames {
+		shape = append(shape, "host "+string(h))
+	}
+	for _, p := range parents {
+		shape = append(shape, fmt.Sprintf(
+			"parent %s/%s/%s/%s/%s",
+			ptr.Deref(p.Group, gatewayv1.GroupName),
+			ptr.Deref(p.Kind, "Gateway"),
+			ptr.Deref(p.Namespace, gatewayv1.Namespace(namespace)),
+			p.Name,
+			ptr.Deref(p.SectionName, ""),
+		))
+	}
+	return shape
+}
+
+func backendShape(b gatewayv1.BackendRef) string {
+	return fmt.Sprintf(
+		"%s/%s/%s/%s:%d weight %d",
+		ptr.Deref(b.Group, ""),
+		ptr.Deref(b.Kind, "Service"),
+		ptr.Deref(b.Namespace, ""),
+		b.Name,
+		ptr.Deref(b.Port, 0),
+		ptr.Deref(b.Weight, 1),
+	)
 }
 
 // parentStatus returns the status.parents entry of obj for parent, or nil.

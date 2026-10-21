@@ -17,10 +17,6 @@ limitations under the License.
 package gatewayaccess
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,10 +24,6 @@ import (
 
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 )
-
-// annotationSpecHash holds a hash of the spec of a route as the plugin
-// builds it, so that a live route shows which spec its status is about.
-const annotationSpecHash = "gateway-access.plugins.camunda.io/spec-hash"
 
 // The suffixes of the route names, after the name of the request.
 const (
@@ -117,15 +109,14 @@ func httpRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 		return nil
 	}
 
-	spec := gatewayv1.HTTPRouteSpec{
-		CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{ParentRef(p)}},
-		Hostnames:       []gatewayv1.Hostname{gatewayv1.Hostname(host)},
-		Rules:           rules,
-	}
 	return &gatewayv1.HTTPRoute{
 		TypeMeta:   metav1.TypeMeta{APIVersion: gatewayv1.GroupVersion.String(), Kind: "HTTPRoute"},
-		ObjectMeta: routeMeta(name, spec),
-		Spec:       spec,
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{ParentRef(p)}},
+			Hostnames:       []gatewayv1.Hostname{gatewayv1.Hostname(host)},
+			Rules:           rules,
+		},
 	}
 }
 
@@ -142,28 +133,14 @@ func grpcRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 		return nil
 	}
 
-	spec := gatewayv1.GRPCRouteSpec{
-		CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{ParentRef(p)}},
-		Hostnames:       []gatewayv1.Hostname{gatewayv1.Hostname(host)},
-		Rules:           rules,
-	}
 	return &gatewayv1.GRPCRoute{
 		TypeMeta:   metav1.TypeMeta{APIVersion: gatewayv1.GroupVersion.String(), Kind: "GRPCRoute"},
-		ObjectMeta: routeMeta(name, spec),
-		Spec:       spec,
-	}
-}
-
-// routeMeta names a route and records the hash of its spec. The server
-// defaults fields of a route, so the hash of the built spec, not of the live
-// one, tells whether a live route has this spec.
-func routeMeta(name string, spec any) metav1.ObjectMeta {
-	// A route spec always encodes.
-	raw, _ := json.Marshal(spec)
-	sum := sha256.Sum256(raw)
-	return metav1.ObjectMeta{
-		Name:        name,
-		Annotations: map[string]string{annotationSpecHash: hex.EncodeToString(sum[:8])},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: gatewayv1.GRPCRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{ParentRef(p)}},
+			Hostnames:       []gatewayv1.Hostname{gatewayv1.Hostname(host)},
+			Rules:           rules,
+		},
 	}
 }
 
