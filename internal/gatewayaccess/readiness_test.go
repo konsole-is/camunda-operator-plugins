@@ -145,7 +145,13 @@ func TestRouteWaiting_UnresolvedBackendGivesTheReason(t *testing.T) {
 	desired := clusterRoutes(t, p)
 	unresolved := []condition{
 		{gatewayv1.RouteConditionAccepted, metav1.ConditionTrue, "Accepted", "", 1},
-		{gatewayv1.RouteConditionResolvedRefs, metav1.ConditionFalse, "BackendNotFound", "no Service orders-operate", 1},
+		{
+			gatewayv1.RouteConditionResolvedRefs,
+			metav1.ConditionFalse,
+			"BackendNotFound",
+			"no Service orders-operate",
+			1,
+		},
 	}
 	live := liveByKey(liveCopy(desired[0], 1, parent, unresolved), liveCopy(desired[1], 1, parent, accepted(1)))
 
