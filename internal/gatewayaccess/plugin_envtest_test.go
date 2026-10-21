@@ -282,4 +282,36 @@ var _ = Describe("the gateway-access plugin", func() {
 			g.Expect(grpc).To(BeEmpty())
 		}, timeout).Should(Succeed())
 	})
+
+	It("keeps the request until a route that a finalizer holds is gone", func() {
+		const finalizer = "example.com/hold"
+		ns := newNamespace()
+		request := readyClusterRequest(ns)
+
+		var route gatewayv1.HTTPRoute
+		key := client.ObjectKey{Namespace: ns, Name: "orders-access"}
+		Expect(k8s.Get(ctx, key, &route)).To(Succeed())
+		route.Finalizers = append(route.Finalizers, finalizer)
+		Expect(k8s.Update(ctx, &route)).To(Succeed())
+
+		Expect(k8s.Delete(ctx, request)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(mgr.GetAPIReader().Get(ctx, key, &route)).To(Succeed())
+			g.Expect(route.DeletionTimestamp).NotTo(BeNil())
+		}, timeout).Should(Succeed())
+		Consistently(func(g Gomega) {
+			read := readRequest(g, request)
+			g.Expect(read.Finalizers).To(ContainElement(pluginsv1alpha1.FinalizerCleanup))
+		}, 3*time.Second).Should(Succeed())
+
+		Expect(k8s.Get(ctx, key, &route)).To(Succeed())
+		route.Finalizers = nil
+		Expect(k8s.Update(ctx, &route)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			err := mgr.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(request), &pluginsv1alpha1.PluginRequest{})
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the request still exists: %v", err)
+		}, timeout).Should(Succeed())
+	})
 })

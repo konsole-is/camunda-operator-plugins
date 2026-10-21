@@ -372,29 +372,26 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 		return err
 	}
 
-	var pending []string
-	for _, obj := range live {
-		if !obj.GetDeletionTimestamp().IsZero() {
-			key := KeyOf(obj)
-			pending = append(pending, key.Kind+" "+key.Name)
-		}
-	}
-
-	if err := deleteRoutes(ctx, p.client, req, liveOnly(live), "which goes with the request"); err != nil {
+	toDelete := slices.DeleteFunc(live, func(obj client.Object) bool { return !obj.GetDeletionTimestamp().IsZero() })
+	if err := deleteRoutes(ctx, p.client, req, toDelete, "which goes with the request"); err != nil {
 		return err
 	}
 
-	if len(pending) > 0 {
-		return fmt.Errorf("waiting for the routes %s to be gone", strings.Join(pending, ", "))
+	// A route that a finalizer holds is still there after its delete.
+	left, err := listRoutes(ctx, p.reader, req.Object)
+	if err != nil {
+		return err
+	}
+
+	names := make([]string, 0, len(left))
+	for _, obj := range left {
+		key := KeyOf(obj)
+		names = append(names, key.Kind+" "+key.Name)
+	}
+	if len(names) > 0 {
+		return fmt.Errorf("waiting for the routes %s to be gone", strings.Join(names, ", "))
 	}
 	return nil
-}
-
-// liveOnly leaves out the routes that are already deleting.
-func liveOnly(routes []client.Object) []client.Object {
-	return slices.DeleteFunc(slices.Clone(routes), func(obj client.Object) bool {
-		return !obj.GetDeletionTimestamp().IsZero()
-	})
 }
 
 // Orphan deletes every route of the request, as Delete does. A route to a
