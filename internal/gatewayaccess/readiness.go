@@ -51,12 +51,12 @@ func KeyOf(obj client.Object) RouteKey {
 }
 
 // RouteWaiting returns how many routes of desired the Gateway of parent
-// accepted, and why the others are not accepted. A route counts when its
-// live copy has the spec of desired and reports Accepted=True and
-// ResolvedRefs=True for parent, both for its current generation. waiting is nil when every route counts. Otherwise
-// it describes the first route, by kind and then by name, that does not: the
-// reason Pending while the Gateway has not reported on the route, or the
-// reason and the message of its False condition.
+// accepted, and why the others are not. A route counts when its live copy
+// has the spec of desired and reports Accepted=True and ResolvedRefs=True
+// for parent, both for its current generation. waiting is nil when every
+// route counts. Otherwise it describes the first route, by kind and then by
+// name, that does not: the reason Pending while the Gateway has not reported
+// on it, or the reason and the message of its False condition.
 func RouteWaiting(
 	desired []client.Object,
 	live map[RouteKey]client.Object,
