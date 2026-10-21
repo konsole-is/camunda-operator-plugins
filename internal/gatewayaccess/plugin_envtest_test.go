@@ -252,10 +252,13 @@ var _ = Describe("the gateway-access plugin", func() {
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {
-			ready := condition(readRequest(g, request), v1.ConditionReady)
-			g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(ready.Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters))
-			g.Expect(ready.Message).To(ContainSubstring("hostnamePattern"))
+			read := readRequest(g, request)
+			for _, conditionType := range []string{pluginsv1alpha1.ConditionOutputsReady, v1.ConditionReady} {
+				c := condition(read, conditionType)
+				g.Expect(c.Status).To(Equal(metav1.ConditionFalse), conditionType)
+				g.Expect(c.Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters), conditionType)
+				g.Expect(c.Message).To(ContainSubstring("hostnamePattern"), conditionType)
+			}
 		}, timeout).Should(Succeed())
 	})
 
