@@ -92,7 +92,7 @@ func readyClusterRequest(namespace string) *pluginsv1alpha1.PluginRequest {
 	Expect(k8s.Create(ctx, cluster)).To(Succeed())
 	Expect(publishEndpoints(ctx, k8s, cluster, standaloneEndpoints("orders"))).To(Succeed())
 
-	request := accessRequest(namespace, "orders-access", "gateway-public", clusterTarget("orders"), gatewayParams())
+	request := accessRequest(namespace, "orders-access", clusterTarget("orders"), gatewayParams())
 	Expect(k8s.Create(ctx, request)).To(Succeed())
 
 	Eventually(func(g Gomega) {
@@ -104,7 +104,7 @@ func readyClusterRequest(namespace string) *pluginsv1alpha1.PluginRequest {
 var _ = Describe("the gateway-access plugin", func() {
 	It("publishes the outputs before the target exists", func() {
 		ns := newNamespace()
-		request := accessRequest(ns, "orders-access", "gateway-public", clusterTarget("orders"), gatewayParams())
+		request := accessRequest(ns, "orders-access", clusterTarget("orders"), gatewayParams())
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -164,7 +164,7 @@ var _ = Describe("the gateway-access plugin", func() {
 		cluster := newCluster(ns, "orders")
 		Expect(k8s.Create(ctx, cluster)).To(Succeed())
 		Expect(publishEndpoints(ctx, k8s, cluster, standaloneEndpoints("orders"))).To(Succeed())
-		request := accessRequest(ns, "refused-access", "gateway-public", clusterTarget("orders"), gatewayParams())
+		request := accessRequest(ns, "refused-access", clusterTarget("orders"), gatewayParams())
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -211,7 +211,7 @@ var _ = Describe("the gateway-access plugin", func() {
 		Expect(publishEndpoints(ctx, k8s, plane, planeEndpoints("platform"))).To(Succeed())
 
 		target := pluginsv1alpha1.TargetRef{Kind: "CamundaManagementCluster", Name: "platform"}
-		request := accessRequest(ns, "platform-access", "gateway-public", target, gatewayParams())
+		request := accessRequest(ns, "platform-access", target, gatewayParams())
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -229,7 +229,7 @@ var _ = Describe("the gateway-access plugin", func() {
 	It("refuses a target kind that it does not serve", func() {
 		ns := newNamespace()
 		target := pluginsv1alpha1.TargetRef{Kind: "ElasticsearchCluster", Name: "search"}
-		request := accessRequest(ns, "search-access", "gateway-public", target, gatewayParams())
+		request := accessRequest(ns, "search-access", target, gatewayParams())
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -248,7 +248,7 @@ var _ = Describe("the gateway-access plugin", func() {
 		params := gatewayParams()
 		params.HostnamePattern = "{name}-{namespace}.example.com"
 		claim := strings.Repeat("a", 40)
-		request := accessRequest(ns, "long-access", "gateway-public", clusterTarget(claim), params)
+		request := accessRequest(ns, "long-access", clusterTarget(claim), params)
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {

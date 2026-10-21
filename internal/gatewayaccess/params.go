@@ -32,6 +32,12 @@ const (
 	OutputManagementHost = "managementHost"
 )
 
+// The schemes of the outputs.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // GatewayRef names the Gateway that the routes of a request attach to.
 type GatewayRef struct {
 	Namespace string `json:"namespace"`
@@ -56,7 +62,7 @@ type Params struct {
 
 func (p Params) scheme() string {
 	if p.Scheme == "" {
-		return "https"
+		return schemeHTTPS
 	}
 	return p.Scheme
 }

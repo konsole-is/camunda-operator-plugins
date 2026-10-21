@@ -51,7 +51,7 @@ func CertificateItem(
 	p Params,
 	now time.Time,
 ) *pluginsv1alpha1.SummaryItem {
-	if p.scheme() == "http" {
+	if p.scheme() == schemeHTTP {
 		return nil
 	}
 

@@ -307,13 +307,14 @@ func rawParams(p gatewayaccess.Params) *apiextensionsv1.JSON {
 	return &apiextensionsv1.JSON{Raw: raw}
 }
 
-// accessRequest returns a request of the access section, as a claim
-// controller writes it, for the claim of the same name as the target.
+// accessRequest returns a request of the registration gateway-public, as a
+// claim controller writes it, for the claim of the same name as the target.
 func accessRequest(
-	namespace, name, registration string,
+	namespace, name string,
 	target pluginsv1alpha1.TargetRef,
 	p gatewayaccess.Params,
 ) *pluginsv1alpha1.PluginRequest {
+	const registration = "gateway-public"
 	claimKind := pluginsv1alpha1.ClaimKindCamundaClusterClaim
 	if target.Kind == "CamundaManagementCluster" {
 		claimKind = pluginsv1alpha1.ClaimKindCamundaManagementClusterClaim

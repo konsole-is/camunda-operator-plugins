@@ -75,11 +75,11 @@ func ParentRef(p Params) gatewayv1.ParentReference {
 	ref := gatewayv1.ParentReference{
 		Group:     ptr.To(gatewayv1.Group(gatewayv1.GroupName)),
 		Kind:      ptr.To(gatewayv1.Kind("Gateway")),
-		Namespace: ptr.To(gatewayv1.Namespace(p.GatewayRef.Namespace)),
+		Namespace: new(gatewayv1.Namespace(p.GatewayRef.Namespace)),
 		Name:      gatewayv1.ObjectName(p.GatewayRef.Name),
 	}
 	if p.ListenerName != "" {
-		ref.SectionName = ptr.To(gatewayv1.SectionName(p.ListenerName))
+		ref.SectionName = new(gatewayv1.SectionName(p.ListenerName))
 	}
 	return ref
 }
@@ -99,7 +99,7 @@ func httpRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 			Matches: []gatewayv1.HTTPRouteMatch{{
 				Path: &gatewayv1.HTTPPathMatch{
 					Type:  ptr.To(gatewayv1.PathMatchPathPrefix),
-					Value: ptr.To(path),
+					Value: new(path),
 				},
 			}},
 			BackendRefs: []gatewayv1.HTTPBackendRef{{BackendRef: backendRef(e)}},
@@ -150,7 +150,7 @@ func backendRef(e v1.Endpoint) gatewayv1.BackendRef {
 	return gatewayv1.BackendRef{
 		BackendObjectReference: gatewayv1.BackendObjectReference{
 			Name: gatewayv1.ObjectName(e.Service),
-			Port: ptr.To(e.Port),
+			Port: new(e.Port),
 		},
 	}
 }

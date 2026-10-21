@@ -46,6 +46,9 @@ import (
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
 
+// httpsListener is the name of the HTTPS listener of the test Gateway.
+const httpsListener = "https"
+
 var testNow = time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 
 // certificatePEM returns a self-signed certificate in PEM that expires at
@@ -75,7 +78,7 @@ func testGateway() *gatewayv1.Gateway {
 			Listeners: []gatewayv1.Listener{
 				{Name: "http", Port: 80, Protocol: gatewayv1.HTTPProtocolType},
 				{
-					Name:     "https",
+					Name:     httpsListener,
 					Port:     443,
 					Protocol: gatewayv1.HTTPSProtocolType,
 					TLS: &gatewayv1.ListenerTLSConfig{
@@ -124,7 +127,7 @@ func TestCertificateItem_ReadsTheListenerOfTheParameters(t *testing.T) {
 	notAfter := testNow.Add(10 * 24 * time.Hour)
 	reader := fakeReader(t, nil, testGateway(), tlsSecret(certificatePEM(t, notAfter)))
 	p := validParams()
-	p.ListenerName = "https"
+	p.ListenerName = httpsListener
 
 	item := CertificateItem(context.Background(), reader, p, testNow)
 	require.NotNil(t, item)

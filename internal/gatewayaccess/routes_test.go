@@ -90,7 +90,7 @@ func ruleOf(t *testing.T, rule gatewayv1.HTTPRouteRule) (path, service string, p
 
 	ref := rule.BackendRefs[0].BackendObjectReference
 	assert.Nil(t, ref.Namespace)
-	return *match.Value, string(ref.Name), int32(*ref.Port)
+	return *match.Value, string(ref.Name), *ref.Port
 }
 
 func routesByKind(t *testing.T, objs []client.Object) (*gatewayv1.HTTPRoute, *gatewayv1.GRPCRoute) {
@@ -124,7 +124,7 @@ func TestClusterRoutes_StandaloneAppsGetOneRuleForEachHTTPEndpoint(t *testing.T)
 	assert.Equal(t, []gatewayv1.ParentReference{ParentRef(p)}, http.Spec.ParentRefs)
 	require.Len(t, http.Spec.Rules, 6)
 
-	var paths []string
+	paths := make([]string, 0, len(http.Spec.Rules))
 	for _, rule := range http.Spec.Rules {
 		path, _, _ := ruleOf(t, rule)
 		paths = append(paths, path)
@@ -224,6 +224,6 @@ func TestParentRef_SetsTheListenerOnlyWhenNamed(t *testing.T) {
 	assert.Equal(t, gatewayv1.ObjectName("public"), ref.Name)
 	assert.Nil(t, ref.SectionName)
 
-	p.ListenerName = "https"
-	assert.Equal(t, ptr.To(gatewayv1.SectionName("https")), ParentRef(p).SectionName)
+	p.ListenerName = httpsListener
+	assert.Equal(t, ptr.To(gatewayv1.SectionName(httpsListener)), ParentRef(p).SectionName)
 }

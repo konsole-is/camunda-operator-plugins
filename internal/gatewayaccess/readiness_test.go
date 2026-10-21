@@ -186,7 +186,7 @@ func TestRouteWaiting_IgnoresTheStatusOfOtherParents(t *testing.T) {
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
 
 	withListener := p
-	withListener.ListenerName = "https"
+	withListener.ListenerName = httpsListener
 	desired = clusterRoutes(t, withListener)[:1]
 	live = liveByKey(liveCopy(desired[0], 1, ParentRef(p), accepted(1)))
 
