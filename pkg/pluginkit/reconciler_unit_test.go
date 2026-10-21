@@ -102,6 +102,56 @@ func TestDeleteUnwantedGrantsReturnsTheListedGrantsWhenADeleteFails(t *testing.T
 	assert.ElementsMatch(t, []string{"wanted", "unwanted"}, names)
 }
 
+func TestStageGrantsListsTheGrantsThatStillExist(t *testing.T) {
+	request := ownedRequest()
+	labels := map[string]string{pluginsv1alpha1.LabelRequest: request.Name}
+	bucket := pluginsv1alpha1.ResourceRef{Kind: "S3Bucket", Name: "orders", OnOrphan: pluginsv1alpha1.OnOrphanKept}
+	request.Status.Resources = []pluginsv1alpha1.ResourceRef{bucket}
+	kept := &pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{
+		Name: "wanted", Namespace: request.Namespace, Labels: labels,
+	}}
+	unwanted := &pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{
+		Name: "unwanted", Namespace: request.Namespace, Labels: labels,
+	}}
+	c := fake.NewClientBuilder().WithScheme(ownedScheme(t)).WithObjects(kept, unwanted).Build()
+	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
+	previous := []pluginsv1alpha1.ResourceRef{{Kind: "Grant", Name: "unwanted", OnOrphan: pluginsv1alpha1.OnOrphanKept}}
+
+	current, err := r.stageGrants(context.Background(), request, previous, []*pluginsv1alpha1.Grant{kept})
+
+	require.NoError(t, err)
+	require.Len(t, current, 1)
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{
+		bucket,
+		{Kind: "Grant", Name: "wanted", OnOrphan: pluginsv1alpha1.OnOrphanKept},
+	}, request.Status.Resources)
+}
+
+func TestStageGrantsKeepsTheGrantRowsOfTheReadStatusWhenTheListFails(t *testing.T) {
+	request := ownedRequest()
+	bucket := pluginsv1alpha1.ResourceRef{Kind: "S3Bucket", Name: "orders", OnOrphan: pluginsv1alpha1.OnOrphanKept}
+	read := pluginsv1alpha1.ResourceRef{Kind: "Grant", Name: "orders-read", OnOrphan: pluginsv1alpha1.OnOrphanKept}
+	request.Status.Resources = []pluginsv1alpha1.ResourceRef{bucket}
+	c := fake.NewClientBuilder().
+		WithScheme(ownedScheme(t)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*pluginsv1alpha1.GrantList); ok {
+					return errors.New("the API server refused the list")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
+	previous := []pluginsv1alpha1.ResourceRef{{Kind: "S3Bucket", Name: "old"}, read}
+
+	_, err := r.stageGrants(context.Background(), request, previous, nil)
+
+	require.Error(t, err)
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{bucket, read}, request.Status.Resources)
+}
+
 func TestStageResultKeepsSummaryTimeWhenOnlyTheDefaultSeverityDiffers(t *testing.T) {
 	since := metav1.NewTime(metav1.Now().Add(-time.Hour).Truncate(time.Second))
 	request := &pluginsv1alpha1.PluginRequest{Status: pluginsv1alpha1.PluginRequestStatus{

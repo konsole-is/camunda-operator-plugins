@@ -208,15 +208,7 @@ func (r *reconciler[P, I]) serve(
 	previous := request.Status.Resources
 	stageResult(request, res)
 
-	listed, err := r.grantsOf(ctx, request)
-	if err != nil {
-		request.Status.Resources = withGrantRows(request.Status.Resources, previous)
-		stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
-		return ctrl.Result{}, err
-	}
-
-	current, err := r.deleteUnwantedGrants(ctx, request, listed, grants)
-	request.Status.Resources = withGrantRows(request.Status.Resources, grantRows(current))
+	current, err := r.stageGrants(ctx, request, previous, grants)
 	if err != nil {
 		stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
 		return ctrl.Result{}, err
@@ -380,6 +372,27 @@ func (r *reconciler[P, I]) outputs(
 	}
 
 	return b.Build()
+}
+
+// stageGrants deletes each Grant of request that is not in wanted, and adds
+// a row for each Grant that still exists to status.resources of request. When
+// it cannot list the Grants, it adds the Grant rows of previous instead. It
+// returns the Grants that still exist.
+func (r *reconciler[P, I]) stageGrants(
+	ctx context.Context,
+	request *pluginsv1alpha1.PluginRequest,
+	previous []pluginsv1alpha1.ResourceRef,
+	wanted []*pluginsv1alpha1.Grant,
+) ([]pluginsv1alpha1.Grant, error) {
+	listed, err := r.grantsOf(ctx, request)
+	if err != nil {
+		request.Status.Resources = withGrantRows(request.Status.Resources, previous)
+		return nil, err
+	}
+
+	current, err := r.deleteUnwantedGrants(ctx, request, listed, wanted)
+	request.Status.Resources = withGrantRows(request.Status.Resources, grantRows(current))
+	return current, err
 }
 
 // deleteUnwantedGrants deletes each Grant of listed, the Grants of request,
