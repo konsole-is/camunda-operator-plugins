@@ -282,26 +282,30 @@ var _ = Describe("the request reconciler", func() {
 		waitReady(request)
 	})
 
-	It("refuses parameters that fail the schema", func() {
-		request := createRequest("invalid-parameters", func(r *pluginsv1alpha1.PluginRequest) {
-			r.Spec.Parameters = &apiextensionsv1.JSON{Raw: []byte(`{"size":0}`)}
-		})
+	DescribeTable("refuses parameters that do not pass the schema",
+		func(namespace, parameters, message string) {
+			request := createRequest(namespace, func(r *pluginsv1alpha1.PluginRequest) {
+				r.Spec.Parameters = &apiextensionsv1.JSON{Raw: []byte(parameters)}
+			})
 
-		Eventually(func(g Gomega) {
-			for _, conditionType := range []string{pluginsv1alpha1.ConditionOutputsReady, "Ready"} {
-				cond := condition(g, request, conditionType)
-				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-				g.Expect(cond.Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters))
-				g.Expect(cond.Message).To(ContainSubstring("spec.parameters.size"))
-			}
-		}).Should(Succeed())
+			Eventually(func(g Gomega) {
+				for _, conditionType := range []string{pluginsv1alpha1.ConditionOutputsReady, "Ready"} {
+					cond := condition(g, request, conditionType)
+					g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+					g.Expect(cond.Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters))
+					g.Expect(cond.Message).To(ContainSubstring(message))
+				}
+			}).Should(Succeed())
 
-		Consistently(func() bool {
-			var cm corev1.ConfigMap
-			key := client.ObjectKey{Namespace: request.Namespace, Name: testRequestName + "-data"}
-			return apierrors.IsNotFound(k8s.Get(ctx, key, &cm))
-		}).WithTimeout(2 * time.Second).Should(BeTrue())
-	})
+			Consistently(func() bool {
+				var cm corev1.ConfigMap
+				key := client.ObjectKey{Namespace: request.Namespace, Name: testRequestName + "-data"}
+				return apierrors.IsNotFound(k8s.Get(ctx, key, &cm))
+			}).WithTimeout(2 * time.Second).Should(BeTrue())
+		},
+		Entry("a field that fails the schema", "invalid-parameters", `{"size":0}`, "spec.parameters.size"),
+		Entry("a rule of the schema", "rule-parameters", `{"size":20}`, "size must be at most 10"),
+	)
 
 	It("keeps the resourceVersion of a served request while nothing changes", func() {
 		request := createRequest("steady")

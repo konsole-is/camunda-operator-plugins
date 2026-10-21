@@ -223,7 +223,8 @@ func testRegistration() pluginsv1alpha1.PluginRegistration {
 			Mode:     pluginsv1alpha1.ModeOptional,
 			Parameters: &apiextensionsv1.JSON{Raw: []byte(`{"type":"object","properties":{` +
 				`"size":{"type":"integer","minimum":1},"policy":{"type":"string","x-fleet-template":true},` +
-				`"secret":{"type":"string"}}}`)},
+				`"secret":{"type":"string"}},` +
+				`"x-kubernetes-validations":[{"rule":"!has(self.size) || self.size <= 10","message":"size must be at most 10"}]}`)},
 			Inputs:  []pluginsv1alpha1.InputDecl{{Name: "key", From: "encryption-key/keyRef"}},
 			Outputs: []pluginsv1alpha1.OutputDecl{{Key: "configMap"}, {Key: "input"}},
 			GrantTemplates: []pluginsv1alpha1.GrantTemplate{

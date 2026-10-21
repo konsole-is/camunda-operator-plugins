@@ -89,7 +89,7 @@ pluginkit serves no request before all registrations are applied.
 
 pluginkit serves each `PluginRequest` whose label `plugins.camunda.io/registration` names a registration of the `Config`. For each request, it does these steps in this order:
 
-1. It validates `spec.parameters` against the schema of the registration, with the validator of the Kubernetes API server. The error names each failing field, for example `spec.parameters.size`. The `x-kubernetes-validations` rules of the schema are not checked.
+1. It validates `spec.parameters` against the schema of the registration, as the Kubernetes API server validates a custom resource: the schema, the `x-kubernetes-validations` rules, the list types, and the checks of an embedded resource. It checks the stored value, before the template parameters render. The error names each failing field, for example `spec.parameters.size`, and the message of each broken rule.
 2. It renders each parameter whose schema has `"x-fleet-template": true`.
 3. It adds the finalizer `plugins.camunda.io/cleanup`. A request whose parameters never passed the schema has no finalizer, so its delete does not wait.
 4. It calls `Reconcile`.
@@ -146,7 +146,7 @@ pluginkit uses the reasons of the api module, and adds these reasons of its own:
 
 | Reason | Condition | Meaning |
 | --- | --- | --- |
-| `InvalidParameters` | `OutputsReady`, `Ready` | The parameters do not pass the schema, or a template parameter does not render. The message names the field. |
+| `InvalidParameters` | `OutputsReady`, `Ready` | The parameters do not pass the schema or its rules, or a template parameter does not render. The message names the field or the rule. |
 | `ReconcileError` | `Ready` | `Reconcile` returned an error, or an output key that the registration does not declare. |
 | `GrantTemplateInvalid` | `Ready` | A grant template does not render for the request. |
 | `DeleteFailed` | `Ready` | `Delete` or `Orphan` returned an error. The finalizer stays. |

@@ -69,7 +69,10 @@ func TestValidateParametersRunsTheValidationRulesOfTheSchema(t *testing.T) {
   "properties": {
     "min": {"type": "integer"},
     "max": {"type": "integer"},
-    "name": {"type": "string", "x-kubernetes-validations": [{"rule": "self.startsWith('team-')", "message": "name must start with team-"}]}
+    "name": {
+      "type": "string",
+      "x-kubernetes-validations": [{"rule": "self.startsWith('team-')", "message": "name must start with team-"}]
+    }
   },
   "x-kubernetes-validations": [
     {"rule": "!has(self.min) || !has(self.max) || self.min <= self.max", "message": "min must not be above max"},
