@@ -1,0 +1,43 @@
+{{- /* The controller reads only the certificate Secrets that the values name. */}}
+{{- if .Values.reportCertificateExpiry }}
+{{- $byNamespace := dict }}
+{{- range .Values.certificateSecrets }}
+{{- $namespace := required "each certificate Secret needs a namespace" .namespace }}
+{{- $names := get $byNamespace $namespace | default list }}
+{{- $_ := set $byNamespace $namespace (append $names (required "each certificate Secret needs a name" .name)) }}
+{{- end }}
+{{- range $namespace, $names := $byNamespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "gateway-access.fullname" $ }}-certificates
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "gateway-access.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames:
+      {{- range $names }}
+      - {{ . | quote }}
+      {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "gateway-access.fullname" $ }}-certificates
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "gateway-access.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "gateway-access.fullname" $ }}-certificates
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "gateway-access.fullname" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

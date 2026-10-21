@@ -3,7 +3,7 @@
 # how a plugin gets a new owner.
 *                           @sourcehawk
 
-/cmd/skeleton/              @sourcehawk
-/internal/skeleton/         @sourcehawk
-/charts/skeleton/           @sourcehawk
-/docs/plugins/skeleton.md   @sourcehawk
+/cmd/gateway-access/              @sourcehawk
+/internal/gatewayaccess/          @sourcehawk
+/charts/gateway-access/           @sourcehawk
+/docs/plugins/gateway-access.md   @sourcehawk

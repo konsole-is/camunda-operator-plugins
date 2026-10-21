@@ -66,9 +66,9 @@ chart-verify: ## Lint and render the chart of each plugin, and check the serve r
 			echo "charts/$$p renders without a registration" >&2; exit 1 ;; \
 		esac; \
 		echo "  charts/$$p refuses to render without a registration"; \
-		$(MAKE) -s chart-names-differ CHART="charts/$$p" A="team-a skeleton" B="team a-skeleton" || exit 1; \
+		$(MAKE) -s chart-names-differ CHART="charts/$$p" A="team-a plugin" B="team a-plugin" || exit 1; \
 		$(MAKE) -s chart-names-differ CHART="charts/$$p" \
-			A="$$(printf 'n%.0s' $$(seq 60))a skeleton" B="$$(printf 'n%.0s' $$(seq 60))b skeleton" || exit 1; \
+			A="$$(printf 'n%.0s' $$(seq 60))a plugin" B="$$(printf 'n%.0s' $$(seq 60))b plugin" || exit 1; \
 	done
 
 # chart-names-differ checks that two releases, A and B as "<namespace> <release>",
@@ -151,7 +151,7 @@ build: fmt vet ## Build the binary of each plugin into bin/<plugin>.
 ##@ Images
 
 CONTAINER_TOOL ?= docker
-PLUGIN ?= skeleton
+PLUGIN ?= gateway-access
 IMAGE_REPOSITORY ?= ghcr.io/konsole-is/camunda-operator-plugins
 IMG ?= $(IMAGE_REPOSITORY)/$(PLUGIN):$(VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64

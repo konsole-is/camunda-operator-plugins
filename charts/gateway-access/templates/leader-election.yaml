@@ -3,10 +3,10 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "skeleton.fullname" . }}-leader-election
+  name: {{ include "gateway-access.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "skeleton.labels" . | nindent 4 }}
+    {{- include "gateway-access.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -18,15 +18,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "skeleton.fullname" . }}-leader-election
+  name: {{ include "gateway-access.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "skeleton.labels" . | nindent 4 }}
+    {{- include "gateway-access.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "skeleton.fullname" . }}-leader-election
+  name: {{ include "gateway-access.fullname" . }}-leader-election
 subjects:
   - kind: ServiceAccount
-    name: {{ include "skeleton.fullname" . }}
+    name: {{ include "gateway-access.fullname" . }}
     namespace: {{ .Release.Namespace }}

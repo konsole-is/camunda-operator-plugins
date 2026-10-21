@@ -8,9 +8,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "skeleton.clusterName" . }}-serve
+  name: {{ include "gateway-access.clusterName" . }}-serve
   labels:
-    {{- include "skeleton.labels" . | nindent 4 }}
+    {{- include "gateway-access.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["plugins.camunda.io"]
     resources: ["pluginregistrations"]
@@ -23,27 +23,27 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "skeleton.clusterName" . }}-serve
+  name: {{ include "gateway-access.clusterName" . }}-serve
   labels:
-    {{- include "skeleton.labels" . | nindent 4 }}
+    {{- include "gateway-access.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "skeleton.clusterName" . }}-serve
+  name: {{ include "gateway-access.clusterName" . }}-serve
 subjects:
   - kind: ServiceAccount
-    name: {{ include "skeleton.fullname" . }}
+    name: {{ include "gateway-access.fullname" . }}
     namespace: {{ .Release.Namespace }}
 ---
 # The controller applies its registrations, keeps their Ready condition,
-# serves their requests, and writes the Grants and the ConfigMaps of the
-# requests.
+# serves their requests, reads the targets of the requests, and writes the
+# Grants and the routes of the requests.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "skeleton.clusterName" . }}-controller
+  name: {{ include "gateway-access.clusterName" . }}-controller
   labels:
-    {{- include "skeleton.labels" . | nindent 4 }}
+    {{- include "gateway-access.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["plugins.camunda.io"]
     resources: ["pluginregistrations"]
@@ -76,21 +76,31 @@ rules:
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create", "patch"]
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes", "grpcroutes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["core.camunda.io"]
+    resources: ["camundaclusters", "camundaoptimizes", "camundamanagementclusters"]
+    verbs: ["get", "list", "watch"]
+  {{- if .Values.reportCertificateExpiry }}
+  # The controller reads the listener certificate of the Gateway to report its
+  # expiry. certificates.yaml grants get on the certificate Secrets.
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways"]
+    verbs: ["get"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "skeleton.clusterName" . }}-controller
+  name: {{ include "gateway-access.clusterName" . }}-controller
   labels:
-    {{- include "skeleton.labels" . | nindent 4 }}
+    {{- include "gateway-access.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "skeleton.clusterName" . }}-controller
+  name: {{ include "gateway-access.clusterName" . }}-controller
 subjects:
   - kind: ServiceAccount
-    name: {{ include "skeleton.fullname" . }}
+    name: {{ include "gateway-access.fullname" . }}
     namespace: {{ .Release.Namespace }}
