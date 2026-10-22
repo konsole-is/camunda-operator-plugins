@@ -93,10 +93,17 @@ func routeWaiting(desired, obj client.Object, parent gatewayv1.ParentReference) 
 			parent.Name,
 		),
 	}
+	if obj == nil {
+		return pending
+	}
+
 	// The conditions of a live copy with another spec are about that spec,
 	// until the apply of this reconcile gives the route a new generation.
-	if obj == nil || !sameSpec(desired, obj) {
-		return pending
+	if !sameSpec(desired, obj) {
+		return &pluginkit.Waiting{
+			Reason:  string(gatewayv1.RouteReasonPending),
+			Message: fmt.Sprintf("%s %s differs from the route that the plugin applies", key.Kind, key.Name),
+		}
 	}
 
 	if !obj.GetDeletionTimestamp().IsZero() {

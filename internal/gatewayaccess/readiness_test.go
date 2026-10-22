@@ -249,6 +249,7 @@ func TestRouteWaiting_RouteThatAnotherWriterChangedIsPending(t *testing.T) {
 	assert.Equal(t, 0, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
+	assert.Equal(t, "HTTPRoute orders-access differs from the route that the plugin applies", waiting.Message)
 }
 
 // setLiveBackendDefaults writes the group, the kind, and the weight that the

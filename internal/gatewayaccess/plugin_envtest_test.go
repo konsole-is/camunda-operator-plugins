@@ -323,6 +323,11 @@ var _ = Describe("the gateway-access plugin", func() {
 		request := readyClusterRequest(ns)
 		cluster := newCluster(ns, "orders")
 		Expect(k8s.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+		before := condition(readRequest(Default, request), v1.ConditionReady).LastTransitionTime
+
+		// LastTransitionTime has a resolution of one second, so a transition
+		// in the same second as before shows the same time.
+		Eventually(time.Now).Should(BeTemporally(">=", before.Add(time.Second)))
 		Expect(publishEndpoints(ctx, k8s, cluster, standaloneEndpoints("orders")[:6])).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -331,7 +336,9 @@ var _ = Describe("the gateway-access plugin", func() {
 				To(Succeed())
 			g.Expect(route.Spec.Rules).To(HaveLen(5))
 			g.Expect(route.Generation).To(BeNumerically(">", 1))
-			g.Expect(condition(readRequest(g, request), v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			ready := condition(readRequest(g, request), v1.ConditionReady)
+			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(ready.LastTransitionTime.Time).To(BeTemporally(">", before.Time))
 		}, timeout).Should(Succeed())
 	})
 })
