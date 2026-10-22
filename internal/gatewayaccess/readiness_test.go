@@ -289,3 +289,31 @@ func setBackendDefaults(route client.Object) {
 		}
 	}
 }
+
+func TestRouteWaiting_RouteWithAMatchConstraintOfAnotherWriterIsPending(t *testing.T) {
+	p := validParams()
+	parent := ParentRef(p)
+	desired := clusterRoutes(t, p)[:1]
+
+	for name, constrain := range map[string]func(*gatewayv1.HTTPRouteMatch){
+		"method": func(m *gatewayv1.HTTPRouteMatch) { m.Method = new(gatewayv1.HTTPMethodGet) },
+		"header": func(m *gatewayv1.HTTPRouteMatch) {
+			m.Headers = []gatewayv1.HTTPHeaderMatch{{Name: "X-Team", Value: "a"}}
+		},
+		"query": func(m *gatewayv1.HTTPRouteMatch) {
+			m.QueryParams = []gatewayv1.HTTPQueryParamMatch{{Name: "debug", Value: "1"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			live := liveCopy(desired[0], 2, parent, accepted(2))
+			route, ok := live.(*gatewayv1.HTTPRoute)
+			require.True(t, ok)
+			constrain(&route.Spec.Rules[0].Matches[0])
+
+			n, waiting := RouteWaiting(desired, liveByKey(live), parent)
+			assert.Equal(t, 0, n)
+			require.NotNil(t, waiting)
+			assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
+		})
+	}
+}

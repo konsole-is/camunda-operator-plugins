@@ -143,10 +143,13 @@ func routeShape(obj client.Object, namespace string) []string {
 					path = *m.Path
 				}
 				shape = append(shape, fmt.Sprintf(
-					"rule %d path %s %s",
+					"rule %d path %s %s method %s headers %d query %d",
 					i,
 					ptr.Deref(path.Type, gatewayv1.PathMatchPathPrefix),
 					ptr.Deref(path.Value, "/"),
+					ptr.Deref(m.Method, ""),
+					len(m.Headers),
+					len(m.QueryParams),
 				))
 			}
 			for _, b := range rule.BackendRefs {
