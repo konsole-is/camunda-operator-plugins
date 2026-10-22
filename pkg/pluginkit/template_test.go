@@ -42,6 +42,7 @@ func TestParseTemplate(t *testing.T) {
 		{"an output passes in a metric query", "{{ .outputs.y }}", TemplateMetricQuery, ""},
 		{"pods fails in a grant", "{{ .pods }}", TemplateGrant, "pods"},
 		{"pods fails in a parameter", "{{ .pods }}", TemplateParameter, "pods"},
+		{"an output fails in a parameter", "{{ .outputs.y }}", TemplateParameter, "cannot read the outputs"},
 		{"an unknown name fails", "{{ .unknown }}", TemplateGrant, "unknown"},
 		{"parameters without a name fails", "{{ .parameters }}", TemplateGrant, "parameters"},
 		{"a nested parameter fails", "{{ .parameters.x.y }}", TemplateGrant, "parameters.x.y"},

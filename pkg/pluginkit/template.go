@@ -60,8 +60,8 @@ type Template struct {
 // ParseTemplate parses text as a template of kind. A template holds plain
 // text and field references only: {{ .namespace }}, {{ .claim }},
 // {{ .request }}, {{ .serviceAccount }}, {{ .parameters.<name> }},
-// {{ .outputs.<key> }}, and in a metric query also {{ .pods }}. Each other
-// construct is an error that names it.
+// {{ .outputs.<key> }} except in a template parameter, and in a metric query
+// also {{ .pods }}. Each other construct is an error that names it.
 func ParseTemplate(text string, kind TemplateKind) (*Template, error) {
 	// text/template drops comments and moves definitions out of the root,
 	// so the check parses the text with its own tree.
@@ -160,6 +160,9 @@ func (t *Template) checkField(idents []string, kind TemplateKind) error {
 		t.parameters = append(t.parameters, idents[1])
 		return nil
 	case len(idents) == 2 && idents[0] == "outputs":
+		if kind == TemplateParameter {
+			return fmt.Errorf("the placeholder %s is not allowed: a template parameter cannot read the outputs", name)
+		}
 		t.outputs = append(t.outputs, idents[1])
 		return nil
 	}
