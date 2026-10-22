@@ -317,4 +317,21 @@ var _ = Describe("the gateway-access plugin", func() {
 			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the request still exists: %v", err)
 		}, timeout).Should(Succeed())
 	})
+
+	It("is Ready again after an accepted route changes", func() {
+		ns := newNamespace()
+		request := readyClusterRequest(ns)
+		cluster := newCluster(ns, "orders")
+		Expect(k8s.Get(ctx, client.ObjectKeyFromObject(cluster), cluster)).To(Succeed())
+		Expect(publishEndpoints(ctx, k8s, cluster, standaloneEndpoints("orders")[:6])).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			var route gatewayv1.HTTPRoute
+			g.Expect(mgr.GetAPIReader().Get(ctx, client.ObjectKey{Namespace: ns, Name: "orders-access"}, &route)).
+				To(Succeed())
+			g.Expect(route.Spec.Rules).To(HaveLen(5))
+			g.Expect(route.Generation).To(BeNumerically(">", 1))
+			g.Expect(condition(readRequest(g, request), v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+		}, timeout).Should(Succeed())
+	})
 })

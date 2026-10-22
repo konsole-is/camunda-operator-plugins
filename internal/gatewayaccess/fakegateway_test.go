@@ -18,6 +18,7 @@ package gatewayaccess_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -104,7 +105,7 @@ func writeParents(
 		entry := gatewayv1.RouteParentStatus{ParentRef: ref, ControllerName: fakeGatewayController}
 		for _, existing := range status.Parents {
 			if equality.Semantic.DeepEqual(existing.ParentRef, ref) {
-				entry.Conditions = existing.Conditions
+				entry.Conditions = slices.Clone(existing.Conditions)
 			}
 		}
 
