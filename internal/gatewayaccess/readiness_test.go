@@ -42,8 +42,8 @@ func accepted(generation int64) []condition {
 	}
 }
 
-// liveCopy returns a copy of route in team-a with the generation and one
-// status.parents entry for parent with conds.
+// liveCopy returns a copy of route in team-a as the API server stores it,
+// with the generation and one status.parents entry for parent with conds.
 func liveCopy(
 	route client.Object,
 	generation int64,
@@ -56,6 +56,7 @@ func liveCopy(
 	}
 	obj.SetNamespace("team-a")
 	obj.SetGeneration(generation)
+	setLiveBackendDefaults(obj)
 
 	entry := gatewayv1.RouteParentStatus{ParentRef: parent, ControllerName: "example.com/gateway"}
 	for _, c := range conds {
@@ -250,41 +251,20 @@ func TestRouteWaiting_RouteThatAnotherWriterChangedIsPending(t *testing.T) {
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
 }
 
-func TestRouteWaiting_DefaultsOfTheServerDoNotMakeARoutePending(t *testing.T) {
-	p := validParams()
-	parent := ParentRef(p)
-	desired := clusterRoutes(t, p)
-	live := make([]client.Object, 0, len(desired))
-	for _, obj := range desired {
-		copied := liveCopy(obj, 1, parent, accepted(1))
-		setBackendDefaults(copied)
-		live = append(live, copied)
-	}
-
-	n, waiting := RouteWaiting(desired, liveByKey(live...), parent)
-	assert.Equal(t, 2, n)
-	assert.Nil(t, waiting)
-}
-
-// setBackendDefaults writes the group, the kind, and the weight that the API
-// server defaults on each backend of route.
-func setBackendDefaults(route client.Object) {
-	defaults := func(ref *gatewayv1.BackendRef) {
-		ref.Group = new(gatewayv1.Group(""))
-		ref.Kind = new(gatewayv1.Kind("Service"))
-		ref.Weight = new(int32(1))
-	}
+// setLiveBackendDefaults writes the group, the kind, and the weight that the
+// API server defaults on each backend of route.
+func setLiveBackendDefaults(route client.Object) {
 	switch r := route.(type) {
 	case *gatewayv1.HTTPRoute:
 		for i := range r.Spec.Rules {
 			for j := range r.Spec.Rules[i].BackendRefs {
-				defaults(&r.Spec.Rules[i].BackendRefs[j].BackendRef)
+				setBackendDefaults(&r.Spec.Rules[i].BackendRefs[j].BackendRef)
 			}
 		}
 	case *gatewayv1.GRPCRoute:
 		for i := range r.Spec.Rules {
 			for j := range r.Spec.Rules[i].BackendRefs {
-				defaults(&r.Spec.Rules[i].BackendRefs[j].BackendRef)
+				setBackendDefaults(&r.Spec.Rules[i].BackendRefs[j].BackendRef)
 			}
 		}
 	}
@@ -312,6 +292,46 @@ func TestRouteWaiting_RouteWithAMatchConstraintOfAnotherWriterIsPending(t *testi
 
 			n, waiting := RouteWaiting(desired, liveByKey(live), parent)
 			assert.Equal(t, 0, n)
+			require.NotNil(t, waiting)
+			assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
+		})
+	}
+}
+
+func TestRouteWaiting_RouteWithAFilterOfAnotherWriterIsPending(t *testing.T) {
+	p := validParams()
+	parent := ParentRef(p)
+	desired := clusterRoutes(t, p)
+	header := gatewayv1.HTTPRouteFilter{Type: gatewayv1.HTTPRouteFilterRequestHeaderModifier}
+	grpcHeader := gatewayv1.GRPCRouteFilter{Type: gatewayv1.GRPCRouteFilterRequestHeaderModifier}
+
+	for name, change := range map[string]func(client.Object){
+		"HTTP rule filter": func(obj client.Object) {
+			if r, ok := obj.(*gatewayv1.HTTPRoute); ok {
+				r.Spec.Rules[0].Filters = []gatewayv1.HTTPRouteFilter{header}
+			}
+		},
+		"HTTP backend filter": func(obj client.Object) {
+			if r, ok := obj.(*gatewayv1.HTTPRoute); ok {
+				r.Spec.Rules[0].BackendRefs[0].Filters = []gatewayv1.HTTPRouteFilter{header}
+			}
+		},
+		"gRPC rule filter": func(obj client.Object) {
+			if r, ok := obj.(*gatewayv1.GRPCRoute); ok {
+				r.Spec.Rules[0].Filters = []gatewayv1.GRPCRouteFilter{grpcHeader}
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			live := make([]client.Object, 0, len(desired))
+			for _, obj := range desired {
+				copied := liveCopy(obj, 2, parent, accepted(2))
+				change(copied)
+				live = append(live, copied)
+			}
+
+			n, waiting := RouteWaiting(desired, liveByKey(live...), parent)
+			assert.Equal(t, 1, n)
 			require.NotNil(t, waiting)
 			assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
 		})

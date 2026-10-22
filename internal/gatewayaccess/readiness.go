@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -94,7 +95,7 @@ func routeWaiting(desired, obj client.Object, parent gatewayv1.ParentReference) 
 	}
 	// The conditions of a live copy with another spec are about that spec,
 	// until the apply of this reconcile gives the route a new generation.
-	if obj == nil || !slices.Equal(routeShape(obj, obj.GetNamespace()), routeShape(desired, obj.GetNamespace())) {
+	if obj == nil || !sameSpec(desired, obj) {
 		return pending
 	}
 
@@ -126,72 +127,49 @@ func routeWaiting(desired, obj client.Object, parent gatewayv1.ParentReference) 
 	return nil
 }
 
-// routeShape describes the fields of a route in namespace that the plugin
-// sets, with the defaults of the API server filled in. A built route and a
-// live copy of it have the same shape.
-func routeShape(obj client.Object, namespace string) []string {
-	var parents []gatewayv1.ParentReference
-	var hostnames []gatewayv1.Hostname
-	var shape []string
-	switch r := obj.(type) {
+// sameSpec reports whether the live route has the spec of the built route.
+// The API server defaults the group, the kind, and the weight of a backend,
+// which the built route leaves unset.
+func sameSpec(built, live client.Object) bool {
+	switch b := built.(type) {
 	case *gatewayv1.HTTPRoute:
-		parents, hostnames = r.Spec.ParentRefs, r.Spec.Hostnames
-		for i, rule := range r.Spec.Rules {
-			for _, m := range rule.Matches {
-				var path gatewayv1.HTTPPathMatch
-				if m.Path != nil {
-					path = *m.Path
-				}
-				shape = append(shape, fmt.Sprintf(
-					"rule %d path %s %s method %s headers %d query %d",
-					i,
-					ptr.Deref(path.Type, gatewayv1.PathMatchPathPrefix),
-					ptr.Deref(path.Value, "/"),
-					ptr.Deref(m.Method, ""),
-					len(m.Headers),
-					len(m.QueryParams),
-				))
-			}
-			for _, b := range rule.BackendRefs {
-				shape = append(shape, fmt.Sprintf("rule %d backend %s", i, backendShape(b.BackendRef)))
+		l, ok := live.(*gatewayv1.HTTPRoute)
+		if !ok {
+			return false
+		}
+		want := b.Spec.DeepCopy()
+		for i := range want.Rules {
+			for j := range want.Rules[i].BackendRefs {
+				setBackendDefaults(&want.Rules[i].BackendRefs[j].BackendRef)
 			}
 		}
+		return equality.Semantic.DeepEqual(*want, l.Spec)
 	case *gatewayv1.GRPCRoute:
-		parents, hostnames = r.Spec.ParentRefs, r.Spec.Hostnames
-		for i, rule := range r.Spec.Rules {
-			shape = append(shape, fmt.Sprintf("rule %d matches %d", i, len(rule.Matches)))
-			for _, b := range rule.BackendRefs {
-				shape = append(shape, fmt.Sprintf("rule %d backend %s", i, backendShape(b.BackendRef)))
+		l, ok := live.(*gatewayv1.GRPCRoute)
+		if !ok {
+			return false
+		}
+		want := b.Spec.DeepCopy()
+		for i := range want.Rules {
+			for j := range want.Rules[i].BackendRefs {
+				setBackendDefaults(&want.Rules[i].BackendRefs[j].BackendRef)
 			}
 		}
+		return equality.Semantic.DeepEqual(*want, l.Spec)
 	}
-
-	for _, h := range hostnames {
-		shape = append(shape, "host "+string(h))
-	}
-	for _, p := range parents {
-		shape = append(shape, fmt.Sprintf(
-			"parent %s/%s/%s/%s/%s",
-			ptr.Deref(p.Group, gatewayv1.GroupName),
-			ptr.Deref(p.Kind, "Gateway"),
-			ptr.Deref(p.Namespace, gatewayv1.Namespace(namespace)),
-			p.Name,
-			ptr.Deref(p.SectionName, ""),
-		))
-	}
-	return shape
+	return false
 }
 
-func backendShape(b gatewayv1.BackendRef) string {
-	return fmt.Sprintf(
-		"%s/%s/%s/%s:%d weight %d",
-		ptr.Deref(b.Group, ""),
-		ptr.Deref(b.Kind, "Service"),
-		ptr.Deref(b.Namespace, ""),
-		b.Name,
-		ptr.Deref(b.Port, 0),
-		ptr.Deref(b.Weight, 1),
-	)
+func setBackendDefaults(ref *gatewayv1.BackendRef) {
+	if ref.Group == nil {
+		ref.Group = new(gatewayv1.Group(""))
+	}
+	if ref.Kind == nil {
+		ref.Kind = new(gatewayv1.Kind("Service"))
+	}
+	if ref.Weight == nil {
+		ref.Weight = new(int32(1))
+	}
 }
 
 // parentStatus returns the status.parents entry of obj for parent, or nil.
