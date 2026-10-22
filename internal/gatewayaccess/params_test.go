@@ -84,3 +84,11 @@ func TestOutputs_WritesAllFourKeysWithTheScheme(t *testing.T) {
 	}, Outputs(Params{}, h))
 	assert.Equal(t, "http://c.example.com", Outputs(Params{Scheme: "http"}, h)["externalUrl"])
 }
+
+func TestRenderHosts_RefusesAnIPAddress(t *testing.T) {
+	p := validParams()
+	p.HostnamePattern = "192.0.2.10"
+
+	_, err := RenderHosts(p, "orders", "team-a")
+	assert.ErrorContains(t, err, `hostnamePattern gives the host "192.0.2.10"`)
+}

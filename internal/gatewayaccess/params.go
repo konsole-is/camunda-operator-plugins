@@ -19,6 +19,7 @@ package gatewayaccess
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -117,6 +118,10 @@ func dnsProblems(host string) []string {
 	problems := validation.IsDNS1123Subdomain(host)
 	for label := range strings.SplitSeq(host, ".") {
 		problems = append(problems, validation.IsDNS1123Label(label)...)
+	}
+	// The hostnames of a Gateway API route must not be IP addresses.
+	if _, err := netip.ParseAddr(host); err == nil {
+		problems = append(problems, "it is an IP address")
 	}
 	return problems
 }

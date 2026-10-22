@@ -104,7 +104,7 @@ A hostname pattern takes two placeholders only: `{name}`, the name of the claim,
 | `optimizeHostnamePattern` | yes | The host of Optimize of a cluster. |
 | `managementHostnamePattern` | yes | The host of a management plane. |
 
-Each host must be a DNS name: each label at most 63 characters, and the host at most 253. A long claim name and a long namespace can give a label that is too long.
+Each host must be a DNS name and not an IP address. Each label is at most 63 characters, and the host is at most 253. A long claim name and a long namespace can give a label that is too long.
 
 ## Outputs
 
