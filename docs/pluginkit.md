@@ -31,7 +31,7 @@ The fields of `Result`:
 | `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. pluginkit adds a row to `status.resources` for each Grant of the request, so `Resources` does not need them. |
 | `RequeueAfter` | Reconciles the request again after this time. Use it to wait for a resource outside the cluster. |
 
-To start a plugin, call `pluginkit.Setup` with the manager, a `Config`, and the plugin. The `internal/skeleton` package is a complete example.
+To start a plugin, call `pluginkit.Setup` with the manager, a `Config`, and the plugin. The `internal/gatewayaccess` package is a complete example.
 
 ```go
 err := pluginkit.Setup(mgr, pluginkit.Config{
@@ -169,11 +169,11 @@ registrations:
       - key: bucket
 ```
 
-A rolling update runs the old and the new controller together, so the chart turns on leader election: only the replica that holds the Lease publishes the registrations and serves the requests. The skeleton passes `-leader-elect` and `-leader-election-id=<release>`, and ships a Role and a RoleBinding for `leases` in the release namespace, as `charts/skeleton/templates/leader-election.yaml` shows. `make chart-verify` checks both.
+A rolling update runs the old and the new controller together, so the chart turns on leader election: only the replica that holds the Lease publishes the registrations and serves the requests. The gateway-access chart passes `-leader-elect` and `-leader-election-id=<release>`, and ships a Role and a RoleBinding for `leases` in the release namespace, as `charts/gateway-access/templates/leader-election.yaml` shows. `make chart-verify` checks both.
 
 The chart sets the variables `POD_NAMESPACE` and `SERVICE_ACCOUNT_NAME` from the downward API. `pluginkit.ServiceAccountFromEnv` reads them.
 
-The controller needs this RBAC, as `charts/skeleton/templates/rbac.yaml` shows:
+The controller needs this RBAC, as `charts/gateway-access/templates/rbac.yaml` shows:
 
 | Resource | Verbs |
 | --- | --- |

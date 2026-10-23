@@ -66,9 +66,9 @@ chart-verify: ## Lint and render the chart of each plugin, and check the serve r
 			echo "charts/$$p renders without a registration" >&2; exit 1 ;; \
 		esac; \
 		echo "  charts/$$p refuses to render without a registration"; \
-		$(MAKE) -s chart-names-differ CHART="charts/$$p" A="team-a skeleton" B="team a-skeleton" || exit 1; \
+		$(MAKE) -s chart-names-differ CHART="charts/$$p" A="team-a plugin" B="team a-plugin" || exit 1; \
 		$(MAKE) -s chart-names-differ CHART="charts/$$p" \
-			A="$$(printf 'n%.0s' $$(seq 60))a skeleton" B="$$(printf 'n%.0s' $$(seq 60))b skeleton" || exit 1; \
+			A="$$(printf 'n%.0s' $$(seq 60))a plugin" B="$$(printf 'n%.0s' $$(seq 60))b plugin" || exit 1; \
 	done
 
 # chart-names-differ checks that two releases, A and B as "<namespace> <release>",
@@ -151,7 +151,7 @@ build: fmt vet ## Build the binary of each plugin into bin/<plugin>.
 ##@ Images
 
 CONTAINER_TOOL ?= docker
-PLUGIN ?= skeleton
+PLUGIN ?= gateway-access
 IMAGE_REPOSITORY ?= ghcr.io/konsole-is/camunda-operator-plugins
 IMG ?= $(IMAGE_REPOSITORY)/$(PLUGIN):$(VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
@@ -212,10 +212,18 @@ API_VERSION ?= $(shell go list -m -f '{{.Version}}' $(API_MODULE))
 # Renovate update of the api module moves the CRDs of envtest with it.
 API_REF = $(shell printf '%s\n' '$(API_VERSION)' | \
   sed -E -e 's/^v[0-9]+\.[0-9]+\.[0-9]+-.*[0-9]{14}-([0-9a-f]{12})$$/\1/' -e t -e 's|^|api/|')
-ENVTEST_CRDS_DIR = $(LOCALBIN)/crds/$(subst /,_,$(API_REF))
+# GATEWAY_API_VERSION is the Gateway API release that go.mod pins. Its
+# standard-channel CRDs load into envtest beside those of the operator.
+GATEWAY_API_VERSION ?= $(call gomodver,sigs.k8s.io/gateway-api)
+# One directory for each pair of versions holds one set of CRDs, so a bump of
+# either never loads two copies of a CRD.
+ENVTEST_CRDS_DIR = $(LOCALBIN)/crds/$(subst /,_,$(API_REF))-gateway-api-$(GATEWAY_API_VERSION)
 # ENVTEST_CRD_FILES are the CRD bases of the operator that the plugins read.
 # A plugin that reads a core.camunda.io kind adds its file here.
 ENVTEST_CRD_FILES = \
+	core.camunda.io_camundaclusters.yaml \
+	core.camunda.io_camundamanagementclusters.yaml \
+	core.camunda.io_camundaoptimizes.yaml \
 	plugins.camunda.io_grants.yaml \
 	plugins.camunda.io_pluginregistrations.yaml \
 	plugins.camunda.io_pluginrequests.yaml \
@@ -230,7 +238,7 @@ envtest: | $(LOCALBIN) ## Download setup-envtest locally if necessary.
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: envtest-crds
-envtest-crds: ## Download the CRD bases of the operator ref that the api module names into bin/crds/<ref>.
+envtest-crds: ## Download the CRD bases of the operator ref that the api module names, and the Gateway API CRDs, into bin/crds/.
 	@mkdir -p "$(ENVTEST_CRDS_DIR)"
 	@for f in $(ENVTEST_CRD_FILES); do \
 		if [ ! -s "$(ENVTEST_CRDS_DIR)/$$f" ]; then \
@@ -239,6 +247,12 @@ envtest-crds: ## Download the CRD bases of the operator ref that the api module 
 				mv -f "$(ENVTEST_CRDS_DIR)/$$f.tmp" "$(ENVTEST_CRDS_DIR)/$$f" || exit 1; \
 		fi; \
 	done
+	@f="$(ENVTEST_CRDS_DIR)/gateway-api-standard-install.yaml"; \
+	if [ ! -s "$$f" ]; then \
+		curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --max-time 60 -o "$$f.tmp" \
+			"https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml" && \
+			mv -f "$$f.tmp" "$$f"; \
+	fi
 
 .PHONY: print-api-ref
 print-api-ref: ## Print the operator ref whose CRD bases envtest loads.

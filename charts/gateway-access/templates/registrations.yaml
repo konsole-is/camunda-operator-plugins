@@ -3,10 +3,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "skeleton.fullname" . }}-registrations
+  name: {{ include "gateway-access.fullname" . }}-registrations
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "skeleton.labels" . | nindent 4 }}
+    {{- include "gateway-access.labels" . | nindent 4 }}
 data:
   registrations.yaml: |
     {{- toYaml .Values.registrations | nindent 4 }}

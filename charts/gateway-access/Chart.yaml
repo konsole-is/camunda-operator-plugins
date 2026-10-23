@@ -1,6 +1,6 @@
 apiVersion: v2
-name: skeleton
-description: The skeleton plugin of the Camunda operator. A new plugin copies its chart.
+name: gateway-access
+description: Routes Camunda clusters, Optimize, and management planes through a Gateway API Gateway.
 type: application
 # The release sets version and appVersion to the version of its tag.
 version: 0.0.0-dev
