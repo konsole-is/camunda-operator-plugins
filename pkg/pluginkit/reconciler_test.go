@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,6 +56,33 @@ func grantExists(request *pluginsv1alpha1.PluginRequest, template string) func()
 		key := client.ObjectKey{Namespace: request.Namespace, Name: pluginkit.GrantName(request.Name, template)}
 		return !apierrors.IsNotFound(k8s.Get(ctx, key, &grant))
 	}
+}
+
+// grantRow matches the status.resources row of the Grant of template of
+// request.
+func grantRow(request *pluginsv1alpha1.PluginRequest, template string) OmegaMatcher {
+	return SatisfyAll(
+		HaveField("Kind", "Grant"),
+		HaveField("Name", pluginkit.GrantName(request.Name, template)),
+		HaveField("OnOrphan", pluginsv1alpha1.OnOrphanKept),
+	)
+}
+
+// grantEvents returns the events on request whose related object is the
+// Grant of template.
+func grantEvents(g Gomega, request *pluginsv1alpha1.PluginRequest, template string) []eventsv1.Event {
+	current := readRequest(g, request)
+	var list eventsv1.EventList
+	g.Expect(k8s.List(ctx, &list, client.InNamespace(request.Namespace))).To(Succeed())
+
+	var found []eventsv1.Event
+	for _, e := range list.Items {
+		if e.Regarding.UID == current.UID && e.Related != nil && e.Related.Kind == "Grant" &&
+			e.Related.Name == pluginkit.GrantName(request.Name, template) {
+			found = append(found, e)
+		}
+	}
+	return found
 }
 
 func condition(g Gomega, request *pluginsv1alpha1.PluginRequest, conditionType string) metav1.Condition {
@@ -134,6 +162,7 @@ var _ = Describe("the request reconciler", func() {
 			g.Expect(outputs.Reason).To(Equal("WaitingForBucket"))
 			g.Expect(current.Status.Outputs).To(HaveKeyWithValue("configMap", testRequestName+"-data"))
 			g.Expect(current.Status.Summary).To(ConsistOf(HaveField("Label", "Size")))
+			g.Expect(current.Status.Resources).To(ConsistOf(grantRow(request, "read")))
 		}).Should(Succeed())
 	})
 
@@ -220,6 +249,7 @@ var _ = Describe("the request reconciler", func() {
 		request := createRequest("grant-inputs")
 		waitReady(request)
 		Consistently(grantExists(request, "key-use")).WithTimeout(time.Second).Should(BeFalse())
+		Expect(readRequest(Default, request).Status.Resources).To(ConsistOf(grantRow(request, "read")))
 
 		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) {
 			r.Spec.Inputs = map[string]string{"key": "arn:aws:kms:eu-west-1:1:key/k"}
@@ -229,6 +259,29 @@ var _ = Describe("the request reconciler", func() {
 		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Inputs = nil })
 		Eventually(grantExists(request, "key-use")).Should(BeFalse())
 		Expect(grantExists(request, "read")()).To(BeTrue())
+		Eventually(func(g Gomega) {
+			g.Expect(readRequest(g, request).Status.Resources).To(ConsistOf(grantRow(request, "read")))
+		}).Should(Succeed())
+	})
+
+	It("lists each grant in status.resources and records an apply event for it", func() {
+		request := createRequest("grant-resources", func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Inputs = map[string]string{"key": "arn:aws:kms:eu-west-1:1:key/k"}
+		})
+		waitReady(request)
+
+		Eventually(func(g Gomega) {
+			g.Expect(readRequest(g, request).Status.Resources).To(ConsistOf(
+				grantRow(request, "read"),
+				grantRow(request, "key-use"),
+			))
+			for _, template := range []string{"read", "key-use"} {
+				g.Expect(grantEvents(g, request, template)).To(ContainElement(SatisfyAll(
+					HaveField("Type", corev1.EventTypeNormal),
+					HaveField("Action", "Create"),
+				)))
+			}
+		}).Should(Succeed())
 	})
 
 	It("reports a rejected grant that is still deleting", func() {
@@ -282,26 +335,30 @@ var _ = Describe("the request reconciler", func() {
 		waitReady(request)
 	})
 
-	It("refuses parameters that fail the schema", func() {
-		request := createRequest("invalid-parameters", func(r *pluginsv1alpha1.PluginRequest) {
-			r.Spec.Parameters = &apiextensionsv1.JSON{Raw: []byte(`{"size":0}`)}
-		})
+	DescribeTable("refuses parameters that do not pass the schema",
+		func(namespace, parameters, message string) {
+			request := createRequest(namespace, func(r *pluginsv1alpha1.PluginRequest) {
+				r.Spec.Parameters = &apiextensionsv1.JSON{Raw: []byte(parameters)}
+			})
 
-		Eventually(func(g Gomega) {
-			for _, conditionType := range []string{pluginsv1alpha1.ConditionOutputsReady, "Ready"} {
-				cond := condition(g, request, conditionType)
-				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-				g.Expect(cond.Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters))
-				g.Expect(cond.Message).To(ContainSubstring("spec.parameters.size"))
-			}
-		}).Should(Succeed())
+			Eventually(func(g Gomega) {
+				for _, conditionType := range []string{pluginsv1alpha1.ConditionOutputsReady, "Ready"} {
+					cond := condition(g, request, conditionType)
+					g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+					g.Expect(cond.Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters))
+					g.Expect(cond.Message).To(ContainSubstring(message))
+				}
+			}).Should(Succeed())
 
-		Consistently(func() bool {
-			var cm corev1.ConfigMap
-			key := client.ObjectKey{Namespace: request.Namespace, Name: testRequestName + "-data"}
-			return apierrors.IsNotFound(k8s.Get(ctx, key, &cm))
-		}).WithTimeout(2 * time.Second).Should(BeTrue())
-	})
+			Consistently(func() bool {
+				var cm corev1.ConfigMap
+				key := client.ObjectKey{Namespace: request.Namespace, Name: testRequestName + "-data"}
+				return apierrors.IsNotFound(k8s.Get(ctx, key, &cm))
+			}).WithTimeout(2 * time.Second).Should(BeTrue())
+		},
+		Entry("a field that fails the schema", "invalid-parameters", `{"size":0}`, "spec.parameters.size"),
+		Entry("a rule of the schema", "rule-parameters", `{"size":20}`, "size must be at most 10"),
+	)
 
 	It("keeps the resourceVersion of a served request while nothing changes", func() {
 		request := createRequest("steady")

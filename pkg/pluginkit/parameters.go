@@ -17,15 +17,21 @@ limitations under the License.
 package pluginkit
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/listtype"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/objectmeta"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	utiljson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	celconfig "k8s.io/apiserver/pkg/apis/cel"
 )
 
 // templateMarker marks a parameter of a registration schema whose value
@@ -33,11 +39,14 @@ import (
 const templateMarker = "x-fleet-template"
 
 // ValidateParameters checks parameters against the OpenAPI schema of a
-// registration, as the API server checks a custom resource. A nil schema
-// accepts every value, and nil parameters are checked as an empty object. The
-// error names each failing field by its path under spec.parameters. The
-// x-kubernetes-validations rules of the schema are not checked.
-func ValidateParameters(schema, parameters *apiextensionsv1.JSON) error {
+// registration, as the API server checks a custom resource: the schema, the
+// x-kubernetes-validations rules, the list types, and the checks of an
+// embedded resource. A nil schema accepts every value, and absent or null
+// parameters are checked as an empty object. The error names each failing
+// field by its path under spec.parameters, and each broken rule by its
+// message, or by its text when it has no message. A schema that cannot be
+// read is an error too.
+func ValidateParameters(ctx context.Context, schema, parameters *apiextensionsv1.JSON) error {
 	if schema == nil || len(schema.Raw) == 0 {
 		return nil
 	}
@@ -59,14 +68,38 @@ func ValidateParameters(schema, parameters *apiextensionsv1.JSON) error {
 		return fmt.Errorf("building the validator of the parameters schema: %w", err)
 	}
 
+	// The schema validator does not run x-kubernetes-validations, the list
+	// types, or the checks of an embedded resource.
+	structural, err := structuralschema.NewStructural(&props)
+	if err != nil {
+		return fmt.Errorf("building the structural schema of the parameters schema: %w", err)
+	}
+
 	var value any = map[string]any{}
 	if parameters != nil && len(parameters.Raw) > 0 {
+		// The API server decodes an integer as int64, as utiljson does.
 		if err := utiljson.Unmarshal(parameters.Raw, &value); err != nil {
 			return fmt.Errorf("decoding spec.parameters: %w", err)
 		}
 	}
+	// A literal null decodes to nil.
+	if value == nil {
+		value = map[string]any{}
+	}
 
-	return validation.ValidateCustomResource(field.NewPath("spec", "parameters"), value, validator).ToAggregate()
+	path := field.NewPath("spec", "parameters")
+	errs := validation.ValidateCustomResource(path, value, validator)
+	// NewValidator returns nil for a schema without a rule.
+	if rules := cel.NewValidator(structural, false, celconfig.PerCallLimit); rules != nil {
+		ruleErrs, _ := rules.Validate(ctx, path, structural, value, nil, celconfig.RuntimeCELCostBudget)
+		errs = append(errs, ruleErrs...)
+	}
+	if object, ok := value.(map[string]any); ok {
+		errs = append(errs, listtype.ValidateListSetsAndMaps(path, structural, object)...)
+	}
+	errs = append(errs, objectmeta.Validate(ctx, path, value, structural, false)...)
+
+	return errs.ToAggregate()
 }
 
 // templateParameters returns the sorted names of the top-level properties of

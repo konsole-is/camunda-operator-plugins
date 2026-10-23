@@ -18,6 +18,7 @@ package pluginkit
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -59,13 +61,95 @@ func TestDeleteUnwantedGrantsDeletesAGrantWithoutItsOwnerReference(t *testing.T)
 	c := fake.NewClientBuilder().WithScheme(ownedScheme(t)).WithObjects(kept, unowned).Build()
 	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
 
-	current, err := r.deleteUnwantedGrants(context.Background(), request, []*pluginsv1alpha1.Grant{kept})
+	listed := []pluginsv1alpha1.Grant{*kept, *unowned}
+	current, err := r.deleteUnwantedGrants(context.Background(), request, listed, []*pluginsv1alpha1.Grant{kept})
 
 	require.NoError(t, err)
 	require.Len(t, current, 1)
 	assert.Equal(t, "wanted", current[0].Name)
 	err = c.Get(context.Background(), client.ObjectKeyFromObject(unowned), &pluginsv1alpha1.Grant{})
 	assert.True(t, apierrors.IsNotFound(err), "the Grant without an owner reference is deleted, got %v", err)
+}
+
+func TestDeleteUnwantedGrantsReturnsTheListedGrantsWhenADeleteFails(t *testing.T) {
+	request := ownedRequest()
+	labels := map[string]string{pluginsv1alpha1.LabelRequest: request.Name}
+	kept := &pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{
+		Name: "wanted", Namespace: request.Namespace, Labels: labels,
+	}}
+	unwanted := &pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{
+		Name: "unwanted", Namespace: request.Namespace, Labels: labels,
+	}}
+	c := fake.NewClientBuilder().
+		WithScheme(ownedScheme(t)).
+		WithObjects(kept, unwanted).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+				return errors.New("the API server refused the delete")
+			},
+		}).
+		Build()
+	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
+
+	listed := []pluginsv1alpha1.Grant{*kept, *unwanted}
+	current, err := r.deleteUnwantedGrants(context.Background(), request, listed, []*pluginsv1alpha1.Grant{kept})
+
+	require.Error(t, err)
+	names := make([]string, 0, len(current))
+	for _, g := range current {
+		names = append(names, g.Name)
+	}
+	assert.ElementsMatch(t, []string{"wanted", "unwanted"}, names)
+}
+
+func TestStageGrantsListsTheGrantsThatStillExist(t *testing.T) {
+	request := ownedRequest()
+	labels := map[string]string{pluginsv1alpha1.LabelRequest: request.Name}
+	bucket := pluginsv1alpha1.ResourceRef{Kind: "S3Bucket", Name: "orders", OnOrphan: pluginsv1alpha1.OnOrphanKept}
+	request.Status.Resources = []pluginsv1alpha1.ResourceRef{bucket}
+	kept := &pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{
+		Name: "wanted", Namespace: request.Namespace, Labels: labels,
+	}}
+	unwanted := &pluginsv1alpha1.Grant{ObjectMeta: metav1.ObjectMeta{
+		Name: "unwanted", Namespace: request.Namespace, Labels: labels,
+	}}
+	c := fake.NewClientBuilder().WithScheme(ownedScheme(t)).WithObjects(kept, unwanted).Build()
+	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
+	previous := []pluginsv1alpha1.ResourceRef{{Kind: "Grant", Name: "unwanted", OnOrphan: pluginsv1alpha1.OnOrphanKept}}
+
+	current, err := r.stageGrants(context.Background(), request, previous, []*pluginsv1alpha1.Grant{kept})
+
+	require.NoError(t, err)
+	require.Len(t, current, 1)
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{
+		bucket,
+		{Kind: "Grant", Name: "wanted", OnOrphan: pluginsv1alpha1.OnOrphanKept},
+	}, request.Status.Resources)
+}
+
+func TestStageGrantsKeepsTheGrantRowsOfTheReadStatusWhenTheListFails(t *testing.T) {
+	request := ownedRequest()
+	bucket := pluginsv1alpha1.ResourceRef{Kind: "S3Bucket", Name: "orders", OnOrphan: pluginsv1alpha1.OnOrphanKept}
+	read := pluginsv1alpha1.ResourceRef{Kind: "Grant", Name: "orders-read", OnOrphan: pluginsv1alpha1.OnOrphanKept}
+	request.Status.Resources = []pluginsv1alpha1.ResourceRef{bucket}
+	c := fake.NewClientBuilder().
+		WithScheme(ownedScheme(t)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*pluginsv1alpha1.GrantList); ok {
+					return errors.New("the API server refused the list")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	r := &reconciler[struct{}, struct{}]{client: c, reader: c, events: events.NewFakeRecorder(10)}
+	previous := []pluginsv1alpha1.ResourceRef{{Kind: "S3Bucket", Name: "old"}, read}
+
+	_, err := r.stageGrants(context.Background(), request, previous, nil)
+
+	require.Error(t, err)
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{bucket, read}, request.Status.Resources)
 }
 
 func TestStageResultKeepsSummaryTimeWhenOnlyTheDefaultSeverityDiffers(t *testing.T) {
@@ -81,4 +165,80 @@ func TestStageResultKeepsSummaryTimeWhenOnlyTheDefaultSeverityDiffers(t *testing
 
 	assert.Equal(t, &since, request.Status.SummaryTime)
 	assert.Equal(t, pluginsv1alpha1.SeverityInfo, request.Status.Summary[0].Severity)
+}
+
+func TestWithGrantRows(t *testing.T) {
+	bucket := pluginsv1alpha1.ResourceRef{Kind: "S3Bucket", Name: "orders", OnOrphan: pluginsv1alpha1.OnOrphanKept}
+	grantRow := func(name string) pluginsv1alpha1.ResourceRef {
+		return pluginsv1alpha1.ResourceRef{Kind: "Grant", Name: name, OnOrphan: pluginsv1alpha1.OnOrphanKept}
+	}
+
+	cases := []struct {
+		name  string
+		rows  []pluginsv1alpha1.ResourceRef
+		extra []pluginsv1alpha1.ResourceRef
+		want  []pluginsv1alpha1.ResourceRef
+	}{
+		{
+			name: "no grant rows keep the rows of the plugin",
+			rows: []pluginsv1alpha1.ResourceRef{bucket},
+			want: []pluginsv1alpha1.ResourceRef{bucket},
+		},
+		{
+			name:  "each grant row comes after the rows of the plugin",
+			rows:  []pluginsv1alpha1.ResourceRef{bucket},
+			extra: []pluginsv1alpha1.ResourceRef{grantRow("orders-read"), grantRow("orders-key-use")},
+			want:  []pluginsv1alpha1.ResourceRef{bucket, grantRow("orders-read"), grantRow("orders-key-use")},
+		},
+		{
+			name:  "a grant row is added when the plugin returns no rows",
+			extra: []pluginsv1alpha1.ResourceRef{grantRow("orders-read")},
+			want:  []pluginsv1alpha1.ResourceRef{grantRow("orders-read")},
+		},
+		{
+			name: "a grant that the plugin lists gets no second row",
+			rows: []pluginsv1alpha1.ResourceRef{
+				{Kind: "Grant", Name: "orders-read", Role: "read", OnOrphan: pluginsv1alpha1.OnOrphanKept},
+			},
+			extra: []pluginsv1alpha1.ResourceRef{grantRow("orders-read")},
+			want: []pluginsv1alpha1.ResourceRef{
+				{Kind: "Grant", Name: "orders-read", Role: "read", OnOrphan: pluginsv1alpha1.OnOrphanKept},
+			},
+		},
+		{
+			name:  "the rows of a read status keep their grant rows and drop the others",
+			rows:  []pluginsv1alpha1.ResourceRef{bucket},
+			extra: []pluginsv1alpha1.ResourceRef{{Kind: "S3Bucket", Name: "old"}, grantRow("orders-read")},
+			want:  []pluginsv1alpha1.ResourceRef{bucket, grantRow("orders-read")},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, withGrantRows(tc.rows, tc.extra))
+		})
+	}
+}
+
+func TestWithGrantRowsKeepsTheRowsOfThePlugin(t *testing.T) {
+	rows := make([]pluginsv1alpha1.ResourceRef, 1, 4)
+	rows[0] = pluginsv1alpha1.ResourceRef{Kind: "S3Bucket", Name: "orders", OnOrphan: pluginsv1alpha1.OnOrphanKept}
+
+	withGrantRows(rows, []pluginsv1alpha1.ResourceRef{{Kind: "Grant", Name: "orders-read"}})
+
+	assert.Equal(t, "orders", rows[:2][0].Name)
+	assert.Empty(t, rows[:2][1], "the spare capacity of the rows of the plugin stays unwritten")
+}
+
+func TestGrantRows(t *testing.T) {
+	grants := []pluginsv1alpha1.Grant{
+		{ObjectMeta: metav1.ObjectMeta{Name: "orders-read"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "orders-key-use"}},
+	}
+
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{
+		{Kind: "Grant", Name: "orders-read", OnOrphan: pluginsv1alpha1.OnOrphanKept},
+		{Kind: "Grant", Name: "orders-key-use", OnOrphan: pluginsv1alpha1.OnOrphanKept},
+	}, grantRows(grants))
+	assert.Empty(t, grantRows(nil))
 }

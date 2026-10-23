@@ -28,7 +28,7 @@ The fields of `Result`:
 | `Objects` | Applies them with server-side apply, and adds the labels `plugins.camunda.io/registration` and `plugins.camunda.io/request`. A namespaced object gets an owner reference to the request and must be in the namespace of the request. A cluster-scoped object gets the labels only. |
 | `Pending` | A `*pluginkit.Waiting` with a `Reason` and a `Message`. When set, the outputs are not ready. `OutputsReady` and `Ready` are `False` with its reason, and the outputs of the last reconcile stay. pluginkit applies no object and no Grant, and keeps the Grants that exist. It still writes `Summary`, `Links`, `PodSelector`, and `Resources`. Set `RequeueAfter` too, to look again. |
 | `NotReady` | A `*pluginkit.Waiting`. When set, `Ready` is `False` with its reason. `OutputsReady` comes from the applied objects. |
-| `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. |
+| `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. pluginkit adds a row to `status.resources` for each Grant of the request, so `Resources` does not need them. |
 | `RequeueAfter` | Reconciles the request again after this time. Use it to wait for a resource outside the cluster. |
 
 To start a plugin, call `pluginkit.Setup` with the manager, a `Config`, and the plugin. The `internal/gatewayaccess` package is a complete example.
@@ -89,7 +89,7 @@ pluginkit serves no request before all registrations are applied.
 
 pluginkit serves each `PluginRequest` whose label `plugins.camunda.io/registration` names a registration of the `Config`. For each request, it does these steps in this order:
 
-1. It validates `spec.parameters` against the schema of the registration, with the validator of the Kubernetes API server. The error names each failing field, for example `spec.parameters.size`. The `x-kubernetes-validations` rules of the schema are not checked.
+1. It validates `spec.parameters` against the schema of the registration, as the Kubernetes API server validates a custom resource: the schema, the `x-kubernetes-validations` rules, the list types, and the checks of an embedded resource. It checks the stored value, before the template parameters render. The error names each failing field, for example `spec.parameters.size`, and the message of each broken rule.
 2. It renders each parameter whose schema has `"x-fleet-template": true`.
 3. It adds the finalizer `plugins.camunda.io/cleanup`. A request whose parameters never passed the schema has no finalizer, so its delete does not wait.
 4. It calls `Reconcile`.
@@ -108,7 +108,7 @@ A grant template, and a parameter marked with `"x-fleet-template": true`, can ho
 | `{{ .request }}` | The name of the request. |
 | `{{ .serviceAccount }}` | `spec.target.serviceAccountName` of the request. |
 | `{{ .parameters.<name> }}` | One parameter of the request. |
-| `{{ .outputs.<key> }}` | One output that `Reconcile` returned. A template parameter is rendered before `Reconcile`, so it has no outputs. |
+| `{{ .outputs.<key> }}` | One output that `Reconcile` returned. A template parameter cannot read the outputs, because pluginkit renders it before `Reconcile`. |
 
 A metric query can hold the same placeholders and also `{{ .pods }}`, the pods of the request as a regular expression. A grant template and a parameter cannot hold `{{ .pods }}`. Every other construct is an error that names it, for example `{{ if }}`, `{{ define }}`, a comment, a pipeline, a function, a variable, or an unknown placeholder. A placeholder whose parameter or output has no value is an error too. `pluginkit.ParseTemplate` checks a template, so a plugin can test the templates and the metric queries of its chart.
 
@@ -119,6 +119,8 @@ pluginkit renders each string of the JSON of a template on its own. A value with
 pluginkit writes one `Grant` for each grant template of the registration. It skips a template when an input of its `requiresInputs` has no value in `spec.inputs`. The name of the Grant is `pluginkit.GrantName(<request>, <template>)`, and it has at most 63 characters. Each Grant has an owner reference to the request and the labels `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/cluster`. A registration with grant templates needs a request with the target kind `CamundaCluster`. For another target kind, pluginkit writes no Grant and sets `Ready=False` with reason `GrantTemplateInvalid`.
 
 When an input loses its value, or a template leaves the registration, pluginkit deletes the Grant.
+
+Each Grant of the request has a row in `status.resources` with the kind `Grant`, its name, and `onOrphan: Kept`. When pluginkit creates or changes a Grant, it records an event on the request with the Grant as the related object. A plugin adds no row and no event for its Grants.
 
 ### Status
 
@@ -146,7 +148,7 @@ pluginkit uses the reasons of the api module, and adds these reasons of its own:
 
 | Reason | Condition | Meaning |
 | --- | --- | --- |
-| `InvalidParameters` | `OutputsReady`, `Ready` | The parameters do not pass the schema, or a template parameter does not render. The message names the field. |
+| `InvalidParameters` | `OutputsReady`, `Ready` | The parameters do not pass the schema or its rules, or a template parameter does not render. The message names the field or the rule. |
 | `ReconcileError` | `Ready` | `Reconcile` returned an error, or an output key that the registration does not declare. |
 | `GrantTemplateInvalid` | `Ready` | A grant template does not render for the request. |
 | `DeleteFailed` | `Ready` | `Delete` or `Orphan` returned an error. The finalizer stays. |
