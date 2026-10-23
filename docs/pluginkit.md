@@ -28,7 +28,7 @@ The fields of `Result`:
 | `Objects` | Applies them with server-side apply, and adds the labels `plugins.camunda.io/registration` and `plugins.camunda.io/request`. A namespaced object gets an owner reference to the request and must be in the namespace of the request. A cluster-scoped object gets the labels only. |
 | `Pending` | A `*pluginkit.Waiting` with a `Reason` and a `Message`. When set, the outputs are not ready. `OutputsReady` and `Ready` are `False` with its reason, and the outputs of the last reconcile stay. pluginkit applies no object and no Grant, and keeps the Grants that exist. It still writes `Summary`, `Links`, `PodSelector`, and `Resources`. Set `RequeueAfter` too, to look again. |
 | `NotReady` | A `*pluginkit.Waiting`. When set, `Ready` is `False` with its reason. `OutputsReady` comes from the applied objects. |
-| `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. |
+| `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. pluginkit adds a row to `status.resources` for each Grant of the request, so `Resources` does not need them. |
 | `RequeueAfter` | Reconciles the request again after this time. Use it to wait for a resource outside the cluster. |
 
 To start a plugin, call `pluginkit.Setup` with the manager, a `Config`, and the plugin. The `internal/skeleton` package is a complete example.
@@ -119,6 +119,8 @@ pluginkit renders each string of the JSON of a template on its own. A value with
 pluginkit writes one `Grant` for each grant template of the registration. It skips a template when an input of its `requiresInputs` has no value in `spec.inputs`. The name of the Grant is `pluginkit.GrantName(<request>, <template>)`, and it has at most 63 characters. Each Grant has an owner reference to the request and the labels `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/cluster`. A registration with grant templates needs a request with the target kind `CamundaCluster`. For another target kind, pluginkit writes no Grant and sets `Ready=False` with reason `GrantTemplateInvalid`.
 
 When an input loses its value, or a template leaves the registration, pluginkit deletes the Grant.
+
+Each Grant of the request has a row in `status.resources` with the kind `Grant`, its name, and `onOrphan: Kept`. When pluginkit creates or changes a Grant, it records an event on the request with the Grant as the related object. A plugin adds no row and no event for its Grants.
 
 ### Status
 

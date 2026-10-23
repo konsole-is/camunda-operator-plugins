@@ -50,6 +50,9 @@ const (
 	conflictRequeue  = time.Second
 )
 
+// kindGrant is the kind of a status.resources row of a Grant.
+const kindGrant = "Grant"
+
 // reconciler serves the PluginRequests of the registrations of one plugin.
 type reconciler[P, I any] struct {
 	client         client.Client
@@ -170,7 +173,14 @@ func (r *reconciler[P, I]) serve(
 	}
 
 	if res.Pending != nil {
+		current, err := r.grantsOf(ctx, request)
+		if err != nil {
+			stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
+			return ctrl.Result{}, err
+		}
+
 		res.Outputs = request.Status.Outputs
+		res.Resources = withGrantRows(res.Resources, grantRows(current))
 		stageResult(request, res)
 		stage(request, pluginsv1alpha1.ConditionOutputsReady, res.Pending.Reason, res.Pending.Message)
 		r.stageReady(request, nil, nil)
@@ -195,9 +205,10 @@ func (r *reconciler[P, I]) serve(
 		return ctrl.Result{}, err
 	}
 
+	previous := request.Status.Resources
 	stageResult(request, res)
 
-	current, err := r.deleteUnwantedGrants(ctx, request, grants)
+	current, err := r.stageGrants(ctx, request, previous, grants)
 	if err != nil {
 		stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
 		return ctrl.Result{}, err
@@ -363,19 +374,36 @@ func (r *reconciler[P, I]) outputs(
 	return b.Build()
 }
 
-// deleteUnwantedGrants deletes each Grant with the request label of request
-// that is not in wanted, and returns the Grants of the request that still
-// exist, also those that are deleting.
-func (r *reconciler[P, I]) deleteUnwantedGrants(
+// stageGrants deletes each Grant of request that is not in wanted, and adds
+// a row for each Grant that still exists to status.resources of request. When
+// it cannot list the Grants, it adds the Grant rows of previous instead. It
+// returns the Grants that still exist.
+func (r *reconciler[P, I]) stageGrants(
 	ctx context.Context,
 	request *pluginsv1alpha1.PluginRequest,
+	previous []pluginsv1alpha1.ResourceRef,
 	wanted []*pluginsv1alpha1.Grant,
 ) ([]pluginsv1alpha1.Grant, error) {
 	listed, err := r.grantsOf(ctx, request)
 	if err != nil {
+		request.Status.Resources = withGrantRows(request.Status.Resources, previous)
 		return nil, err
 	}
 
+	current, err := r.deleteUnwantedGrants(ctx, request, listed, wanted)
+	request.Status.Resources = withGrantRows(request.Status.Resources, grantRows(current))
+	return current, err
+}
+
+// deleteUnwantedGrants deletes each Grant of listed, the Grants of request,
+// that is not in wanted, and returns the Grants of the request that still
+// exist, also those that are deleting. With an error, it returns listed.
+func (r *reconciler[P, I]) deleteUnwantedGrants(
+	ctx context.Context,
+	request *pluginsv1alpha1.PluginRequest,
+	listed []pluginsv1alpha1.Grant,
+	wanted []*pluginsv1alpha1.Grant,
+) ([]pluginsv1alpha1.Grant, error) {
 	names := map[string]bool{}
 	for _, g := range wanted {
 		names[g.Name] = true
@@ -387,13 +415,45 @@ func (r *reconciler[P, I]) deleteUnwantedGrants(
 		}
 
 		if err := r.client.Delete(ctx, &g, client.Preconditions{UID: &g.UID}); client.IgnoreNotFound(err) != nil {
-			return nil, fmt.Errorf("deleting Grant %q: %w", g.Name, err)
+			return listed, fmt.Errorf("deleting Grant %q: %w", g.Name, err)
 		}
 		r.events.Eventf(request, &g, corev1.EventTypeNormal, eventReasonGrantDeleted, eventActionDelete,
 			"Deleted Grant %s, which the request no longer needs", g.Name)
 	}
 
-	return r.grantsOf(ctx, request)
+	current, err := r.grantsOf(ctx, request)
+	if err != nil {
+		return listed, err
+	}
+	return current, nil
+}
+
+// withGrantRows returns rows with each Grant row of extra that rows does not
+// list. rows itself does not change.
+func withGrantRows(rows, extra []pluginsv1alpha1.ResourceRef) []pluginsv1alpha1.ResourceRef {
+	all := slices.Clone(rows)
+	for _, e := range extra {
+		listed := slices.ContainsFunc(rows, func(r pluginsv1alpha1.ResourceRef) bool {
+			return r.Kind == e.Kind && r.Name == e.Name
+		})
+		if e.Kind == kindGrant && !listed {
+			all = append(all, e)
+		}
+	}
+	return all
+}
+
+func grantRows(grants []pluginsv1alpha1.Grant) []pluginsv1alpha1.ResourceRef {
+	rows := make([]pluginsv1alpha1.ResourceRef, 0, len(grants))
+	for _, g := range grants {
+		// pluginkit removes only the owner reference of a Grant on Orphan.
+		rows = append(rows, pluginsv1alpha1.ResourceRef{
+			Kind:     kindGrant,
+			Name:     g.Name,
+			OnOrphan: pluginsv1alpha1.OnOrphanKept,
+		})
+	}
+	return rows
 }
 
 // grantsOf lists the Grants with the request label of request in its

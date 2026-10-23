@@ -101,7 +101,8 @@ type Result struct {
 	Links []pluginsv1alpha1.Link
 	// PodSelector is status.podSelector.
 	PodSelector *metav1.LabelSelector
-	// Resources is status.resources.
+	// Resources is status.resources. pluginkit adds a row for each Grant of
+	// the request that Resources does not list.
 	Resources []pluginsv1alpha1.ResourceRef
 	// RequeueAfter, when not zero, reconciles the request again after it.
 	RequeueAfter time.Duration
