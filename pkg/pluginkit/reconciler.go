@@ -130,7 +130,7 @@ func (r *reconciler[P, I]) serve(
 ) (ctrl.Result, error) {
 	data, err := templateData(request)
 	if err == nil {
-		err = ValidateParameters(registration.Spec.Parameters, request.Spec.Parameters)
+		err = ValidateParameters(ctx, registration.Spec.Parameters, request.Spec.Parameters)
 	}
 	var parameters *apiextensionsv1.JSON
 	if err == nil {
