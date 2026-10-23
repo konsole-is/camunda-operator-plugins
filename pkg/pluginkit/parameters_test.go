@@ -109,6 +109,18 @@ func TestRenderParametersNamesAnUnknownPlaceholder(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown")
 }
 
+func TestRenderParametersRefusesAnOutput(t *testing.T) {
+	_, err := renderParameters(
+		rawJSON(templateSchema),
+		rawJSON(`{"policy":"arn:aws:s3:::{{ .outputs.bucket }}"}`),
+		TemplateData{Outputs: map[string]string{"bucket": "b-1"}},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `parameter "policy"`)
+	assert.Contains(t, err.Error(), "cannot read the outputs")
+}
+
 func TestRenderParametersLeavesUnmarkedTextAlone(t *testing.T) {
 	got, err := renderParameters(rawJSON(templateSchema), rawJSON(`{"size":"{{ .unknown }}"}`), TemplateData{})
 

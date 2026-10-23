@@ -108,7 +108,7 @@ A grant template, and a parameter marked with `"x-fleet-template": true`, can ho
 | `{{ .request }}` | The name of the request. |
 | `{{ .serviceAccount }}` | `spec.target.serviceAccountName` of the request. |
 | `{{ .parameters.<name> }}` | One parameter of the request. |
-| `{{ .outputs.<key> }}` | One output that `Reconcile` returned. A template parameter is rendered before `Reconcile`, so it has no outputs. |
+| `{{ .outputs.<key> }}` | One output that `Reconcile` returned. A template parameter cannot read the outputs, because pluginkit renders it before `Reconcile`. |
 
 A metric query can hold the same placeholders and also `{{ .pods }}`, the pods of the request as a regular expression. A grant template and a parameter cannot hold `{{ .pods }}`. Every other construct is an error that names it, for example `{{ if }}`, `{{ define }}`, a comment, a pipeline, a function, a variable, or an unknown placeholder. A placeholder whose parameter or output has no value is an error too. `pluginkit.ParseTemplate` checks a template, so a plugin can test the templates and the metric queries of its chart.
 
