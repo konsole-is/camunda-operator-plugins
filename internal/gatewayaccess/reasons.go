@@ -20,3 +20,7 @@ package gatewayaccess
 // that the plugin serves. It is the reason of OutputsReady=False and
 // Ready=False.
 const ReasonUnsupportedTarget = "UnsupportedTarget"
+
+// ReasonGatewayNotFound means that the Gateway of the parameters, or its
+// GatewayClass, does not exist. It is the reason of Ready=False.
+const ReasonGatewayNotFound = "GatewayNotFound"

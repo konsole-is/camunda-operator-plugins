@@ -54,7 +54,9 @@ func KeyOf(obj client.Object) RouteKey {
 // RouteWaiting returns how many routes of desired the Gateway of parent
 // accepted, and why the others are not. A route counts when its live copy is
 // not deleting, has the spec of desired, and reports Accepted=True and
-// ResolvedRefs=True for parent, both for its current generation. waiting is
+// ResolvedRefs=True for parent from controller, both for its current
+// generation. The entries of another controller do not count: a Gateway
+// recreated under another controller leaves them on the route. waiting is
 // nil when every route counts. Otherwise it describes the first route, by
 // kind and then by name, that does not: the reason Pending until the Gateway
 // reports on it, or the reason and the message of its False condition.
@@ -62,6 +64,7 @@ func RouteWaiting(
 	desired []client.Object,
 	live map[RouteKey]client.Object,
 	parent gatewayv1.ParentReference,
+	controller gatewayv1.GatewayController,
 ) (accepted int, waiting *pluginkit.Waiting) {
 	sorted := slices.Clone(desired)
 	slices.SortFunc(sorted, func(a, b client.Object) int {
@@ -70,7 +73,7 @@ func RouteWaiting(
 	})
 
 	for _, obj := range sorted {
-		w := routeWaiting(obj, live[KeyOf(obj)], parent)
+		w := routeWaiting(obj, live[KeyOf(obj)], parent, controller)
 		if w == nil {
 			accepted++
 		} else if waiting == nil {
@@ -81,7 +84,11 @@ func RouteWaiting(
 	return accepted, waiting
 }
 
-func routeWaiting(desired, obj client.Object, parent gatewayv1.ParentReference) *pluginkit.Waiting {
+func routeWaiting(
+	desired, obj client.Object,
+	parent gatewayv1.ParentReference,
+	controller gatewayv1.GatewayController,
+) *pluginkit.Waiting {
 	key := KeyOf(desired)
 	pending := &pluginkit.Waiting{
 		Reason: string(gatewayv1.RouteReasonPending),
@@ -110,7 +117,7 @@ func routeWaiting(desired, obj client.Object, parent gatewayv1.ParentReference) 
 		return pending
 	}
 
-	entry := parentStatus(obj, parent)
+	entry := parentStatus(obj, parent, controller)
 	if entry == nil {
 		return pending
 	}
@@ -179,8 +186,13 @@ func setBackendDefaults(ref *gatewayv1.BackendRef) {
 	}
 }
 
-// parentStatus returns the status.parents entry of obj for parent, or nil.
-func parentStatus(obj client.Object, parent gatewayv1.ParentReference) *gatewayv1.RouteParentStatus {
+// parentStatus returns the status.parents entry of obj that controller wrote
+// for parent, or nil.
+func parentStatus(
+	obj client.Object,
+	parent gatewayv1.ParentReference,
+	controller gatewayv1.GatewayController,
+) *gatewayv1.RouteParentStatus {
 	var parents []gatewayv1.RouteParentStatus
 	switch r := obj.(type) {
 	case *gatewayv1.HTTPRoute:
@@ -190,7 +202,7 @@ func parentStatus(obj client.Object, parent gatewayv1.ParentReference) *gatewayv
 	}
 
 	for i := range parents {
-		if sameParent(parents[i].ParentRef, parent, obj.GetNamespace()) {
+		if parents[i].ControllerName == controller && sameParent(parents[i].ParentRef, parent, obj.GetNamespace()) {
 			return &parents[i]
 		}
 	}

@@ -14,6 +14,8 @@ The plugin reads `status.endpoints` of the target of each request, and writes ro
 
 Each route is in the namespace of the claim, next to its Services. Its only parent is the Gateway of `gatewayRef`, on the listener `listenerName` when it is set. The routes are standard-channel `gateway.networking.k8s.io/v1` objects.
 
+A route counts as accepted only when the controller of the GatewayClass of that Gateway accepts it. The plugin ignores the route status that another controller wrote. For example, a Gateway that was recreated with the same name under another implementation leaves the status of the old controller on the routes.
+
 When an endpoint leaves `status.endpoints`, or the Optimize is deleted, the plugin deletes the route at the next reconcile.
 
 The plugin also writes:
@@ -38,7 +40,7 @@ Before you install the chart, make sure that the cluster has:
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `registrations` | `gateway-public` on the Gateway `gateway-system/public`, and `gateway-internal` on `gateway-system/internal` | The PluginRegistrations that the controller writes at startup and serves, one for each Gateway. Each item is a name and the fields of a registration spec. Set `gatewayRef` and the hostname patterns in `parameterValues`. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
-| `reportCertificateExpiry` | `true` | Show the expiry of the listener certificate in the summary of each `https` request. It grants `get` on Gateways, and on the Secrets of `certificateSecrets`. |
+| `reportCertificateExpiry` | `true` | Show the expiry of the listener certificate in the summary of each `https` request. It grants `get` on the Secrets of `certificateSecrets`. |
 | `certificateSecrets` | `[]` | The Secret of each listener certificate, as `{namespace, name}`. The chart grants `get` on these Secrets only. The expiry of a certificate whose Secret is not in the list shows as `unknown`. |
 | `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/gateway-access` | The image of the controller. |
 | `image.tag` | the `appVersion` of the chart | The tag of the image. |
@@ -132,11 +134,12 @@ The registrations offer the deletion policy `Delete` only. When a claim is delet
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `WaitingForEndpoints` | `Ready` of the request | The target does not exist yet, or it has published no endpoints yet. The outputs are ready. Wait until the operator reconciles the target. |
-| `Pending` | `Ready` of the request | The Gateway has not reported on a route yet. The message names the route. Make sure that a Gateway implementation runs and that `gatewayRef` names its Gateway. |
+| `GatewayNotFound` | `Ready` of the request | The Gateway of `gatewayRef` does not exist, or its GatewayClass does not exist. The message names the missing object. Correct `gatewayRef`, or create the Gateway. |
+| `Pending` | `Ready` of the request | The controller of the GatewayClass has not reported on a route yet. The message names the route. Make sure that this controller runs. |
 | `NotAllowedByListeners` and the other route reasons | `Ready` of the request | The Gateway refused a route. The message names the route and gives the message of the Gateway. For `NotAllowedByListeners`, make sure that `allowedRoutes` of the listener admits the namespace of the claim. For `BackendNotFound`, make sure that the Service of the target exists. |
 | `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not pass the schema, or a pattern gives a host that is not a DNS name. The message names the parameter and the host. Correct the pattern in the registration or the environment. For a label that is too long, put `{name}` and `{namespace}` in two labels, as in `{name}.{namespace}.example.com`, or use a shorter claim name. |
 | `UnsupportedTarget` | `OutputsReady` and `Ready` of the request | The target kind is not `CamundaCluster` or `CamundaManagementCluster`. |
-| `ReconcileError` | `Ready` of the request | The message gives the error, for example a read of the target or a list of the routes that failed. pluginkit tries again. |
+| `ReconcileError` | `Ready` of the request | The message gives the error, for example a read of the target, of the Gateway, or of its GatewayClass, or a list of the routes that failed. pluginkit tries again. |
 | `DeleteFailed` | `Ready` of a deleted request | The plugin could not delete a route of the request. The message gives the error. The finalizer stays, and pluginkit tries again. |
 
 A summary item `Certificate expires` with the value `unknown: <cause>` means that the plugin could not read the certificate. The request is still `Ready`. Usual causes:

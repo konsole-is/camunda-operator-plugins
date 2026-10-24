@@ -75,8 +75,8 @@ registrations:
       managementHostnamePattern: "management-{name}.{namespace}.internal.example.com"
 
 # reportCertificateExpiry adds the expiry of the listener certificate to the
-# summary of each https request. It grants get on the Gateways and on the
-# Secrets of certificateSecrets.
+# summary of each https request. It grants get on the Secrets of
+# certificateSecrets.
 reportCertificateExpiry: true
 
 # certificateSecrets names the Secret of each listener certificate, so that

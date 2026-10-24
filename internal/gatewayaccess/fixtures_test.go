@@ -127,7 +127,7 @@ func installRBAC(
 			{APIGroups: []string{v1.GroupVersion.Group},
 				Resources: []string{"camundaclusters", "camundaoptimizes", "camundamanagementclusters"},
 				Verbs:     []string{"get", "list", "watch"}},
-			{APIGroups: []string{gateway}, Resources: []string{"gateways"}, Verbs: []string{"get"}},
+			{APIGroups: []string{gateway}, Resources: []string{"gateways", "gatewayclasses"}, Verbs: []string{"get"}},
 		},
 	}
 
@@ -153,6 +153,14 @@ func installRBAC(
 		}
 	}
 	return nil
+}
+
+// exampleClass is the GatewayClass example of the fake Gateway.
+func exampleClass() *gatewayv1.GatewayClass {
+	return &gatewayv1.GatewayClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		Spec:       gatewayv1.GatewayClassSpec{ControllerName: fakeGatewayController},
+	}
 }
 
 // publicGateway is the Gateway gateway-system/public, with an HTTP listener

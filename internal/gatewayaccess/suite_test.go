@@ -90,6 +90,7 @@ var _ = BeforeSuite(func() {
 		Expect(k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
 	}
 	Expect(k8s.Create(ctx, accessSection())).To(Succeed())
+	Expect(k8s.Create(ctx, exampleClass())).To(Succeed())
 	Expect(k8s.Create(ctx, publicGateway())).To(Succeed())
 	secret, err := certificateSecret(time.Now().Add(10 * 24 * time.Hour))
 	Expect(err).NotTo(HaveOccurred())

@@ -60,7 +60,7 @@ type Options struct {
 	LeaderElectionID string
 	// ReportCertificateExpiry adds the expiry of the listener certificate to
 	// the summary of each https request. The ServiceAccount then needs get on
-	// the Gateway and on the certificate Secret.
+	// the certificate Secret.
 	ReportCertificateExpiry bool
 }
 

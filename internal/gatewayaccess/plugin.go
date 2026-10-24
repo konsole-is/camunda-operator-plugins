@@ -17,6 +17,7 @@ limitations under the License.
 package gatewayaccess
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -62,8 +63,8 @@ const certificateRequeue = 6 * time.Hour
 // deleted request.
 type Plugin struct {
 	client client.Client
-	// reader reads the Gateway and the certificate Secret, which the cache
-	// does not hold.
+	// reader reads the Gateway, its GatewayClass, and the certificate
+	// Secret, which the cache does not hold.
 	reader                  client.Reader
 	reportCertificateExpiry bool
 	now                     func() time.Time
@@ -82,8 +83,9 @@ type access struct {
 // It is Pending with the reason InvalidParameters when a pattern gives no
 // valid host, and with the reason UnsupportedTarget for a target kind that
 // the plugin does not serve. Ready is False with the reason
-// WaitingForEndpoints until the target publishes endpoints, and then follows
-// the Gateway of the parameters.
+// WaitingForEndpoints until the target publishes endpoints, and with the
+// reason GatewayNotFound while the Gateway of the parameters or its
+// GatewayClass does not exist. Then it follows that Gateway.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -153,11 +155,13 @@ func (p *Plugin) Reconcile(
 		})
 	}
 
-	accepted, waiting := RouteWaiting(a.routes, liveByKey, ParentRef(req.Parameters))
-	notReady := a.notReady
-	if notReady == nil {
-		notReady = waiting
+	controller, noGateway, err := GatewayController(ctx, p.reader, req.Parameters)
+	if err != nil {
+		return pluginkit.Result{}, err
 	}
+
+	accepted, waiting := RouteWaiting(a.routes, liveByKey, ParentRef(req.Parameters), controller)
+	notReady := cmp.Or(a.notReady, noGateway, waiting)
 
 	res := pluginkit.Result{
 		Outputs:  Outputs(req.Parameters, hosts),

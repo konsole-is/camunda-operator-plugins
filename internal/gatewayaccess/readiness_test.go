@@ -35,6 +35,9 @@ type condition struct {
 	generation    int64
 }
 
+// testController is the controller of the GatewayClass of the test Gateway.
+const testController gatewayv1.GatewayController = "example.com/gateway"
+
 func accepted(generation int64) []condition {
 	return []condition{
 		{gatewayv1.RouteConditionAccepted, metav1.ConditionTrue, "Accepted", "", generation},
@@ -57,8 +60,19 @@ func liveCopy(
 	obj.SetNamespace("team-a")
 	obj.SetGeneration(generation)
 	setLiveBackendDefaults(obj)
+	addParent(obj, parent, testController, conds)
+	return obj
+}
 
-	entry := gatewayv1.RouteParentStatus{ParentRef: parent, ControllerName: "example.com/gateway"}
+// addParent appends to the status of route a status.parents entry that
+// controller wrote for parent, with conds.
+func addParent(
+	route client.Object,
+	parent gatewayv1.ParentReference,
+	controller gatewayv1.GatewayController,
+	conds []condition,
+) {
+	entry := gatewayv1.RouteParentStatus{ParentRef: parent, ControllerName: controller}
 	for _, c := range conds {
 		entry.Conditions = append(entry.Conditions, metav1.Condition{
 			Type:               string(c.conditionType),
@@ -69,13 +83,12 @@ func liveCopy(
 		})
 	}
 
-	switch r := obj.(type) {
+	switch r := route.(type) {
 	case *gatewayv1.HTTPRoute:
 		r.Status.Parents = append(r.Status.Parents, entry)
 	case *gatewayv1.GRPCRoute:
 		r.Status.Parents = append(r.Status.Parents, entry)
 	}
-	return obj
 }
 
 func liveByKey(objs ...client.Object) map[RouteKey]client.Object {
@@ -99,7 +112,7 @@ func TestRouteWaiting_AllAcceptedIsNotWaiting(t *testing.T) {
 	desired := clusterRoutes(t, p)
 	live := liveByKey(liveCopy(desired[0], 1, parent, accepted(1)), liveCopy(desired[1], 4, parent, accepted(4)))
 
-	n, waiting := RouteWaiting(desired, live, parent)
+	n, waiting := RouteWaiting(desired, live, parent, testController)
 	assert.Equal(t, 2, n)
 	assert.Nil(t, waiting)
 }
@@ -110,7 +123,7 @@ func TestRouteWaiting_MissingRouteIsPending(t *testing.T) {
 	desired := clusterRoutes(t, p)
 	live := liveByKey(liveCopy(desired[1], 1, parent, accepted(1)))
 
-	n, waiting := RouteWaiting(desired, live, parent)
+	n, waiting := RouteWaiting(desired, live, parent, testController)
 	assert.Equal(t, 1, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
@@ -133,7 +146,7 @@ func TestRouteWaiting_RefusedRouteGivesTheReasonOfTheRoute(t *testing.T) {
 	}
 	live := liveByKey(liveCopy(desired[0], 1, parent, refused), liveCopy(desired[1], 1, parent, accepted(1)))
 
-	n, waiting := RouteWaiting(desired, live, parent)
+	n, waiting := RouteWaiting(desired, live, parent, testController)
 	assert.Equal(t, 1, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, "NotAllowedByListeners", waiting.Reason)
@@ -156,7 +169,7 @@ func TestRouteWaiting_UnresolvedBackendGivesTheReason(t *testing.T) {
 	}
 	live := liveByKey(liveCopy(desired[0], 1, parent, unresolved), liveCopy(desired[1], 1, parent, accepted(1)))
 
-	_, waiting := RouteWaiting(desired, live, parent)
+	_, waiting := RouteWaiting(desired, live, parent, testController)
 	require.NotNil(t, waiting)
 	assert.Equal(t, "BackendNotFound", waiting.Reason)
 	assert.Equal(t, "HTTPRoute orders-access: no Service orders-operate", waiting.Message)
@@ -168,7 +181,7 @@ func TestRouteWaiting_StatusOfAnOlderGenerationIsPending(t *testing.T) {
 	desired := clusterRoutes(t, p)[:1]
 	live := liveByKey(liveCopy(desired[0], 3, parent, accepted(2)))
 
-	n, waiting := RouteWaiting(desired, live, parent)
+	n, waiting := RouteWaiting(desired, live, parent, testController)
 	assert.Equal(t, 0, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
@@ -181,7 +194,7 @@ func TestRouteWaiting_IgnoresTheStatusOfOtherParents(t *testing.T) {
 	other.GatewayRef.Name = "internal"
 	live := liveByKey(liveCopy(desired[0], 1, ParentRef(other), accepted(1)))
 
-	n, waiting := RouteWaiting(desired, live, ParentRef(p))
+	n, waiting := RouteWaiting(desired, live, ParentRef(p), testController)
 	assert.Equal(t, 0, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
@@ -191,7 +204,7 @@ func TestRouteWaiting_IgnoresTheStatusOfOtherParents(t *testing.T) {
 	desired = clusterRoutes(t, withListener)[:1]
 	live = liveByKey(liveCopy(desired[0], 1, ParentRef(p), accepted(1)))
 
-	n, waiting = RouteWaiting(desired, live, ParentRef(withListener))
+	n, waiting = RouteWaiting(desired, live, ParentRef(withListener), testController)
 	assert.Equal(t, 0, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
@@ -204,7 +217,7 @@ func TestRouteWaiting_NamesTheFirstRouteByKindThenName(t *testing.T) {
 	refused := []condition{{gatewayv1.RouteConditionAccepted, metav1.ConditionFalse, "NotAllowedByListeners", "no", 1}}
 	live := liveByKey(liveCopy(desired[0], 1, parent, refused), liveCopy(desired[1], 1, parent, refused))
 
-	_, waiting := RouteWaiting(desired, live, parent)
+	_, waiting := RouteWaiting(desired, live, parent, testController)
 	require.NotNil(t, waiting)
 	assert.Equal(t, "GRPCRoute orders-access-grpc: no", waiting.Message)
 }
@@ -216,7 +229,7 @@ func TestRouteWaiting_ChangedRouteIsPendingUntilItsNewSpecIsApplied(t *testing.T
 	before := ClusterRoutes("orders-access", p, testHosts(t), embeddedEndpoints())[:1]
 	live := liveByKey(liveCopy(before[0], 1, parent, accepted(1)))
 
-	n, waiting := RouteWaiting(desired, live, parent)
+	n, waiting := RouteWaiting(desired, live, parent, testController)
 	assert.Equal(t, 0, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
@@ -230,7 +243,7 @@ func TestRouteWaiting_TerminatingRouteIsPending(t *testing.T) {
 	terminating.SetDeletionTimestamp(&metav1.Time{Time: testNow})
 	terminating.SetFinalizers([]string{"example.com/hold"})
 
-	n, waiting := RouteWaiting(desired, liveByKey(terminating), parent)
+	n, waiting := RouteWaiting(desired, liveByKey(terminating), parent, testController)
 	assert.Equal(t, 0, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
@@ -245,7 +258,7 @@ func TestRouteWaiting_RouteThatAnotherWriterChangedIsPending(t *testing.T) {
 	require.True(t, ok)
 	route.Spec.Rules[0].BackendRefs[0].Name = "other-service"
 
-	n, waiting := RouteWaiting(desired, liveByKey(drifted), parent)
+	n, waiting := RouteWaiting(desired, liveByKey(drifted), parent, testController)
 	assert.Equal(t, 0, n)
 	require.NotNil(t, waiting)
 	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
@@ -291,7 +304,7 @@ func TestRouteWaiting_RouteWithAMatchConstraintOfAnotherWriterIsPending(t *testi
 			require.True(t, ok)
 			constrain(&route.Spec.Rules[0].Matches[0])
 
-			n, waiting := RouteWaiting(desired, liveByKey(live), parent)
+			n, waiting := RouteWaiting(desired, liveByKey(live), parent, testController)
 			assert.Equal(t, 0, n)
 			require.NotNil(t, waiting)
 			assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
@@ -331,10 +344,60 @@ func TestRouteWaiting_RouteWithAFilterOfAnotherWriterIsPending(t *testing.T) {
 				live = append(live, copied)
 			}
 
-			n, waiting := RouteWaiting(desired, liveByKey(live...), parent)
+			n, waiting := RouteWaiting(desired, liveByKey(live...), parent, testController)
 			assert.Equal(t, 1, n)
 			require.NotNil(t, waiting)
 			assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
 		})
 	}
+}
+
+func refused(generation int64) []condition {
+	return []condition{
+		{
+			gatewayv1.RouteConditionAccepted,
+			metav1.ConditionFalse,
+			"NotAllowedByListeners",
+			"no listener admits the namespace",
+			generation,
+		},
+		{gatewayv1.RouteConditionResolvedRefs, metav1.ConditionTrue, "ResolvedRefs", "", generation},
+	}
+}
+
+func TestRouteWaiting_AcceptanceOfAnotherControllerDoesNotCount(t *testing.T) {
+	p := validParams()
+	parent := ParentRef(p)
+	desired := clusterRoutes(t, p)[:1]
+	route := liveCopy(desired[0], 1, parent, refused(1))
+	addParent(route, parent, "example.com/old-gateway", accepted(1))
+
+	n, waiting := RouteWaiting(desired, liveByKey(route), parent, testController)
+	assert.Equal(t, 0, n)
+	require.NotNil(t, waiting)
+	assert.Equal(t, "NotAllowedByListeners", waiting.Reason)
+}
+
+func TestRouteWaiting_RefusalOfAnotherControllerDoesNotHideAcceptance(t *testing.T) {
+	p := validParams()
+	parent := ParentRef(p)
+	desired := clusterRoutes(t, p)[:1]
+	route := liveCopy(desired[0], 1, parent, accepted(1))
+	addParent(route, parent, "example.com/old-gateway", refused(1))
+
+	n, waiting := RouteWaiting(desired, liveByKey(route), parent, testController)
+	assert.Equal(t, 1, n)
+	assert.Nil(t, waiting)
+}
+
+func TestRouteWaiting_RouteWithOnlyAnotherControllerIsPending(t *testing.T) {
+	p := validParams()
+	parent := ParentRef(p)
+	desired := clusterRoutes(t, p)[:1]
+	route := liveCopy(desired[0], 1, parent, accepted(1))
+
+	n, waiting := RouteWaiting(desired, liveByKey(route), parent, "example.com/new-gateway")
+	assert.Equal(t, 0, n)
+	require.NotNil(t, waiting)
+	assert.Equal(t, string(gatewayv1.RouteReasonPending), waiting.Reason)
 }

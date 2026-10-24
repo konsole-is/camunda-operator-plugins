@@ -82,13 +82,13 @@ rules:
   - apiGroups: ["core.camunda.io"]
     resources: ["camundaclusters", "camundaoptimizes", "camundamanagementclusters"]
     verbs: ["get", "list", "watch"]
-  {{- if .Values.reportCertificateExpiry }}
-  # The controller reads the listener certificate of the Gateway to report its
-  # expiry. certificates.yaml grants get on the certificate Secrets.
+  # The controller reads the Gateway and its GatewayClass to count only the
+  # route status of the controller of that class, and the listener
+  # certificate of the Gateway to report its expiry. certificates.yaml grants
+  # get on the certificate Secrets.
   - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["gateways"]
+    resources: ["gateways", "gatewayclasses"]
     verbs: ["get"]
-  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
