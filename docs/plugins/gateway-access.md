@@ -146,6 +146,7 @@ A summary item `Certificate expires` with the value `unknown: <cause>` means tha
 
 - The Secret is not in `certificateSecrets`, so the controller has no `get` on it.
 - `listenerName` names a listener without a certificate.
+- The certificate reference of the listener is not a core Secret, for example an object of the Gateway implementation.
 - The Secret holds no PEM certificate in `tls.crt`.
 
 Add the Secret to `certificateSecrets`, set `listenerName` to the HTTPS listener, or correct the Secret.

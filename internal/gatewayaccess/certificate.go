@@ -80,6 +80,17 @@ func certificateExpiry(ctx context.Context, reader client.Reader, p Params) (tim
 		return time.Time{}, err
 	}
 
+	group := ptr.Deref(ref.Group, gatewayv1.Group(corev1.GroupName))
+	kind := ptr.Deref(ref.Kind, gatewayv1.Kind("Secret"))
+	if group != corev1.GroupName || kind != "Secret" {
+		return time.Time{}, fmt.Errorf(
+			"the listener certificate %s is a %s of the group %q, not a Secret",
+			ref.Name,
+			kind,
+			group,
+		)
+	}
+
 	var secret corev1.Secret
 	key = client.ObjectKey{
 		Namespace: string(ptr.Deref(ref.Namespace, gatewayv1.Namespace(gateway.Namespace))),

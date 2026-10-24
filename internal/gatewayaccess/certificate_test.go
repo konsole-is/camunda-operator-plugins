@@ -206,3 +206,20 @@ func TestCertificateItem_ReadsTheSecretInTheNamespaceOfItsReference(t *testing.T
 	require.NotNil(t, item)
 	assert.Equal(t, pluginsv1alpha1.SeverityInfo, item.Severity)
 }
+
+func TestCertificateItem_UnknownWhenTheCertificateIsNotASecret(t *testing.T) {
+	gateway := testGateway()
+	gateway.Spec.Listeners[1].TLS.CertificateRefs[0].Group = ptr.To(gatewayv1.Group("example.com"))
+	gateway.Spec.Listeners[1].TLS.CertificateRefs[0].Kind = ptr.To(gatewayv1.Kind("Certificate"))
+	// A Secret with the name of the reference must not give the expiry.
+	reader := fakeReader(t, nil, gateway, tlsSecret(certificatePEM(t, testNow.Add(90*24*time.Hour))))
+
+	item := CertificateItem(context.Background(), reader, validParams(), testNow)
+	require.NotNil(t, item)
+	assert.Equal(
+		t,
+		`unknown: the listener certificate public-tls is a Certificate of the group "example.com", not a Secret`,
+		item.Value,
+	)
+	assert.Equal(t, pluginsv1alpha1.SeverityWarning, item.Severity)
+}
