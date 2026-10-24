@@ -337,7 +337,9 @@ func deleteRoutes(
 ) error {
 	for _, obj := range routes {
 		key := KeyOf(obj)
-		if err := c.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
+		// The UID keeps a route that replaced obj under its name.
+		uid := obj.GetUID()
+		if err := c.Delete(ctx, obj, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("deleting the %s %s: %w", key.Kind, key.Name, err)
 		}
 		req.Event(

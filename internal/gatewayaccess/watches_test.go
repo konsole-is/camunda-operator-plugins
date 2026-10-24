@@ -18,17 +18,22 @@ package gatewayaccess
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
@@ -90,4 +95,74 @@ func TestWatches_PlaneMapsToTheRequestsThatTargetIt(t *testing.T) {
 func TestWatches_TargetInAnotherNamespaceMapsToNoRequest(t *testing.T) {
 	cluster := &v1.CamundaCluster{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "orders"}}
 	assert.Empty(t, requestsOfChange(t, cluster))
+}
+
+// gatewayRequest is a request in team-a whose parameters name the Gateway
+// gateway-system/<gateway>.
+func gatewayRequest(t *testing.T, name, gateway string) *pluginsv1alpha1.PluginRequest {
+	t.Helper()
+	p := validParams()
+	p.GatewayRef.Name = gateway
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+
+	r := targetRequest(name, "CamundaCluster", "orders")
+	r.Spec.Parameters = &apiextensionsv1.JSON{Raw: raw}
+	return r
+}
+
+func classGateway(name, class string) *gatewayv1.Gateway {
+	return &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "gateway-system", Name: name},
+		Spec:       gatewayv1.GatewaySpec{GatewayClassName: gatewayv1.ObjectName(class)},
+	}
+}
+
+// requestsOfGatewayChange returns the requests that the watch of the kind of
+// obj reconciles for a change of obj, with requests on the Gateways public
+// and internal, of the classes example and other.
+func requestsOfGatewayChange(t *testing.T, obj client.Object) []reconcile.Request {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, pluginsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, gatewayv1.Install(scheme))
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		gatewayRequest(t, "public-access", "public"),
+		gatewayRequest(t, "internal-access", "internal"),
+		classGateway("public", "example"),
+		classGateway("internal", "other"),
+	).Build()
+
+	for _, w := range watches(c) {
+		if reflect.TypeOf(w.Object) == reflect.TypeOf(obj) {
+			return w.Requests(context.Background(), obj)
+		}
+	}
+	require.FailNowf(t, "no watch", "no watch for %T", obj)
+	return nil
+}
+
+func TestWatches_GatewayMapsToTheRequestsThatNameIt(t *testing.T) {
+	assert.Equal(t, []reconcile.Request{request("public-access")},
+		requestsOfGatewayChange(t, classGateway("public", "example")))
+}
+
+func TestWatches_GatewayClassMapsToTheRequestsOfItsGateways(t *testing.T) {
+	class := &gatewayv1.GatewayClass{ObjectMeta: metav1.ObjectMeta{Name: "other"}}
+	assert.Equal(t, []reconcile.Request{request("internal-access")}, requestsOfGatewayChange(t, class))
+}
+
+func TestWatches_GatewayWatchesSkipStatusChanges(t *testing.T) {
+	for _, w := range watches(nil) {
+		switch w.Object.(type) {
+		case *gatewayv1.Gateway, *gatewayv1.GatewayClass:
+			assert.Contains(
+				t,
+				w.Predicates,
+				predicate.Predicate(predicate.GenerationChangedPredicate{}),
+				"%T",
+				w.Object,
+			)
+		}
+	}
 }

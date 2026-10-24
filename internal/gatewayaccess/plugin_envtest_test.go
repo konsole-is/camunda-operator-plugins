@@ -33,6 +33,8 @@ import (
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
+
+	"github.com/konsole-is/camunda-operator-plugins/internal/gatewayaccess"
 )
 
 const timeout = 30 * time.Second
@@ -339,6 +341,35 @@ var _ = Describe("the gateway-access plugin", func() {
 			ready := condition(readRequest(g, request), v1.ConditionReady)
 			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(ready.LastTransitionTime.Time).To(BeTemporally(">", before.Time))
+		}, timeout).Should(Succeed())
+	})
+
+	It("reports GatewayNotFound when only its Gateway is deleted", func() {
+		ns := newNamespace()
+		spare := publicGateway()
+		spare.Name = "spare-" + ns
+		Expect(k8s.Create(ctx, spare)).To(Succeed())
+
+		cluster := newCluster(ns, "orders")
+		Expect(k8s.Create(ctx, cluster)).To(Succeed())
+		Expect(publishEndpoints(ctx, k8s, cluster, standaloneEndpoints("orders"))).To(Succeed())
+		params := gatewayParams()
+		params.GatewayRef.Name = spare.Name
+		request := accessRequest(ns, "spare-access", clusterTarget("orders"), params)
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(condition(readRequest(g, request), v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+		}, timeout).Should(Succeed())
+
+		// The routes keep their status, so only the watch of the Gateway
+		// can reconcile the request.
+		Expect(k8s.Delete(ctx, spare)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			ready := condition(readRequest(g, request), v1.ConditionReady)
+			g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(ready.Reason).To(Equal(gatewayaccess.ReasonGatewayNotFound))
+			g.Expect(ready.Message).To(ContainSubstring("the Gateway gateway-system/" + spare.Name + " does not exist"))
 		}, timeout).Should(Succeed())
 	})
 })

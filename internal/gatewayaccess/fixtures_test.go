@@ -127,7 +127,8 @@ func installRBAC(
 			{APIGroups: []string{v1.GroupVersion.Group},
 				Resources: []string{"camundaclusters", "camundaoptimizes", "camundamanagementclusters"},
 				Verbs:     []string{"get", "list", "watch"}},
-			{APIGroups: []string{gateway}, Resources: []string{"gateways", "gatewayclasses"}, Verbs: []string{"get"}},
+			{APIGroups: []string{gateway}, Resources: []string{"gateways", "gatewayclasses"},
+				Verbs: []string{"get", "list", "watch"}},
 		},
 	}
 

@@ -92,7 +92,7 @@ The `values.yaml` of the chart has the full schema of the default registrations,
 
 ## Parameters
 
-The admin sets the parameters in `parameterValues` of each registration. An environment can override each of them. A claim cannot change them.
+The admin sets the parameters in `parameterValues` of each registration. An environment can override each of them. A claim cannot change a parameter unless the environment marks it `claimEditable`.
 
 A hostname pattern takes two placeholders only: `{name}`, the name of the claim, and `{namespace}`, the namespace of the claim.
 

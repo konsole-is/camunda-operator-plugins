@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -152,4 +153,8 @@ type Watch struct {
 	Object client.Object
 	// Requests returns the requests to reconcile for a changed object.
 	Requests handler.MapFunc
+	// Predicates filter the changes of the kind before Requests runs, for
+	// example predicate.GenerationChangedPredicate to skip status writes.
+	// Nil passes every change.
+	Predicates []predicate.Predicate
 }

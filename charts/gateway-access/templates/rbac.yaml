@@ -84,11 +84,12 @@ rules:
     verbs: ["get", "list", "watch"]
   # The controller reads the Gateway and its GatewayClass to count only the
   # route status of the controller of that class, and the listener
-  # certificate of the Gateway to report its expiry. certificates.yaml grants
-  # get on the certificate Secrets.
+  # certificate of the Gateway to report its expiry. It watches both, so that
+  # a change of their spec reconciles the requests of the Gateway.
+  # certificates.yaml grants get on the certificate Secrets.
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways", "gatewayclasses"]
-    verbs: ["get"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

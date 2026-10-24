@@ -92,7 +92,7 @@ func Setup[P, I any](mgr ctrl.Manager, cfg Config, plugin Plugin[P, I]) error {
 	}
 
 	for _, w := range cfg.Watches {
-		b = b.Watches(w.Object, handler.EnqueueRequestsFromMapFunc(w.Requests))
+		b = b.Watches(w.Object, handler.EnqueueRequestsFromMapFunc(w.Requests), builder.WithPredicates(w.Predicates...))
 	}
 
 	if err := b.Complete(r); err != nil {
