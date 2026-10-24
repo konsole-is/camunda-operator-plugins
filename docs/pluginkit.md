@@ -31,7 +31,7 @@ The fields of `Result`:
 | `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. pluginkit adds a row to `status.resources` for each Grant of the request, so `Resources` does not need them. |
 | `RequeueAfter` | Reconciles the request again after this time. Use it to wait for a resource outside the cluster. |
 
-To start a plugin, call `pluginkit.Setup` with the manager, a `Config`, and the plugin. The `internal/skeleton` package is a complete example.
+To start a plugin, call `pluginkit.Setup` with the manager, a `Config`, and the plugin. The `internal/gatewayaccess` package is a complete example.
 
 ```go
 err := pluginkit.Setup(mgr, pluginkit.Config{
@@ -46,7 +46,7 @@ err := pluginkit.Setup(mgr, pluginkit.Config{
 
 `Owns` holds one object of each kind that `Result.Objects` returns, namespaced and cluster-scoped. A change to an object of a namespaced kind starts a reconcile of its request. pluginkit does not watch a cluster-scoped kind of `Owns`. To wait for one, add a `Watch` or return `RequeueAfter`. `Health` checks the plugin, for example its cloud credentials. A nil `Health` is always healthy.
 
-`Watches` starts a reconcile when an object that the plugin does not own changes. Examples are a Secret that a request names, the target `CamundaCluster`, and a cluster-scoped object that the plugin applies. A `pluginkit.Watch` holds one object of the kind to watch, and a `Requests` function. The function maps a changed object to the requests to reconcile. pluginkit ignores a request of a registration that the plugin does not serve. `Setup` refuses a `Watch` without an `Object` or a `Requests` function.
+`Watches` starts a reconcile when an object that the plugin does not own changes. Examples are a Secret that a request names, the target `CamundaCluster`, and a cluster-scoped object that the plugin applies. A `pluginkit.Watch` holds one object of the kind to watch, and a `Requests` function. The function maps a changed object to the requests to reconcile. The optional `Predicates` filter the changes before the function runs. For example, `predicate.GenerationChangedPredicate{}` skips a change of the status only. pluginkit ignores a request of a registration that the plugin does not serve. `Setup` refuses a `Watch` without an `Object` or a `Requests` function.
 
 Each kind of `Watches` must be in the scheme of the manager. The manager caches each object of the kind in the cluster, and the ServiceAccount of the plugin needs `list` and `watch` on the kind. This `Watch` reconciles each request whose parameters name a changed Secret. `secretOf` is a function of the plugin that reads the name of the Secret from the parameters of a request.
 
@@ -169,11 +169,11 @@ registrations:
       - key: bucket
 ```
 
-A rolling update runs the old and the new controller together, so the chart turns on leader election: only the replica that holds the Lease publishes the registrations and serves the requests. The skeleton passes `-leader-elect` and `-leader-election-id=<release>`, and ships a Role and a RoleBinding for `leases` in the release namespace, as `charts/skeleton/templates/leader-election.yaml` shows. `make chart-verify` checks both.
+A rolling update runs the old and the new controller together, so the chart turns on leader election: only the replica that holds the Lease publishes the registrations and serves the requests. The gateway-access chart passes `-leader-elect` and `-leader-election-id=<release>`, and ships a Role and a RoleBinding for `leases` in the release namespace, as `charts/gateway-access/templates/leader-election.yaml` shows. `make chart-verify` checks both.
 
 The chart sets the variables `POD_NAMESPACE` and `SERVICE_ACCOUNT_NAME` from the downward API. `pluginkit.ServiceAccountFromEnv` reads them.
 
-The controller needs this RBAC, as `charts/skeleton/templates/rbac.yaml` shows:
+The controller needs this RBAC, as `charts/gateway-access/templates/rbac.yaml` shows:
 
 | Resource | Verbs |
 | --- | --- |

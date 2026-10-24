@@ -1,0 +1,94 @@
+image:
+  repository: ghcr.io/konsole-is/camunda-operator-plugins/gateway-access
+  # An empty tag is the appVersion of the chart, which the release sets.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# registrations are the PluginRegistrations that the controller writes at
+# startup and serves, one for each Gateway. Each item is a name and the fields
+# of a registration spec. The chart grants the controller the verb serve on
+# each name, and on no other registration. The chart refuses to render without
+# one.
+#
+# The admin sets gatewayRef and the hostname patterns of parameterValues for
+# the cluster. An environment can override each of them.
+registrations:
+  - name: gateway-public
+    sections: [access]
+    label: Public access through a Gateway
+    description: Gives the cluster or the management plane a host name on the public Gateway and routes it there.
+    docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/gateway-access.md
+    mode: Optional
+    deletionPolicies: [Delete]
+    outputs: &outputs
+      - key: externalUrl
+        description: The URL of the web applications and the REST API of a cluster.
+      - key: grpcHost
+        description: The host of the gRPC API of a cluster.
+      - key: optimizeUrl
+        description: The URL of Optimize of a cluster.
+      - key: managementHost
+        description: The host of a management plane.
+    parameters: &parameters
+      type: object
+      required: [gatewayRef, hostnamePattern, grpcHostnamePattern, optimizeHostnamePattern, managementHostnamePattern]
+      properties:
+        gatewayRef:
+          type: object
+          required: [namespace, name]
+          properties:
+            namespace: {type: string, minLength: 1, maxLength: 63}
+            name: {type: string, minLength: 1, maxLength: 253}
+        listenerName: {type: string, maxLength: 253}
+        scheme: {type: string, enum: [http, https], default: https}
+        hostnamePattern: &pattern
+          type: string
+          maxLength: 253
+          pattern: '^([a-z0-9.-]|\{name\}|\{namespace\})+$'
+        grpcHostnamePattern: *pattern
+        optimizeHostnamePattern: *pattern
+        managementHostnamePattern: *pattern
+    parameterValues:
+      gatewayRef: {namespace: gateway-system, name: public}
+      scheme: https
+      hostnamePattern: "{name}.{namespace}.example.com"
+      grpcHostnamePattern: "grpc-{name}.{namespace}.example.com"
+      optimizeHostnamePattern: "optimize-{name}.{namespace}.example.com"
+      managementHostnamePattern: "management-{name}.{namespace}.example.com"
+  - name: gateway-internal
+    sections: [access]
+    label: Internal access through a Gateway
+    description: Gives the cluster or the management plane a host name on the internal Gateway and routes it there.
+    docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/gateway-access.md
+    mode: Optional
+    deletionPolicies: [Delete]
+    outputs: *outputs
+    parameters: *parameters
+    parameterValues:
+      gatewayRef: {namespace: gateway-system, name: internal}
+      scheme: https
+      hostnamePattern: "{name}.{namespace}.internal.example.com"
+      grpcHostnamePattern: "grpc-{name}.{namespace}.internal.example.com"
+      optimizeHostnamePattern: "optimize-{name}.{namespace}.internal.example.com"
+      managementHostnamePattern: "management-{name}.{namespace}.internal.example.com"
+
+# reportCertificateExpiry adds the expiry of the listener certificate to the
+# summary of each https request. It grants get on the Secrets of
+# certificateSecrets.
+reportCertificateExpiry: true
+
+# certificateSecrets names the Secret of each listener certificate, so that
+# the controller can read only those. A certificate whose Secret is not in the
+# list shows its expiry as unknown.
+certificateSecrets: []
+#  - namespace: gateway-system
+#    name: public-tls
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 128Mi

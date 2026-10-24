@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command skeleton runs the skeleton plugin. With -version it prints the
+// Command gateway-access runs the gateway-access plugin. With -version it prints the
 // version of the build and exits.
 package main
 
@@ -26,13 +26,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/konsole-is/camunda-operator-plugins/internal/skeleton"
+	"github.com/konsole-is/camunda-operator-plugins/internal/gatewayaccess"
 	"github.com/konsole-is/camunda-operator-plugins/internal/version"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 func main() {
-	var opts skeleton.Options
+	var opts gatewayaccess.Options
 	showVersion := flag.Bool("version", false, "Print the version of the build and exit.")
 	flag.StringVar(
 		&opts.HealthProbeAddress,
@@ -55,8 +55,14 @@ func main() {
 	flag.StringVar(
 		&opts.LeaderElectionID,
 		"leader-election-id",
-		"skeleton.plugins.camunda.io",
+		"gateway-access.plugins.camunda.io",
 		"The name of the leader election Lease, in the namespace of the controller.",
+	)
+	flag.BoolVar(
+		&opts.ReportCertificateExpiry,
+		"report-certificate-expiry",
+		true,
+		"Read the listener certificate of the Gateway and report its expiry in the summary of each request.",
 	)
 	registrations := flag.String(
 		"registrations",
@@ -86,7 +92,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr, err := skeleton.NewManager(ctrl.GetConfigOrDie(), opts)
+	mgr, err := gatewayaccess.NewManager(ctrl.GetConfigOrDie(), opts)
 	if err != nil {
 		log.Error(err, "Could not create the manager")
 		os.Exit(1)
