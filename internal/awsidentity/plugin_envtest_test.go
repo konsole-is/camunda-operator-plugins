@@ -379,6 +379,28 @@ var _ = Describe("the AWS identity hub", func() {
 		Expect(roleOf(Default, irsa, s.namespace).InlinePolicies).To(HaveKey("grant-orders-backup-read"))
 	})
 
+	It("removes the policy of a deleted grant while the request names no ServiceAccount", func() {
+		s := newGrantSetup()
+		grant := grantFor(s.other, "orders-backup-read", readFragment)
+		Expect(k8s.Create(ctx, grant)).To(Succeed())
+		expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		Eventually(func(g Gomega) {
+			got := read(g, s.hub.DeepCopy())
+			got.Spec.Target.ServiceAccountName = ""
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		Eventually(func(g Gomega) {
+			got := read(g, s.hub.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Reason).To(Equal("MissingServiceAccount"))
+		}, timeout).Should(Succeed())
+
+		Expect(k8s.Delete(ctx, grant)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(roleOf(g, irsa, s.namespace).InlinePolicies).To(BeEmpty())
+		}, timeout).Should(Succeed())
+	})
+
 	It("revokes the trust of a request that names no ServiceAccount any more", func() {
 		ns := newNamespace()
 		request := hubRequest(irsa.registration, ns, "orders-es-es")

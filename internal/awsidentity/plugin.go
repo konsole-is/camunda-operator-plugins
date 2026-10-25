@@ -97,17 +97,7 @@ func (p *Plugin) Reconcile(
 	request := req.Object
 	sas := serviceAccounts(request.Spec.Target)
 	if len(sas) == 0 {
-		resources, err := p.revoke(ctx, req)
-		if err != nil {
-			return pluginkit.Result{}, err
-		}
-		return pluginkit.Result{
-			Pending: &pluginkit.Waiting{
-				Reason:  ReasonMissingServiceAccount,
-				Message: "The request names no ServiceAccount in spec.target",
-			},
-			Resources: resources,
-		}, nil
+		return p.reconcileWithoutServiceAccounts(ctx, req)
 	}
 
 	role, err := p.ensureRole(ctx, req, sas)
@@ -172,29 +162,44 @@ func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) plug
 	}
 }
 
-// revoke makes the role of req, when it exists, trust nobody, and deletes its
-// associations with Pod Identity. It returns the row of the role, which
-// stays, or none when there is no role.
-func (p *Plugin) revoke(
+// reconcileWithoutServiceAccounts makes the role of req, when it has one,
+// trust nobody, and keeps its Grants in sync, because credentials that STS
+// gave before stay valid.
+func (p *Plugin) reconcileWithoutServiceAccounts(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
-) ([]pluginsv1alpha1.ResourceRef, error) {
+) (pluginkit.Result, error) {
+	res := pluginkit.Result{Pending: &pluginkit.Waiting{
+		Reason:  ReasonMissingServiceAccount,
+		Message: "The request names no ServiceAccount in spec.target",
+	}}
+
 	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
 	if err != nil || arn == "" {
-		return nil, err
+		return res, err
 	}
 
 	role, err := p.ensureRole(ctx, req, nil)
 	if err != nil {
-		return nil, err
+		return pluginkit.Result{}, err
 	}
 
 	if p.mode == awskit.ModePodIdentity {
 		if _, err := p.ensureAssociations(ctx, req, nil, role); err != nil {
-			return nil, err
+			return pluginkit.Result{}, err
 		}
 	}
-	return []pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, nil
+
+	_, conflicted, err := p.syncGrants(ctx, req, role)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+
+	res.Resources = []pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}
+	if conflicted {
+		res.RequeueAfter = conflictRequeue
+	}
+	return res, nil
 }
 
 // liveRoleARN returns the ARN of the role name, or "" when it does not exist.
