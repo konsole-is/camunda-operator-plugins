@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aws-identity.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aws-identity.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aws-identity.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/registrations: {{ include "aws-identity.registrations" . | sha256sum }}
+      labels:
+        {{- include "aws-identity.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "aws-identity.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -registrations=/etc/plugin/registrations.yaml
+            - -leader-elect
+            - -leader-election-id={{ include "aws-identity.fullname" . }}
+            - -mode={{ .Values.mode }}
+            - -region={{ .Values.region }}
+            - -permissions-boundary-arn={{ .Values.permissionsBoundaryArn }}
+            - -allowed-actions={{ join "," .Values.allowedActions }}
+            - -oidc-provider-arn={{ .Values.oidcProviderArn }}
+            - -eks-cluster-name={{ .Values.eksClusterName }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_ACCOUNT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            {{- with .Values.endpointURL }}
+            - name: AWS_ENDPOINT_URL
+              value: {{ . | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: registrations
+              mountPath: /etc/plugin
+              readOnly: true
+          ports:
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: registrations
+          configMap:
+            name: {{ include "aws-identity.fullname" . }}-registrations
