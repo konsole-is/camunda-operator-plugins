@@ -211,7 +211,8 @@ var _ = Describe("the rustfs plugin", func() {
 
 		Eventually(func(g Gomega) {
 			read := readRequest(g, request)
-			g.Expect(condition(read.Status.Conditions, v1.ConditionReady).Reason).To(Equal(pluginkit.ReasonReconcileError))
+			g.Expect(condition(read.Status.Conditions, v1.ConditionReady).Reason).
+				To(Equal(pluginkit.ReasonReconcileError))
 			events := driftEvents(g, request)
 			g.Expect(events).To(HaveLen(1))
 			g.Expect(events[0].Note).To(ContainSubstring("created the bucket " + name + ", which was gone"))
