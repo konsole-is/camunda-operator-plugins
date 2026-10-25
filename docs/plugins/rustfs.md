@@ -10,27 +10,27 @@ For each request, the plugin creates these objects in RustFS:
 
 - One bucket.
 - One policy that allows the reads and writes of a backup on that bucket and its objects, and nothing else.
-- One user with that policy. Its access key is the name of the bucket.
+- One user with that policy. The access key ID of the user is the name of the bucket. The plugin makes a random secret key of 40 characters.
 
-The bucket, the policy, and the user have one name: `<namespace>-<request>-<hash>`, at most 63 characters. `<hash>` is 6 hex characters of a hash of the namespace and the request name. A dot in a name becomes a hyphen. The plugin finds each object again by this name, so it never makes a second bucket for one request.
+The bucket, the policy, and the user are three objects with the same name: `<namespace>-<request>-<hash>`, at most 63 characters. `<hash>` is 6 hex characters of a hash of the namespace and the request name. A dot in a name becomes a hyphen. The plugin finds each object again by this name, so it never makes a second bucket for one request.
 
-Zeebe needs a backup bucket that no other cluster uses. Thus each cluster gets its own bucket.
+Zeebe needs a backup bucket that no other cluster uses, so each cluster gets its own bucket. The key of one cluster cannot read or write the bucket of another cluster, or any other bucket.
 
 In the namespace of the claim, the plugin writes:
 
 - One Secret `<request>-rustfs` with the keys `accessKeyId` and `secretAccessKey`.
-- One `ObjectStorageConfig` `<request>` of type `S3`. It names the bucket, the endpoint and the region of the chart values, path-style access, and the Secret, with `auth.type: credentials`.
+- One `ObjectStorageConfig` `<request>` of type `S3`. It names the bucket, the endpoint and the region of the chart values, path-style access, and the Secret, with `auth.type: credentials`. The Camunda pods of the cluster use this endpoint and this key for their backups.
 
 The plugin also writes:
 
 - One PluginRegistration for each item of the chart value `registrations`.
-- One Lease `<release>` in the release namespace. Only the replica that holds it writes.
+- One Lease `<release>` in the release namespace. When more than one replica runs, only the replica that holds the Lease writes.
 
 The summary of a request shows the bucket, its used size, and the endpoint. When `rustfs.consoleUrl` is set, the request links to the RustFS console. `status.resources` lists the bucket, the user, the Secret, and the `ObjectStorageConfig`.
 
 The used size comes from the scanner of RustFS, so it lags behind the writes. The plugin reads it again every 5 minutes.
 
-The plugin keeps the access key while the Secret holds it. If someone deletes the Secret, the plugin sets a new key on the user and writes the Secret again. The old key then stops working.
+While the Secret holds the secret key of the user, the plugin does not change the key. If someone deletes the Secret, the plugin sets a new secret key on the user and writes the Secret again. The old key then stops working.
 
 ## Prerequisites
 
