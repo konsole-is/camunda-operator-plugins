@@ -124,6 +124,7 @@ var _ = Describe("the request reconciler", func() {
 		request := createRequest("outputs-then-ready")
 
 		Eventually(func(g Gomega) {
+			readyGrants(g, request)
 			current := readRequest(g, request)
 			outputs := meta.FindStatusCondition(current.Status.Conditions, pluginsv1alpha1.ConditionOutputsReady)
 			ready := meta.FindStatusCondition(current.Status.Conditions, "Ready")
@@ -144,6 +145,33 @@ var _ = Describe("the request reconciler", func() {
 			ready := condition(g, request, "Ready")
 			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(ready.Reason).To(Equal("Healthy"))
+		}).Should(Succeed())
+	})
+
+	It("waits for its grants before it reports Ready", func() {
+		request := createRequest("grant-waiting")
+
+		Eventually(func(g Gomega) {
+			ready := condition(g, request, "Ready")
+			g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(ready.Reason).To(Equal(pluginsv1alpha1.ReasonWaitingForGrants))
+			g.Expect(ready.Message).To(ContainSubstring(pluginkit.GrantName(request.Name, "read")))
+			g.Expect(condition(g, request, pluginsv1alpha1.ConditionOutputsReady).Status).
+				To(Equal(metav1.ConditionTrue))
+			g.Expect(readRequest(g, request).Status.Outputs).To(HaveKeyWithValue("configMap", testRequestName+"-data"))
+		}).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginsv1alpha1.ReasonWaitingForGrants))
+		}).WithTimeout(time.Second).Should(Succeed())
+
+		// The spec plays the identity extension. Only a reconcile that read
+		// this Grant status can write Ready=True.
+		Eventually(func(g Gomega) { readyGrants(g, request) }).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			ready := condition(g, request, "Ready")
+			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(ready.Reason).To(Equal(v1.ReasonHealthy))
 		}).Should(Succeed())
 	})
 
@@ -204,8 +232,27 @@ var _ = Describe("the request reconciler", func() {
 
 		var sc storagev1.StorageClass
 		Expect(k8s.Get(ctx, client.ObjectKey{Name: storageClassName(request)}, &sc)).To(Succeed())
-		Expect(sc.Labels).To(Equal(wantLabels))
+		Expect(sc.Labels).To(Equal(map[string]string{
+			pluginsv1alpha1.LabelRegistration:     testRegistrationName,
+			pluginsv1alpha1.LabelRequest:          testRequestName,
+			pluginsv1alpha1.LabelRequestNamespace: request.Namespace,
+		}))
 		Expect(sc.OwnerReferences).To(BeEmpty())
+	})
+
+	It("labels the cluster-scoped objects of two requests of the same name with their namespaces", func() {
+		a := createRequest("same-name-a")
+		b := createRequest("same-name-b")
+		waitReady(a)
+		waitReady(b)
+
+		var scA, scB storagev1.StorageClass
+		Expect(k8s.Get(ctx, client.ObjectKey{Name: storageClassName(a)}, &scA)).To(Succeed())
+		Expect(k8s.Get(ctx, client.ObjectKey{Name: storageClassName(b)}, &scB)).To(Succeed())
+		Expect(scA.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequest, testRequestName))
+		Expect(scB.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequest, testRequestName))
+		Expect(scA.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequestNamespace, "same-name-a"))
+		Expect(scB.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequestNamespace, "same-name-b"))
 	})
 
 	It("reports a grant that is not ready as GrantRejected and keeps the outputs", func() {

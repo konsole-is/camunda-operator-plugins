@@ -27,12 +27,14 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
+	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
@@ -306,12 +308,36 @@ func updateRequest(request *pluginsv1alpha1.PluginRequest, change func(*pluginsv
 	}).Should(Succeed())
 }
 
-// waitReady waits until Ready of request is True.
+// waitReady sets Ready=True on each Grant of request that has no Ready, as
+// the identity extension would, and waits until Ready of request is True.
 func waitReady(request *pluginsv1alpha1.PluginRequest) {
 	GinkgoHelper()
 	Eventually(func(g Gomega) {
+		readyGrants(g, request)
 		g.Expect(readRequest(g, request).Status.Conditions).To(ContainElement(SatisfyAll(
 			HaveField("Type", "Ready"), HaveField("Status", metav1.ConditionTrue),
 		)))
 	}).Should(Succeed())
+}
+
+// readyGrants sets Ready=True on each Grant of request that has no Ready
+// condition. It never changes a Grant that has one.
+func readyGrants(g Gomega, request *pluginsv1alpha1.PluginRequest) {
+	var list pluginsv1alpha1.GrantList
+	g.Expect(k8s.List(ctx, &list, client.InNamespace(request.Namespace),
+		client.MatchingLabels{pluginsv1alpha1.LabelRequest: request.Name})).To(Succeed())
+
+	for i := range list.Items {
+		grant := &list.Items[i]
+		if meta.FindStatusCondition(grant.Status.Conditions, v1.ConditionReady) != nil {
+			continue
+		}
+		meta.SetStatusCondition(&grant.Status.Conditions, metav1.Condition{
+			Type:    v1.ConditionReady,
+			Status:  metav1.ConditionTrue,
+			Reason:  v1.ReasonHealthy,
+			Message: "Set by the spec, which plays the identity extension",
+		})
+		g.Expect(k8s.Status().Update(ctx, grant)).To(Succeed())
+	}
 }

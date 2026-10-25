@@ -84,8 +84,43 @@ func TestReadyCondition(t *testing.T) {
 			wantMessage: "Grant read is not ready: OverCeiling: too wide",
 		},
 		{
-			name: "a grant without a Ready condition does not count", outputs: outputsReady,
+			name: "a grant without a Ready condition gives WaitingForGrants", outputs: outputsReady,
+			grants:     []pluginsv1alpha1.Grant{healthy, grantWithReady("new", "", "", "")},
+			wantStatus: metav1.ConditionFalse, wantReason: pluginsv1alpha1.ReasonWaitingForGrants,
+			wantMessage: "Grant new waits for the identity extension",
+		},
+		{
+			name: "a grant with Ready=Unknown waits", outputs: outputsReady,
+			grants:     []pluginsv1alpha1.Grant{grantWithReady("new", metav1.ConditionUnknown, "Applying", "")},
+			wantStatus: metav1.ConditionFalse, wantReason: pluginsv1alpha1.ReasonWaitingForGrants,
+			wantMessage: "Grant new waits for the identity extension",
+		},
+		{
+			name: "the first waiting grant by name is named", outputs: outputsReady,
+			grants:     []pluginsv1alpha1.Grant{grantWithReady("z", "", "", ""), grantWithReady("a", "", "", "")},
+			wantStatus: metav1.ConditionFalse, wantReason: pluginsv1alpha1.ReasonWaitingForGrants,
+			wantMessage: "Grant a waits for the identity extension",
+		},
+		{
+			name: "a rejected grant wins over a waiting grant", outputs: outputsReady,
+			grants:     []pluginsv1alpha1.Grant{grantWithReady("a", "", "", ""), rejected},
+			wantStatus: metav1.ConditionFalse, wantReason: pluginsv1alpha1.ReasonGrantRejected,
+			wantMessage: "Grant read is not ready: OverCeiling: too wide",
+		},
+		{
+			name: "a waiting grant wins over the NotReady of the plugin", outputs: outputsReady,
 			grants:     []pluginsv1alpha1.Grant{grantWithReady("new", "", "", "")},
+			notReady:   &Waiting{Reason: "WaitingForEndpoints"},
+			wantStatus: metav1.ConditionFalse, wantReason: pluginsv1alpha1.ReasonWaitingForGrants,
+			wantMessage: "Grant new waits for the identity extension",
+		},
+		{
+			name: "outputs that are not ready win over a waiting grant", outputs: outputsWaiting,
+			grants:     []pluginsv1alpha1.Grant{grantWithReady("new", "", "", "")},
+			wantStatus: metav1.ConditionFalse, wantReason: "WaitingForBucket", wantMessage: "creating",
+		},
+		{
+			name: "no grants give Healthy", outputs: outputsReady,
 			wantStatus: metav1.ConditionTrue, wantReason: v1.ReasonHealthy,
 		},
 		{
