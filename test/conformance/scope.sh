@@ -11,13 +11,17 @@ base=${2:?usage: scope.sh <plugin> <base> <head>}
 head=${3:?usage: scope.sh <plugin> <base> <head>}
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 
+plugins=$(make -s -C "$repo" list-plugins | jq -r '.[]')
 others=()
-for p in $(make -s -C "$repo" list-plugins | jq -r '.[]'); do
+for p in $plugins; do
   [ "$p" = "$plugin" ] && continue
   others+=("cmd/$p/" "internal/${p//-/}/" "charts/$p/" "test/conformance/$p/")
 done
 
+# Both paths of a rename count: the old path can be of this plugin.
+files=$(git -C "$repo" diff --no-renames --name-only "$base...$head")
 while IFS= read -r file; do
+  [ -n "$file" ] || continue
   case "$file" in
     docs/* | *.md) continue ;;
   esac
@@ -26,5 +30,5 @@ while IFS= read -r file; do
   done
   echo true
   exit 0
-done < <(git -C "$repo" diff --name-only "$base...$head")
+done <<< "$files"
 echo false
