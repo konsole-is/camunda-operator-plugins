@@ -204,8 +204,27 @@ var _ = Describe("the request reconciler", func() {
 
 		var sc storagev1.StorageClass
 		Expect(k8s.Get(ctx, client.ObjectKey{Name: storageClassName(request)}, &sc)).To(Succeed())
-		Expect(sc.Labels).To(Equal(wantLabels))
+		Expect(sc.Labels).To(Equal(map[string]string{
+			pluginsv1alpha1.LabelRegistration:     testRegistrationName,
+			pluginsv1alpha1.LabelRequest:          testRequestName,
+			pluginsv1alpha1.LabelRequestNamespace: request.Namespace,
+		}))
 		Expect(sc.OwnerReferences).To(BeEmpty())
+	})
+
+	It("labels the cluster-scoped objects of two requests of the same name with their namespaces", func() {
+		a := createRequest("same-name-a")
+		b := createRequest("same-name-b")
+		waitReady(a)
+		waitReady(b)
+
+		var scA, scB storagev1.StorageClass
+		Expect(k8s.Get(ctx, client.ObjectKey{Name: storageClassName(a)}, &scA)).To(Succeed())
+		Expect(k8s.Get(ctx, client.ObjectKey{Name: storageClassName(b)}, &scB)).To(Succeed())
+		Expect(scA.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequest, testRequestName))
+		Expect(scB.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequest, testRequestName))
+		Expect(scA.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequestNamespace, "same-name-a"))
+		Expect(scB.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequestNamespace, "same-name-b"))
 	})
 
 	It("reports a grant that is not ready as GrantRejected and keeps the outputs", func() {
