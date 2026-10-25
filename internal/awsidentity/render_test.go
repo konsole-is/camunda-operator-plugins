@@ -83,6 +83,24 @@ func TestRenderGrantRendersATemplateParameterFirst(t *testing.T) {
 	assert.JSONEq(t, `{"Resource":"arn:aws:s3:::team-a-x"}`, string(got))
 }
 
+func TestRenderGrantRendersEachTemplateParameterFromTheRequestValues(t *testing.T) {
+	reg := renderRegistration(pluginsv1alpha1.GrantTemplate{
+		Name:     "scoped",
+		Template: raw(`{"Resource":["{{ .parameters.a }}","{{ .parameters.b }}"]}`),
+	})
+	reg.Spec.Parameters = raw(`{"type":"object","properties":{` +
+		`"a":{"type":"string","x-fleet-template":true},"b":{"type":"string","x-fleet-template":true}}}`)
+	req := renderRequest()
+	req.Spec.Parameters = raw(`{"a":"{{ .namespace }}","b":"{{ .parameters.a }}"}`)
+
+	for range 20 {
+		got, err := renderGrant(req, reg, "scoped")
+
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"Resource":["team-a","{{ .namespace }}"]}`, string(got))
+	}
+}
+
 func TestRenderGrantRefusesAnUnknownTemplate(t *testing.T) {
 	_, err := renderGrant(renderRequest(), renderRegistration(), "gone")
 

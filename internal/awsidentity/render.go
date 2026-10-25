@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -106,8 +107,17 @@ func renderTemplateParameters(schema *apiextensionsv1.JSON, data pluginkit.Templ
 		return fmt.Errorf("decoding the parameters schema: %w", err)
 	}
 
+	// Each parameter renders against the values of the request, not against
+	// a parameter that this loop rendered before it, as pluginkit does.
+	values := pluginkit.TemplateData{
+		Namespace:      data.Namespace,
+		Claim:          data.Claim,
+		Request:        data.Request,
+		ServiceAccount: data.ServiceAccount,
+		Parameters:     maps.Clone(data.Parameters),
+	}
 	for name, property := range doc.Properties {
-		value, ok := data.Parameters[name]
+		value, ok := values.Parameters[name]
 		if marked, _ := property[templateMarker].(bool); !marked || !ok {
 			continue
 		}
@@ -117,7 +127,7 @@ func renderTemplateParameters(schema *apiextensionsv1.JSON, data pluginkit.Templ
 			return fmt.Errorf("encoding parameter %q: %w", name, err)
 		}
 
-		rendered, err := pluginkit.RenderJSON(raw, pluginkit.TemplateParameter, data)
+		rendered, err := pluginkit.RenderJSON(raw, pluginkit.TemplateParameter, values)
 		if err != nil {
 			return fmt.Errorf("rendering parameter %q: %w", name, err)
 		}
