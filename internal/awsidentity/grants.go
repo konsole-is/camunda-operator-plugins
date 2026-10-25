@@ -127,9 +127,9 @@ func (p *Plugin) syncGrants(
 
 // clusterGrants returns the Grants of the cluster of request that belong to
 // its claim, read fresh, sorted by creation time and then by name. It also
-// returns, as refused, the policy of each Grant whose request is gone, such
-// as after an Orphan deletion of that request, or does not own it, so that
-// the role keeps the statement that it has for it and gets no new one.
+// returns, as refused, the policy of each Grant whose request is gone, does
+// not own it, or is of another claim, so that the role keeps the statement
+// that it has for it and gets no new one.
 func (p *Plugin) clusterGrants(
 	ctx context.Context,
 	request *pluginsv1alpha1.PluginRequest,
@@ -158,20 +158,16 @@ func (p *Plugin) clusterGrants(
 		if err != nil {
 			return nil, nil, err
 		}
-		if owner == nil || !owns(owner, &g) {
+		if owner == nil || !owns(owner, &g) || owner.Spec.ClaimRef != request.Spec.ClaimRef {
 			retained = append(retained, grantPolicy{
 				grant:  g.Name,
 				policy: policyName(g.Name),
 				refused: rejected(
-					"The request of the Grant is gone, or it is not of the registration and cluster of the Grant",
+					"The request of the Grant is gone, or it is not of the claim, registration, and cluster of the Grant",
 				),
 			})
 			continue
 		}
-		if owner.Spec.ClaimRef != request.Spec.ClaimRef {
-			continue
-		}
-
 		matches, err := p.matchesTemplate(ctx, &g, owner)
 		if err != nil {
 			return nil, nil, err
