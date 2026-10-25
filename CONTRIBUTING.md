@@ -4,8 +4,8 @@ This guide gives the rules for a plugin in this repository. The maintainers and 
 
 ## 1. What a plugin is
 
-1. A plugin has one directory in each of these places: `cmd/<plugin>/`, `internal/<plugin>/`, and `charts/<plugin>/`. It also has one page, `docs/plugins/<plugin>.md`.
-2. To start a new plugin, copy the four parts of an existing plugin and rename them, for example `cmd/gateway-access/`, `internal/gatewayaccess/`, `charts/gateway-access/`, and `docs/plugins/gateway-access.md`.
+1. A plugin has one directory in each of these places: `cmd/<plugin>/`, `internal/<plugin>/`, `charts/<plugin>/`, and `test/conformance/<plugin>/`. It also has one page, `docs/plugins/<plugin>.md`.
+2. To start a new plugin, copy the five parts of an existing plugin and rename them, for example `cmd/gateway-access/`, `internal/gatewayaccess/`, `charts/gateway-access/`, `test/conformance/gateway-access/`, and `docs/plugins/gateway-access.md`.
 3. Code that two or more plugins use goes in `pkg/`.
 4. A plugin serves its requests through `pkg/pluginkit`. See [`docs/pluginkit.md`](docs/pluginkit.md).
 5. All plugins are in one Go module. A release gives every plugin the version of the repository.
@@ -14,7 +14,7 @@ This guide gives the rules for a plugin in this repository. The maintainers and 
 
 A maintainer approves a plugin when all of these rules are true:
 
-1. The plugin passes the conformance suite of the operator in CI.
+1. The plugin passes the conformance suite of the operator in CI, in its job of the Conformance workflow. See [section 6](#6-the-conformance-job).
 2. The plugin has its own unit tests and its own envtest suite, and CI passes.
 3. The plugin has a docs page in `docs/plugins/`.
 4. The plugin imports only the published plugin API of the operator. That API is the module `github.com/konsole-is/camunda-operator/api`, and the conformance module in tests. `make lint` refuses an import of another package of the operator, and a `go.mod` that requires the root module of the operator.
@@ -23,7 +23,7 @@ A maintainer approves a plugin when all of these rules are true:
 ## 3. Code owner
 
 1. The contributor of a plugin becomes its code owner.
-2. The pull request that adds the plugin adds one line to `.github/CODEOWNERS` for each of its four paths.
+2. The pull request that adds the plugin adds one line to `.github/CODEOWNERS` for each of its five paths.
 3. The code owner reviews each change to the plugin.
 
 ## 4. Deprecation and removal
@@ -45,12 +45,35 @@ A maintainer approves a plugin when all of these rules are true:
 
 `make chart-verify` checks these rules for the chart of each plugin.
 
-## 6. Before you open a pull request
+## 6. The conformance job
+
+The workflow `.github/workflows/conformance.yml` has one job for each plugin, `Conformance of <plugin>`. The job creates a kind cluster, installs the operator from its chart, installs the chart of the plugin, and runs the conformance suite of the operator against one registration of the plugin. The operator is built from the commit that the api module of `go.mod` names.
+
+The job runs on each push to `main` and on each pull request. On a pull request that changes only the docs, Markdown files, or the files of other plugins, the job stops after its first steps, and its check passes.
+
+To add the job of a new plugin:
+
+1. Add the name of the plugin, the directory name in `cmd/`, as one line to `matrix.plugin` in `.github/workflows/conformance.yml`.
+2. Add the directory `test/conformance/<plugin>/` with these three files:
+
+    | File | What it holds |
+    | --- | --- |
+    | `setup.sh` | An executable script that installs what the plugin needs before its chart, such as a Gateway API implementation or a storage server, and creates the targets of the requests. The scripts in `test/kind/` install the shared parts. |
+    | `values.yaml` | The chart values of the run. The job sets the image of the plugin. |
+    | `config.yaml` | The config of `plugin-conformance`: the registration, the namespace, the cases, and the timeouts. |
+
+3. A maintainer then makes the check `Conformance of <plugin>` required for the `main` branch.
+
+Copy `test/conformance/gateway-access/` or `test/conformance/rustfs/` as a start. `setup.sh` runs with `kubectl` and `helm` pointed at the kind cluster, from the root of the repository. It gets `CHART_NAMESPACE`, the namespace of the release, in its environment.
+
+`make conformance-kind PLUGIN=<plugin>` runs the job on your machine, after `make operator-source`. It needs Docker, kind, kubebuilder, kubectl, and helm. It creates the kind cluster `camunda-operator-plugins` and leaves it after the run. Delete it with `kind delete cluster --name camunda-operator-plugins`.
+
+## 7. Before you open a pull request
 
 1. Run `make lint`, `make test`, `make chart-verify`, and `make lint-renovate`. Each one must pass.
 2. Write the commit subjects and the pull request title as `<type>(<area>): <imperative summary>`. The types are `feat`, `fix`, `refactor`, `test`, `chore`, and `docs`.
 
-## 7. Releases
+## 8. Releases
 
 1. A maintainer publishes a GitHub release with a tag `vX.Y.Z`.
 2. The release publishes the image and the chart of every plugin, all at version `X.Y.Z`.

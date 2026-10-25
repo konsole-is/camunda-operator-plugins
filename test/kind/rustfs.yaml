@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustfs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rustfs
+  template:
+    metadata:
+      labels:
+        app: rustfs
+    spec:
+      containers:
+        - name: rustfs
+          image: rustfs/rustfs:__RUSTFS_VERSION__
+          ports:
+            - containerPort: 9000
+              name: api
+          env:
+            - name: RUSTFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rustfs-admin
+                  key: accessKey
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rustfs-admin
+                  key: secretKey
+            - name: RUSTFS_CONSOLE_ENABLE
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: api
+            periodSeconds: 2
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustfs
+spec:
+  selector:
+    app: rustfs
+  ports:
+    - port: 9000
+      targetPort: api

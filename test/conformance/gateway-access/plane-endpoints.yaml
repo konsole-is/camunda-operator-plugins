@@ -1,0 +1,28 @@
+# The status.endpoints that the operator would publish for a management plane.
+status:
+  endpoints:
+    - name: console
+      service: conf-plane-console
+      port: 8080
+      pathPrefix: /console
+      protocol: HTTP
+    - name: identity
+      service: conf-plane-identity
+      port: 8084
+      pathPrefix: /identity
+      protocol: HTTP
+    - name: keycloak
+      service: conf-plane-keycloak
+      port: 8080
+      pathPrefix: /auth
+      protocol: HTTP
+    - name: web-modeler
+      service: conf-plane-web-modeler-webapp
+      port: 8070
+      pathPrefix: /modeler
+      protocol: HTTP
+    - name: web-modeler-websockets
+      service: conf-plane-web-modeler-websockets
+      port: 8060
+      pathPrefix: /modeler-ws
+      protocol: HTTP

@@ -1,0 +1,117 @@
+name: Conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Each plugin gets its own job and its own kind cluster. The job runs on
+  # every pull request, so that its check reports and can be required. A
+  # pull request that touches only the docs or other plugins ends it after
+  # the scope step, with the check green.
+  conformance:
+    name: Conformance of ${{ matrix.plugin }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One line for each plugin, and test/conformance/<plugin>/ for its
+        # setup. See CONTRIBUTING.md.
+        plugin:
+          - gateway-access
+          - rustfs
+    env:
+      PLUGIN: ${{ matrix.plugin }}
+      KIND_CLUSTER: conformance
+      CONFORMANCE_REPORT: ${{ github.workspace }}/conformance-report/${{ matrix.plugin }}.xml
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Check if the change can affect the plugin
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" != pull_request ]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          run=$(test/conformance/scope.sh "${PLUGIN}" "${BASE}" "${HEAD}")
+          echo "run=${run}" >> "${GITHUB_OUTPUT}"
+          if [ "${run}" = false ]; then
+            echo "The change touches nothing that the conformance run of ${PLUGIN} uses." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      # The operator on kind is built from the commit that the api module of
+      # go.mod names, so its CRDs are those that the plugin is built against.
+      - name: Check out the operator at the api ref
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          echo "OPERATOR_DIR=${RUNNER_TEMP}/camunda-operator" >> "${GITHUB_ENV}"
+          OPERATOR_DIR="${RUNNER_TEMP}/camunda-operator" hack/ci-retry.sh make operator-source
+
+      # kind and kubebuilder install the versions of .tool-versions of the
+      # operator, as its own kind jobs do.
+      - name: Install kind and kubebuilder
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          KIND_VERSION=$(awk '$1 == "kind" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
+          curl -fsSLo ./kind --retry 5 --retry-delay 10 --retry-all-errors \
+            "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-$(go env GOARCH)"
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+          KUBEBUILDER_VERSION=$(awk '$1 == "kubebuilder" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
+          curl -fsSL -o kubebuilder --retry 5 --retry-delay 10 --retry-all-errors \
+            "https://github.com/kubernetes-sigs/kubebuilder/releases/download/v${KUBEBUILDER_VERSION}/kubebuilder_$(go env GOOS)_$(go env GOARCH)"
+          chmod +x kubebuilder && sudo mv kubebuilder /usr/local/bin/
+          kind version
+          kubebuilder version
+
+      - name: Install Helm
+        if: steps.scope.outputs.run == 'true'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+
+      - name: Run the conformance suite on kind
+        if: steps.scope.outputs.run == 'true'
+        run: make conformance-kind
+
+      - name: Upload the conformance report
+        if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-${{ matrix.plugin }}
+          path: conformance-report/
+          if-no-files-found: warn
+
+      - name: Read the kind cluster
+        if: ${{ failure() && steps.scope.outputs.run == 'true' }}
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get pluginregistrations,pluginrequests,grants -A -o yaml || true
+          kubectl get gateways,httproutes,grpcroutes -A -o yaml || true
+          for target in \
+            "camunda-operator-system deployment/camunda-operator-controller-manager" \
+            "camunda-operator-plugins deployment/${PLUGIN}"; do
+            read -r namespace workload <<< "${target}"
+            echo "=== logs of ${workload} in ${namespace}"
+            kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
+          done
