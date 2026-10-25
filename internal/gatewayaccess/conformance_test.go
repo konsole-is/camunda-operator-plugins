@@ -109,7 +109,17 @@ var _ = Describe("the conformance suite", func() {
 			}
 		}
 		// DELETE-ORPHAN skips itself: the registration offers Delete only.
-		Expect(skipped).To(ConsistOf(conformance.ReqLogs, conformance.OrderRegistrationFirst, conformance.DeleteOrphan))
+		// The grant checks skip themselves: the registration has no grant
+		// templates.
+		Expect(skipped).To(ConsistOf(
+			conformance.ReqLogs,
+			conformance.OrderRegistrationFirst,
+			conformance.DeleteOrphan,
+			conformance.GrantMatch,
+			conformance.GrantRequires,
+			conformance.GrantAdmission,
+			conformance.GrantReady,
+		))
 		Expect(results).To(ContainElement(And(
 			HaveField("ID", conformance.DeleteRoutes),
 			HaveField("Outcome", conformance.OutcomePassed),
