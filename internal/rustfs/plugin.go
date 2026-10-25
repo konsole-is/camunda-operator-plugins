@@ -114,7 +114,9 @@ func (p *Plugin) Reconcile(
 	req pluginkit.Request[Params, map[string]string],
 ) (pluginkit.Result, error) {
 	name := resourceName(req.Object.Namespace, req.Object.Name)
-	var changed repairs
+	// Before the first output, a create is the first one, or the retry of a
+	// reconcile that failed.
+	changed := repairs{served: req.Object.Status.Outputs[outputObjectStorageConfig] != ""}
 
 	created, err := p.buckets.EnsureBucket(ctx, name)
 	if err != nil {
@@ -126,19 +128,12 @@ func (p *Plugin) Reconcile(
 	}
 
 	if changed.policy, err = p.ensurePolicy(ctx, req, name); err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: changed.corrected(name)}, err
 	}
 
 	key, err := p.ensureUser(ctx, req, name, &changed)
 	if err != nil {
-		return pluginkit.Result{}, err
-	}
-
-	// Before the first output, a create is the first one, or the retry of a
-	// reconcile that failed.
-	var corrected []string
-	if req.Object.Status.Outputs[outputObjectStorageConfig] != "" {
-		corrected = changed.corrected(name)
+		return pluginkit.Result{Corrected: changed.corrected(name)}, err
 	}
 
 	size, sizeKnown, sizeErr := p.bucketSize(ctx, name)
@@ -153,18 +148,24 @@ func (p *Plugin) Reconcile(
 		Links:        links(p.settings.ConsoleURL),
 		Resources:    resources(name, p.settings.Endpoint, req.Object.Name),
 		RequeueAfter: sizeRequeue,
-		Corrected:    corrected,
+		Corrected:    changed.corrected(name),
 	}, nil
 }
 
 // repairs is what one reconcile created or attached in RustFS.
 type repairs struct {
+	served                         bool
 	bucket, policy, user, attached bool
 }
 
-// corrected names each repair of the RustFS objects name. A policy attached
-// to a created user is part of the create.
+// corrected names each repair of the RustFS objects name, or none when the
+// request was not served before. A policy attached to a created user is part
+// of the create.
 func (c repairs) corrected(name string) []string {
+	if !c.served {
+		return nil
+	}
+
 	var out []string
 	if c.bucket {
 		out = append(out, "created the bucket "+name+", which was gone")

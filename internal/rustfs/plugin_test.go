@@ -196,6 +196,29 @@ var _ = Describe("the rustfs plugin", func() {
 		}, timeout).Should(Succeed())
 	})
 
+	It("reports a bucket that it created again when a later step fails", func() {
+		ns := newNamespace()
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
+		readyRequest(request)
+		name := resourceName(ns, request.Name)
+
+		_, err := fake.DeleteBucket(ctx, name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fake.RemoveUser(ctx, name)).To(Succeed())
+		fake.fail("AddUser", errors.New("RustFS refused the user"))
+		DeferCleanup(func() { fake.heal("AddUser") })
+		touch(request)
+
+		Eventually(func(g Gomega) {
+			read := readRequest(g, request)
+			g.Expect(condition(read.Status.Conditions, v1.ConditionReady).Reason).To(Equal(pluginkit.ReasonReconcileError))
+			events := driftEvents(g, request)
+			g.Expect(events).To(HaveLen(1))
+			g.Expect(events[0].Note).To(ContainSubstring("created the bucket " + name + ", which was gone"))
+			g.Expect(read.Status.Summary).To(ContainElement(HaveField("Label", "Last drift corrected")))
+		}, timeout).Should(Succeed())
+	})
+
 	It("attaches the policy again when it was detached in RustFS, and reports the drift", func() {
 		ns := newNamespace()
 		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
