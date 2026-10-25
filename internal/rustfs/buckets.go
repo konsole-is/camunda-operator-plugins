@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -67,6 +68,9 @@ func newBucketClient(endpoint, region, accessKey, secretKey string) *bucketClien
 		Region:       region,
 		UsePathStyle: true,
 		Credentials:  credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
+		// The SDK sets no read timeout for S3, so a stalled connection holds
+		// the reconcile without one.
+		HTTPClient: awshttp.NewBuildableClient().WithTimeout(callTimeout),
 		// An S3-compatible store need not accept the checksums that the SDK
 		// adds by default.
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,

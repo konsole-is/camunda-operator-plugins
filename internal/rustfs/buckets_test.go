@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
@@ -182,4 +183,13 @@ func TestDeleteBucketOfAMissingBucket(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, deleted)
 	assert.Zero(t, f.deleteCalls)
+}
+
+func TestNewBucketClientBoundsEachCall(t *testing.T) {
+	c := newBucketClient("http://rustfs:9000", "us-east-1", "admin", "admin-secret")
+	client, ok := c.api.(*s3.Client)
+	require.True(t, ok)
+	httpClient, ok := client.Options().HTTPClient.(*awshttp.BuildableClient)
+	require.True(t, ok, "the S3 client has a timeout of its own")
+	assert.Equal(t, callTimeout, httpClient.GetTimeout())
 }

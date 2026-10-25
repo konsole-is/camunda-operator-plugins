@@ -75,8 +75,8 @@ type userInfo struct {
 // JSON. The MinIO prefix /minio/admin/v3 encrypts them.
 const adminPath = "rustfs/admin/v3"
 
-// adminTimeout bounds one call of the admin API.
-const adminTimeout = 30 * time.Second
+// callTimeout bounds one call of RustFS, of the admin API or of the S3 API.
+const callTimeout = 30 * time.Second
 
 // adminClient calls the RustFS admin API with an admin access key.
 type adminClient struct {
@@ -99,7 +99,7 @@ func newAdminClient(endpoint, region, accessKey, secretKey string) (*adminClient
 		endpoint: u,
 		region:   region,
 		creds:    aws.Credentials{AccessKeyID: accessKey, SecretAccessKey: secretKey},
-		http:     &http.Client{Timeout: adminTimeout},
+		http:     &http.Client{Timeout: callTimeout},
 		signer:   v4.NewSigner(),
 	}, nil
 }
