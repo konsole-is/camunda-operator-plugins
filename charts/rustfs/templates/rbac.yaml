@@ -73,9 +73,6 @@ rules:
   - apiGroups: ["plugins.camunda.io"]
     resources: ["grants"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["events.k8s.io"]
-    resources: ["events"]
-    verbs: ["create", "patch"]
   # pluginkit watches the Secrets and the ObjectStorageConfigs that the
   # controller writes through the cache of the manager, which lists them in
   # every namespace.
