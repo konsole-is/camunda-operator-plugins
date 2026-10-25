@@ -24,17 +24,36 @@ import (
 )
 
 func TestRoleNameFitsIAMForLongNamespacesAndClaims(t *testing.T) {
-	name := RoleName("camunda", strings.Repeat("n", 63), strings.Repeat("c", 253))
+	name := RoleName(
+		"camunda",
+		"oidc.eks.eu-west-1.amazonaws.com/id/ABC",
+		strings.Repeat("n", 63),
+		strings.Repeat("c", 253),
+	)
 
 	assert.LessOrEqual(t, len(name), 64)
 	assert.Regexp(t, `^camunda-[0-9a-f]{16}$`, name)
 }
 
-func TestRoleNameDiffersForEachNamespaceAndClaim(t *testing.T) {
-	assert.Equal(t, RoleName("camunda", "team-a", "orders"), RoleName("camunda", "team-a", "orders"))
-	assert.NotEqual(t, RoleName("camunda", "team-a", "orders"), RoleName("camunda", "team-b", "orders"))
-	assert.NotEqual(t, RoleName("camunda", "a-b", "c"), RoleName("camunda", "a", "b-c"))
-	assert.NotEqual(t, RoleName("camunda", "team-a", "orders"), RoleName("camunda-connectors", "team-a", "orders"))
+func TestRoleNameDiffersForEachScopeNamespaceAndClaim(t *testing.T) {
+	assert.Equal(t, RoleName("camunda", "eks-1", "team-a", "orders"), RoleName("camunda", "eks-1", "team-a", "orders"))
+	assert.NotEqual(
+		t,
+		RoleName("camunda", "eks-1", "team-a", "orders"),
+		RoleName("camunda", "eks-2", "team-a", "orders"),
+	)
+	assert.NotEqual(
+		t,
+		RoleName("camunda", "eks-1", "team-a", "orders"),
+		RoleName("camunda", "eks-1", "team-b", "orders"),
+	)
+	assert.NotEqual(t, RoleName("camunda", "eks-1", "a-b", "c"), RoleName("camunda", "eks-1", "a", "b-c"))
+	assert.NotEqual(t, RoleName("camunda", "e", "ks/a", "b"), RoleName("camunda", "e/ks", "a", "b"))
+	assert.NotEqual(
+		t,
+		RoleName("camunda", "eks-1", "team-a", "orders"),
+		RoleName("camunda-connectors", "eks-1", "team-a", "orders"),
+	)
 }
 
 func TestFitNameKeepsAShortNameAndCutsALongOne(t *testing.T) {

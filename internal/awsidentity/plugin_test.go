@@ -106,6 +106,28 @@ func TestWritePoliciesFreesTheSpaceOfARemovedPolicyBeforeItPuts(t *testing.T) {
 	assert.Equal(t, []string{"grant-new"}, slices.Collect(maps.Keys(got.InlinePolicies)))
 }
 
+func TestWritePoliciesAppliesAGrowthThatAShrinkMadeRoomFor(t *testing.T) {
+	p, fake, role := newTestRole(t)
+	a, b := policyOfSize(t, 5000), policyOfSize(t, 5000)
+	require.NoError(t, awskit.PutInlinePolicy(context.Background(), fake, role.Name, "grant-a", a))
+	require.NoError(t, awskit.PutInlinePolicy(context.Background(), fake, role.Name, "grant-b", b))
+
+	plan, put, _, err := p.writePolicies(
+		context.Background(),
+		role,
+		map[string][]byte{"grant-a": a, "grant-b": b},
+		[]grantPolicy{
+			{grant: "a", policy: "grant-a", doc: policyOfSize(t, 6000)},
+			{grant: "b", policy: "grant-b", doc: policyOfSize(t, 4000)},
+		},
+	)
+
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"grant-a", "grant-b"}, put)
+	assert.Equal(t, metav1.ConditionTrue, plan.applied["a"].status, plan.applied["a"].message)
+	assert.Equal(t, 10000, plan.size)
+}
+
 func TestWritePoliciesPlansAgainAfterIAMRefusesADocument(t *testing.T) {
 	p, fake, role := newTestRole(t)
 	fake.FailNext("PutRolePolicy", &smithy.GenericAPIError{Code: "MalformedPolicyDocument", Message: "bad"})
@@ -122,6 +144,26 @@ func TestWritePoliciesPlansAgainAfterIAMRefusesADocument(t *testing.T) {
 	assert.Contains(t, plan.applied["big"].message, "bad")
 	assert.Equal(t, metav1.ConditionTrue, plan.applied["small"].status, plan.applied["small"].message)
 	assert.Equal(t, 500, plan.size)
+}
+
+func TestRoleNameDiffersForTwoEKSClusters(t *testing.T) {
+	request := &pluginsv1alpha1.PluginRequest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"},
+		Spec:       pluginsv1alpha1.PluginRequestSpec{ClaimRef: pluginsv1alpha1.ClaimRef{Name: "orders"}},
+	}
+	other := validOptions()
+	other.OIDCProviderARN = "arn:aws:iam::111122223333:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/DEF"
+	podIdentity := validOptions()
+	podIdentity.Mode = awskit.ModePodIdentity
+	names := map[string]bool{}
+
+	for _, opts := range []Options{validOptions(), other, podIdentity} {
+		p, err := newPlugin(opts)
+		require.NoError(t, err)
+		names[p.roleName(request)] = true
+	}
+
+	assert.Len(t, names, 3)
 }
 
 func TestNewPluginAcceptsEachMode(t *testing.T) {

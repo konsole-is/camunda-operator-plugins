@@ -41,7 +41,9 @@ import (
 
 // hub is one manager of the suite, with its AWS fakes.
 type hub struct {
-	registration   string
+	registration string
+	// scope is the EKS cluster identity that role names hash.
+	scope          string
 	serviceAccount pluginsv1alpha1.ServiceAccountRef
 	mgr            ctrl.Manager
 	iam            *awsfake.IAM
@@ -98,16 +100,25 @@ var _ = AfterSuite(func() {
 	Expect(testEnv.Stop()).To(Succeed())
 })
 
+// roleName is the name of the role of the claim orders in namespace.
+func (h *hub) roleName(namespace string) string {
+	return awskit.RoleName("camunda", h.scope, namespace, "orders")
+}
+
 // newHub returns a manager of mode that serves the registration name, with
 // fakes in which the boundary exists.
 func newHub(mode awskit.Mode, registration string) *hub {
 	h := &hub{
 		registration:   registration,
 		serviceAccount: pluginsv1alpha1.ServiceAccountRef{Namespace: pluginNamespace, Name: registration},
+		scope:          issuer,
 		iam:            awsfake.NewIAM(),
 		eks:            awsfake.NewEKS(),
 	}
 	h.iam.AddPolicy(boundary)
+	if mode == awskit.ModePodIdentity {
+		h.scope = eksCluster
+	}
 
 	var err error
 	h.mgr, err = awsidentity.NewManager(restConfig, awsidentity.Options{

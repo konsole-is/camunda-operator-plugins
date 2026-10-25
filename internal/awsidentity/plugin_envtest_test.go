@@ -62,7 +62,7 @@ func conditionOf(conditions []metav1.Condition, conditionType string) metav1.Con
 // roleOf returns the role of the claim orders in namespace from the fakes
 // of h.
 func roleOf(g Gomega, h *hub, namespace string) awsfake.Role {
-	role, ok := h.iam.Role(awskit.RoleName("camunda", namespace, "orders"))
+	role, ok := h.iam.Role(h.roleName(namespace))
 	g.Expect(ok).To(BeTrue(), "the role of %s/orders exists", namespace)
 	return role
 }
@@ -383,7 +383,7 @@ var _ = Describe("the AWS identity hub", func() {
 		Eventually(func(g Gomega) {
 			err := irsa.mgr.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(s.hub), s.hub.DeepCopy())
 			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-			_, ok := irsa.iam.Role(awskit.RoleName("camunda", s.namespace, "orders"))
+			_, ok := irsa.iam.Role(irsa.roleName(s.namespace))
 			g.Expect(ok).To(BeFalse())
 		}, timeout).Should(Succeed())
 	})
@@ -405,7 +405,7 @@ var _ = Describe("the AWS identity hub", func() {
 			err := irsa.mgr.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(s.hub), s.hub.DeepCopy())
 			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		}, timeout).Should(Succeed())
-		role, ok := irsa.iam.Role(awskit.RoleName("camunda", s.namespace, "orders"))
+		role, ok := irsa.iam.Role(irsa.roleName(s.namespace))
 		Expect(ok).To(BeTrue())
 		Expect(role.InlinePolicies).To(HaveKey("grant-orders-backup-read"))
 	})
@@ -419,7 +419,7 @@ var _ = Describe("the AWS identity hub", func() {
 		}, timeout).Should(Succeed())
 
 		_, err := podIdentity.iam.DeleteRole(ctx, &iam.DeleteRoleInput{
-			RoleName: aws.String(awskit.RoleName("camunda", ns, "orders")),
+			RoleName: aws.String(podIdentity.roleName(ns)),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8s.Delete(ctx, request)).To(Succeed())
@@ -461,7 +461,7 @@ var _ = Describe("the AWS identity hub", func() {
 			for _, a := range podIdentity.eks.Associations() {
 				g.Expect(a.Namespace).NotTo(Equal(ns))
 			}
-			_, ok := podIdentity.iam.Role(awskit.RoleName("camunda", ns, "orders"))
+			_, ok := podIdentity.iam.Role(podIdentity.roleName(ns))
 			g.Expect(ok).To(BeFalse())
 		}, timeout).Should(Succeed())
 	})

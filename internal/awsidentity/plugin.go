@@ -243,8 +243,14 @@ func (p *Plugin) ensureRole(
 	return role, nil
 }
 
+// roleName is the role of the claim of request. The OIDC issuer names one
+// EKS cluster, and the EKS cluster name names one in its region.
 func (p *Plugin) roleName(request *pluginsv1alpha1.PluginRequest) string {
-	return awskit.RoleName(rolePrefix, request.Namespace, request.Spec.ClaimRef.Name)
+	scope := p.provider.Issuer
+	if p.mode == awskit.ModePodIdentity {
+		scope = p.eksCluster
+	}
+	return awskit.RoleName(rolePrefix, scope, request.Namespace, request.Spec.ClaimRef.Name)
 }
 
 // ensureAssociations keeps one Pod Identity association of role for each of

@@ -29,11 +29,12 @@ const (
 )
 
 // RoleName returns the name of the role of a claim: prefix, a dash, and 16
-// hex digits of a hash of the namespace and the claim. Two pairs of namespace
-// and claim get two names. The name fits the 64 characters of IAM when prefix
-// has at most 47.
-func RoleName(prefix, namespace, claim string) string {
-	sum := sha256.Sum256([]byte(namespace + "/" + claim))
+// hex digits. scope names the Kubernetes cluster, such as the OIDC issuer of
+// an EKS cluster, because two clusters in one AWS account can have the same
+// namespace and claim. Two sets of scope, namespace, and claim get two names.
+// The name fits the 64 characters of IAM when prefix has at most 47.
+func RoleName(prefix, scope, namespace, claim string) string {
+	sum := sha256.Sum256([]byte(scope + "\n" + namespace + "/" + claim))
 	return prefix + "-" + hex.EncodeToString(sum[:])[:16]
 }
 

@@ -11,7 +11,7 @@ The chart installs one registration, by the chart value `mode`:
 
 For each request, the plugin creates one IAM role:
 
-- The name is `camunda-<hash>`, with 16 hex digits of a hash of the namespace and the claim. Two claims never share a role.
+- The name is `camunda-<hash>`, with 16 hex digits of a hash of the EKS cluster (its OIDC issuer with IRSA, its name with Pod Identity), the namespace, and the claim. Two claims never share a role. Two EKS clusters in one AWS account get two roles for the same namespace and claim, unless they use Pod Identity and have the same name in two regions.
 - The permissions boundary is the chart value `permissionsBoundaryArn`, on every role.
 - The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request.
 - The role trusts `spec.target.serviceAccountName` of the request (the ServiceAccount of the cluster, `<claim>-camunda`) and each name in `spec.target.additionalServiceAccounts` (for example `<claim>-es-es` of the built-in Elasticsearch). It trusts no other ServiceAccount. The claim controller fills both fields. The plugin does not add names itself.
