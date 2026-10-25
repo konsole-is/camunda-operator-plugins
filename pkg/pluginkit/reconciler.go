@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,6 +51,17 @@ const (
 	outputsComponent = "outputs"
 	conflictRequeue  = time.Second
 )
+
+// The event and the summary item of a corrected drift.
+const (
+	eventReasonDriftCorrected = "DriftCorrected"
+	eventActionUpdate         = "Update"
+	labelDriftCorrected       = "Last drift corrected"
+)
+
+// resyncJitter is the largest part of Config.Resync that pluginkit adds to
+// it at random.
+const resyncJitter = 0.1
 
 // kindGrant is the kind of a status.resources row of a Grant.
 const kindGrant = "Grant"
@@ -172,6 +185,11 @@ func (r *reconciler[P, I]) serve(
 		return ctrl.Result{}, err
 	}
 
+	if len(res.Corrected) > 0 {
+		r.events.Eventf(request, nil, corev1.EventTypeNormal, eventReasonDriftCorrected, eventActionUpdate,
+			"Corrected drift outside the cluster: %s", strings.Join(res.Corrected, "; "))
+	}
+
 	if res.Pending != nil {
 		current, err := r.grantsOf(ctx, request)
 		if err != nil {
@@ -184,7 +202,7 @@ func (r *reconciler[P, I]) serve(
 		stageResult(request, res)
 		stage(request, pluginsv1alpha1.ConditionOutputsReady, res.Pending.Reason, res.Pending.Message)
 		r.stageReady(request, nil, nil)
-		return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter(res.RequeueAfter, r.cfg.Resync)}, nil
 	}
 
 	data.Outputs = res.Outputs
@@ -216,7 +234,22 @@ func (r *reconciler[P, I]) serve(
 
 	r.stageReady(request, current, res.NotReady)
 
-	return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter(res.RequeueAfter, r.cfg.Resync)}, nil
+}
+
+// requeueAfter returns the time after which a served request reconciles
+// again: requested, the RequeueAfter of the plugin, or a time between resync
+// and 10% more when that comes first. Zero means no requeue.
+func requeueAfter(requested, resync time.Duration) time.Duration {
+	if resync == 0 {
+		return requested
+	}
+
+	jittered := wait.Jitter(resync, resyncJitter)
+	if requested > 0 && requested < jittered {
+		return requested
+	}
+	return jittered
 }
 
 // templateData returns the placeholder values of request, without outputs.
@@ -474,11 +507,14 @@ func (r *reconciler[P, I]) grantsOf(
 	return list.Items, nil
 }
 
-// stageResult stages the status fields that the plugin returned.
+// stageResult stages the status fields that the plugin returned, and the
+// summary item of the last corrected drift.
 func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
+	now := time.Now()
+	summary := withDriftItem(res.Summary, request.Status.Summary, len(res.Corrected) > 0, now)
+
 	// The CRD defaults an empty severity to Info, so the stored summary
 	// compares equal only with the same default.
-	summary := slices.Clone(res.Summary)
 	for i := range summary {
 		if summary[i].Severity == "" {
 			summary[i].Severity = pluginsv1alpha1.SeverityInfo
@@ -488,7 +524,7 @@ func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
 	if !equality.Semantic.DeepEqual(request.Status.Summary, summary) {
 		request.Status.SummaryTime = nil
 		if len(summary) > 0 {
-			request.Status.SummaryTime = &metav1.Time{Time: time.Now()}
+			request.Status.SummaryTime = &metav1.Time{Time: now}
 		}
 	}
 
@@ -497,4 +533,28 @@ func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
 	request.Status.Links = res.Links
 	request.Status.PodSelector = res.PodSelector
 	request.Status.Resources = res.Resources
+}
+
+// withDriftItem returns summary with the item "Last drift corrected": the time
+// now when corrected, or else the item of previous, the stored summary. It
+// returns a copy of summary without the item when neither has one.
+func withDriftItem(
+	summary, previous []pluginsv1alpha1.SummaryItem,
+	corrected bool,
+	now time.Time,
+) []pluginsv1alpha1.SummaryItem {
+	all := slices.Clone(summary)
+	if corrected {
+		return append(all, pluginsv1alpha1.SummaryItem{
+			Label: labelDriftCorrected,
+			Value: now.UTC().Format(time.RFC3339),
+		})
+	}
+
+	for _, item := range previous {
+		if item.Label == labelDriftCorrected {
+			return append(all, item)
+		}
+	}
+	return all
 }

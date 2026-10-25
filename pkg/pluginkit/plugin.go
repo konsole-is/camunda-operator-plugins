@@ -109,7 +109,14 @@ type Result struct {
 	// the request that Resources does not list.
 	Resources []pluginsv1alpha1.ResourceRef
 	// RequeueAfter, when not zero, reconciles the request again after it.
+	// When Config.Resync comes first, the resync wins.
 	RequeueAfter time.Duration
+	// Corrected names each change that the reconcile made outside the cluster
+	// to repair drift, such as a deleted bucket policy that it wrote again.
+	// The first create of a resource is not drift. When it is not empty,
+	// pluginkit records the event DriftCorrected on the request and sets the
+	// summary item "Last drift corrected" to the time.
+	Corrected []string
 }
 
 // Waiting is the reason and the message of a False condition.
@@ -142,6 +149,11 @@ type Config struct {
 	// HealthInterval is the time between two health checks. Zero is 30
 	// seconds.
 	HealthInterval time.Duration
+	// Resync, when not zero, reconciles each served request again after a
+	// time between Resync and 10% more, so that drift outside the cluster is
+	// corrected. A shorter Result.RequeueAfter wins. Zero is no resync, and
+	// Setup refuses a negative Resync.
+	Resync time.Duration
 	// Watches reconciles requests again when objects that the plugin does
 	// not own change, for example a Secret that a request names. Each kind
 	// must be in the scheme of the manager, and the ServiceAccount of the

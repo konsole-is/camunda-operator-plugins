@@ -52,6 +52,7 @@ var (
 	testEnv *envtest.Environment
 	k8s     client.Client
 	plugin  *testPlugin
+	drift   = &driftPlugin{values: map[string]string{}}
 	health  = &healthKnob{}
 	logs    = &syncBuffer{}
 )
@@ -106,6 +107,14 @@ var _ = BeforeSuite(func() {
 		Health:         health.check,
 		HealthInterval: 200 * time.Millisecond,
 	}, plugin)).To(Succeed())
+
+	Expect(pluginkit.Setup(mgr, pluginkit.Config{
+		Name:           "drift-plugin",
+		Version:        "1.2.3",
+		Registrations:  []pluginsv1alpha1.PluginRegistration{driftRegistration()},
+		ServiceAccount: pluginsv1alpha1.ServiceAccountRef{Namespace: "plugins", Name: "drift-plugin"},
+		Resync:         driftResync,
+	}, drift)).To(Succeed())
 
 	go func() {
 		defer GinkgoRecover()
