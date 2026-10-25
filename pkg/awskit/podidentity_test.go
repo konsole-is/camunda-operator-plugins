@@ -149,6 +149,36 @@ func TestEnsureAssociationsLeavesTheAssociationsOfAnotherRoleAlone(t *testing.T)
 	assert.Len(t, f.Associations(), 2)
 }
 
+func TestEnsureAssociationsDeletesAnUnlistedServiceAccountWhenAnotherIsRefused(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "old-sa")
+	_, _, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"taken"},
+		roleB,
+		awskit.RequestTags("team-a", "billing", "billing-identity"),
+	)
+	require.NoError(t, err)
+
+	_, _, err = awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"taken"},
+		roleA,
+		hubTags(),
+	)
+
+	require.ErrorContains(t, err, "taken")
+	for _, a := range f.Associations() {
+		assert.NotEqual(t, "old-sa", a.ServiceAccount)
+	}
+}
+
 func TestEnsureAssociationsReadsEveryPage(t *testing.T) {
 	f := awsfake.NewEKS()
 	f.PageSize = 1

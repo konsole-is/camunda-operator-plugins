@@ -59,6 +59,16 @@ func EnsureAssociations(
 		return nil, change, err
 	}
 
+	for _, a := range live {
+		if a.RoleARN != roleARN || slices.Contains(serviceAccounts, a.ServiceAccount) {
+			continue
+		}
+		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {
+			return nil, change, err
+		}
+		change.Deleted = append(change.Deleted, a.ServiceAccount)
+	}
+
 	var result []Association
 	for _, sa := range serviceAccounts {
 		i := slices.IndexFunc(live, func(a liveAssociation) bool { return a.ServiceAccount == sa })
@@ -102,16 +112,6 @@ func EnsureAssociations(
 				live[i].RoleARN,
 			)
 		}
-	}
-
-	for _, a := range live {
-		if a.RoleARN != roleARN || slices.Contains(serviceAccounts, a.ServiceAccount) {
-			continue
-		}
-		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {
-			return nil, change, err
-		}
-		change.Deleted = append(change.Deleted, a.ServiceAccount)
 	}
 
 	slices.SortFunc(result, func(a, b Association) int { return cmp.Compare(a.ServiceAccount, b.ServiceAccount) })
