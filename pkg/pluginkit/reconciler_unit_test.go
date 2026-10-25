@@ -304,7 +304,10 @@ func TestStageResultKeepsTheTimeOfTheLastCorrectedDrift(t *testing.T) {
 		Severity: pluginsv1alpha1.SeverityInfo,
 	}
 	request := &pluginsv1alpha1.PluginRequest{Status: pluginsv1alpha1.PluginRequestStatus{
-		Summary: []pluginsv1alpha1.SummaryItem{{Label: "Size", Value: "small", Severity: pluginsv1alpha1.SeverityInfo}, last},
+		Summary: []pluginsv1alpha1.SummaryItem{
+			{Label: "Size", Value: "small", Severity: pluginsv1alpha1.SeverityInfo},
+			last,
+		},
 	}}
 
 	stageResult(request, Result{Summary: []pluginsv1alpha1.SummaryItem{{Label: "Size", Value: "large"}}})

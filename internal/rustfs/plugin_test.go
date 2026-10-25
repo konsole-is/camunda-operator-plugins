@@ -210,7 +210,8 @@ var _ = Describe("the rustfs plugin", func() {
 			g.Expect(user.policy).To(Equal(name))
 			events := driftEvents(g, request)
 			g.Expect(events).To(HaveLen(1))
-			g.Expect(events[0].Note).To(ContainSubstring("attached the policy " + name + " to the user " + name + " again"))
+			g.Expect(events[0].Note).
+				To(ContainSubstring("attached the policy " + name + " to the user " + name + " again"))
 		}, timeout).Should(Succeed())
 	})
 
