@@ -189,7 +189,8 @@ func (p *Plugin) clusterGrants(
 func owns(request *pluginsv1alpha1.PluginRequest, grant *pluginsv1alpha1.Grant) bool {
 	return request.Spec.Registration == grant.Labels[pluginsv1alpha1.LabelRegistration] &&
 		request.Spec.Target.Kind == kindCamundaCluster &&
-		request.Spec.Target.Name == grant.Labels[pluginsv1alpha1.LabelCluster]
+		request.Spec.Target.Name == grant.Labels[pluginsv1alpha1.LabelCluster] &&
+		request.Spec.Target.Name == grant.Spec.Cluster.Name
 }
 
 // grantRequest returns the request of the request label of grant, or nil
