@@ -177,17 +177,20 @@ func (r *reconciler[P, I]) serve(
 	}
 
 	res, err := r.plugin.Reconcile(ctx, pluginRequest)
+	// A retry finds the repaired resources and corrects nothing, so the drift
+	// is staged before each step that can fail.
+	if len(res.Corrected) > 0 {
+		r.events.Eventf(request, nil, corev1.EventTypeNormal, eventReasonDriftCorrected, eventActionUpdate,
+			"Corrected drift outside the cluster: %s", strings.Join(res.Corrected, "; "))
+		stageDrift(request, time.Now())
+	}
+
 	if err == nil {
 		err = checkOutputs(registration, res.Outputs)
 	}
 	if err != nil {
 		stage(request, v1.ConditionReady, ReasonReconcileError, err.Error())
 		return ctrl.Result{}, err
-	}
-
-	if len(res.Corrected) > 0 {
-		r.events.Eventf(request, nil, corev1.EventTypeNormal, eventReasonDriftCorrected, eventActionUpdate,
-			"Corrected drift outside the cluster: %s", strings.Join(res.Corrected, "; "))
 	}
 
 	if res.Pending != nil {
@@ -507,11 +510,26 @@ func (r *reconciler[P, I]) grantsOf(
 	return list.Items, nil
 }
 
-// stageResult stages the status fields that the plugin returned, and the
-// summary item of the last corrected drift.
+// stageDrift sets the summary item "Last drift corrected" of request, and
+// status.summaryTime, to now.
+func stageDrift(request *pluginsv1alpha1.PluginRequest, now time.Time) {
+	item := pluginsv1alpha1.SummaryItem{
+		Label:    labelDriftCorrected,
+		Value:    now.UTC().Format(time.RFC3339),
+		Severity: pluginsv1alpha1.SeverityInfo,
+	}
+
+	summary := slices.DeleteFunc(slices.Clone(request.Status.Summary), func(i pluginsv1alpha1.SummaryItem) bool {
+		return i.Label == labelDriftCorrected
+	})
+	request.Status.Summary = append(summary, item)
+	request.Status.SummaryTime = &metav1.Time{Time: now}
+}
+
+// stageResult stages the status fields that the plugin returned. The summary
+// keeps the item "Last drift corrected" of the staged status.
 func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
-	now := time.Now()
-	summary := withDriftItem(res.Summary, request.Status.Summary, len(res.Corrected) > 0, now)
+	summary := withDriftItem(res.Summary, request.Status.Summary)
 
 	// The CRD defaults an empty severity to Info, so the stored summary
 	// compares equal only with the same default.
@@ -524,7 +542,7 @@ func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
 	if !equality.Semantic.DeepEqual(request.Status.Summary, summary) {
 		request.Status.SummaryTime = nil
 		if len(summary) > 0 {
-			request.Status.SummaryTime = &metav1.Time{Time: now}
+			request.Status.SummaryTime = &metav1.Time{Time: time.Now()}
 		}
 	}
 
@@ -535,22 +553,10 @@ func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
 	request.Status.Resources = res.Resources
 }
 
-// withDriftItem returns summary with the item "Last drift corrected": the time
-// now when corrected, or else the item of previous, the stored summary. It
-// returns a copy of summary without the item when neither has one.
-func withDriftItem(
-	summary, previous []pluginsv1alpha1.SummaryItem,
-	corrected bool,
-	now time.Time,
-) []pluginsv1alpha1.SummaryItem {
+// withDriftItem returns a copy of summary with the item "Last drift
+// corrected" of previous, when previous has one.
+func withDriftItem(summary, previous []pluginsv1alpha1.SummaryItem) []pluginsv1alpha1.SummaryItem {
 	all := slices.Clone(summary)
-	if corrected {
-		return append(all, pluginsv1alpha1.SummaryItem{
-			Label: labelDriftCorrected,
-			Value: now.UTC().Format(time.RFC3339),
-		})
-	}
-
 	for _, item := range previous {
 		if item.Label == labelDriftCorrected {
 			return append(all, item)

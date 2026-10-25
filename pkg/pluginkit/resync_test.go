@@ -18,6 +18,7 @@ package pluginkit_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -46,6 +47,14 @@ const driftResync = time.Second
 type driftPlugin struct {
 	mu     sync.Mutex
 	values map[string]string
+	// err is the error of Reconcile, which it returns with the corrections.
+	err error
+}
+
+func (p *driftPlugin) setErr(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.err = err
 }
 
 func (p *driftPlugin) change(namespace, value string) {
@@ -73,7 +82,7 @@ func (p *driftPlugin) Reconcile(
 		res.Corrected = []string{"set the value " + value + " back to " + wantedValue}
 	}
 	p.values[req.Object.Namespace] = wantedValue
-	return res, nil
+	return res, p.err
 }
 
 func (p *driftPlugin) Delete(context.Context, pluginkit.Request[struct{}, map[string]string]) error {
@@ -119,10 +128,22 @@ func driftEvents(g Gomega, request *pluginsv1alpha1.PluginRequest) []eventsv1.Ev
 	return found
 }
 
+// settle waits until a reconcile of request writes nothing for two resyncs,
+// so that no reconcile of an earlier write is still in the queue.
+func settle(request *pluginsv1alpha1.PluginRequest) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		before := readRequest(g, request).ResourceVersion
+		time.Sleep(2 * driftResync)
+		g.Expect(readRequest(g, request).ResourceVersion).To(Equal(before))
+	}).Should(Succeed())
+}
+
 var _ = Describe("the resync", func() {
 	It("corrects a change outside the cluster with no change in the cluster", func() {
 		request := createRequest("drift", forDriftPlugin)
 		waitReady(request)
+		settle(request)
 		Expect(drift.value(request.Namespace)).To(Equal(wantedValue))
 		Expect(driftEvents(Default, request)).To(BeEmpty(), "the first create is not drift")
 
@@ -142,5 +163,22 @@ var _ = Describe("the resync", func() {
 		Consistently(func(g Gomega) {
 			g.Expect(driftEvents(g, request)).To(HaveLen(1))
 		}).WithTimeout(3 * driftResync).Should(Succeed())
+	})
+
+	It("records a repair of a reconcile that then fails", func() {
+		request := createRequest("drift-error", forDriftPlugin)
+		waitReady(request)
+		settle(request)
+		drift.setErr(errors.New("the cloud refused the next step"))
+		DeferCleanup(func() { drift.setErr(nil) })
+
+		drift.change(request.Namespace, "changed")
+
+		Eventually(func(g Gomega) {
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginkit.ReasonReconcileError))
+			g.Expect(readRequest(g, request).Status.Summary).
+				To(ContainElement(HaveField("Label", "Last drift corrected")))
+			g.Expect(driftEvents(g, request)).To(HaveLen(1))
+		}).Should(Succeed())
 	})
 })

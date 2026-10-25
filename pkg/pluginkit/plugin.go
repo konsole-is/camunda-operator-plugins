@@ -39,6 +39,7 @@ type Plugin[P, I any] interface {
 	// and returns what pluginkit applies and reports. It receives only a
 	// request whose parameters pass the schema of its registration. An error
 	// sets Ready=False with reason ReconcileError and retries the request.
+	// With an error, pluginkit reads only Result.Corrected.
 	Reconcile(ctx context.Context, req Request[P, I]) (Result, error)
 	// Delete deletes the resources of a request with the deletion policy
 	// Delete that pluginkit does not delete itself: each resource outside the
@@ -115,7 +116,8 @@ type Result struct {
 	// to repair drift, such as a deleted bucket policy that it wrote again.
 	// The first create of a resource is not drift. When it is not empty,
 	// pluginkit records the event DriftCorrected on the request and sets the
-	// summary item "Last drift corrected" to the time.
+	// summary item "Last drift corrected" to the time, also when Reconcile
+	// returns an error.
 	Corrected []string
 }
 

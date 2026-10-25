@@ -279,22 +279,39 @@ func TestRequeueAfterWithoutResync(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, requeueAfter(5*time.Minute, 0))
 }
 
-func TestStageResultAddsTheTimeOfACorrectedDrift(t *testing.T) {
-	request := &pluginsv1alpha1.PluginRequest{}
-	before := time.Now().UTC().Truncate(time.Second)
+func TestStageDriftSetsTheTimeOfTheCorrection(t *testing.T) {
+	old := pluginsv1alpha1.SummaryItem{
+		Label:    "Last drift corrected",
+		Value:    "2026-10-01T08:00:00Z",
+		Severity: pluginsv1alpha1.SeverityInfo,
+	}
+	size := pluginsv1alpha1.SummaryItem{Label: "Size", Value: "small", Severity: pluginsv1alpha1.SeverityInfo}
+	request := &pluginsv1alpha1.PluginRequest{Status: pluginsv1alpha1.PluginRequestStatus{
+		Summary: []pluginsv1alpha1.SummaryItem{size, old},
+	}}
+	now := time.Date(2026, 10, 25, 9, 30, 0, 0, time.UTC)
 
-	stageResult(request, Result{
-		Summary:   []pluginsv1alpha1.SummaryItem{{Label: "Size", Value: "small"}},
-		Corrected: []string{"created the bucket orders again"},
-	})
+	stageDrift(request, now)
+
+	assert.Equal(t, []pluginsv1alpha1.SummaryItem{size, {
+		Label:    "Last drift corrected",
+		Value:    "2026-10-25T09:30:00Z",
+		Severity: pluginsv1alpha1.SeverityInfo,
+	}}, request.Status.Summary)
+	assert.Equal(t, &metav1.Time{Time: now}, request.Status.SummaryTime)
+}
+
+func TestStageResultKeepsTheDriftItemThatTheReconcileStaged(t *testing.T) {
+	request := &pluginsv1alpha1.PluginRequest{}
+	now := time.Date(2026, 10, 25, 9, 30, 0, 0, time.UTC)
+	stageDrift(request, now)
+
+	stageResult(request, Result{Summary: []pluginsv1alpha1.SummaryItem{{Label: "Size", Value: "small"}}})
 
 	require.Len(t, request.Status.Summary, 2)
-	item := request.Status.Summary[1]
-	assert.Equal(t, "Last drift corrected", item.Label)
-	assert.Equal(t, pluginsv1alpha1.SeverityInfo, item.Severity)
-	at, err := time.Parse(time.RFC3339, item.Value)
-	require.NoError(t, err)
-	assert.False(t, at.Before(before), "the item shows the time of this reconcile, got %s", item.Value)
+	assert.Equal(t, "Size", request.Status.Summary[0].Label)
+	assert.Equal(t, "2026-10-25T09:30:00Z", request.Status.Summary[1].Value)
+	assert.NotNil(t, request.Status.SummaryTime)
 }
 
 func TestStageResultKeepsTheTimeOfTheLastCorrectedDrift(t *testing.T) {
