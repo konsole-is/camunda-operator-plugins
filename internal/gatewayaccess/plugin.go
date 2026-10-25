@@ -51,10 +51,6 @@ const (
 	eventActionDelete       = "Delete"
 )
 
-// certificateRequeue is the time after which a request with a certificate
-// item reconciles again, so that the severity of the item follows the clock.
-const certificateRequeue = 6 * time.Hour
-
 // Plugin serves access requests. It publishes the four outputs of the
 // hostname patterns, and it writes an HTTPRoute and a GRPCRoute for a
 // CamundaCluster and its CamundaOptimize, or an HTTPRoute for a
@@ -178,7 +174,6 @@ func (p *Plugin) Reconcile(
 	if p.reportCertificateExpiry {
 		if item := CertificateItem(ctx, p.reader, req.Parameters, p.now()); item != nil {
 			res.Summary = append(res.Summary, *item)
-			res.RequeueAfter = certificateRequeue
 		}
 	}
 

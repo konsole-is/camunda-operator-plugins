@@ -78,6 +78,7 @@ var _ = BeforeSuite(func() {
 		Registrations:           registrations,
 		ServiceAccount:          serviceAccount,
 		ReportCertificateExpiry: true,
+		Resync:                  2 * time.Second,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(startFakeGateway(mgr, &refuse)).To(Succeed())

@@ -41,6 +41,7 @@ Before you install the chart, make sure that the cluster has:
 | --- | --- | --- |
 | `registrations` | `gateway-public` on the Gateway `gateway-system/public`, and `gateway-internal` on `gateway-system/internal` | The PluginRegistrations that the controller writes at startup and serves, one for each Gateway. Each item is a name and the fields of a registration spec. Set `gatewayRef` and the hostname patterns in `parameterValues`. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
 | `reportCertificateExpiry` | `true` | Show the expiry of the listener certificate in the summary of each `https` request. It grants `get` on the Secrets of `certificateSecrets`. |
+| `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It reads the certificate again, so the expiry in the summary follows a renewed certificate. A Go duration such as `30m`. `0` turns it off, and then the expiry changes only when something else reconciles the request. |
 | `certificateSecrets` | `[]` | The Secret of each listener certificate, as `{namespace, name}`. The chart grants `get` on these Secrets only. The expiry of a certificate whose Secret is not in the list shows as `unknown`. |
 | `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/gateway-access` | The image of the controller. |
 | `image.tag` | the `appVersion` of the chart | The tag of the image. |

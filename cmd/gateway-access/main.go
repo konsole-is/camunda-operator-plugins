@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -63,6 +64,12 @@ func main() {
 		"report-certificate-expiry",
 		true,
 		"Read the listener certificate of the Gateway and report its expiry in the summary of each request.",
+	)
+	flag.DurationVar(
+		&opts.Resync,
+		"resync",
+		time.Hour,
+		"The time after which the controller reconciles each request again. 0 turns it off.",
 	)
 	registrations := flag.String(
 		"registrations",
