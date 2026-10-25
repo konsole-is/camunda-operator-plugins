@@ -44,7 +44,11 @@ func watches(c client.Reader) []pluginkit.Watch {
 		{
 			Object: &pluginsv1alpha1.Grant{},
 			Requests: func(ctx context.Context, obj client.Object) []reconcile.Request {
-				return clusterRequests(ctx, c, obj.GetNamespace(), obj.GetLabels()[pluginsv1alpha1.LabelCluster])
+				grant, ok := obj.(*pluginsv1alpha1.Grant)
+				if !ok {
+					return nil
+				}
+				return clusterRequests(ctx, c, grant.Namespace, grant.Spec.Cluster.Name)
 			},
 			// The labels name the request and the registration of a Grant.
 			Predicates: []predicate.Predicate{
@@ -118,7 +122,7 @@ func registrationRequests(ctx context.Context, c client.Reader, registration str
 
 	clusters := map[types.NamespacedName]bool{}
 	for _, g := range grants.Items {
-		clusters[types.NamespacedName{Namespace: g.Namespace, Name: g.Labels[pluginsv1alpha1.LabelCluster]}] = true
+		clusters[types.NamespacedName{Namespace: g.Namespace, Name: g.Spec.Cluster.Name}] = true
 	}
 
 	var requests []reconcile.Request

@@ -135,14 +135,13 @@ func (p *Plugin) clusterGrants(
 	request *pluginsv1alpha1.PluginRequest,
 ) ([]clusterGrant, []grantPolicy, error) {
 	var list pluginsv1alpha1.GrantList
-	if err := p.reader.List(
-		ctx,
-		&list,
-		client.InNamespace(request.Namespace),
-		client.MatchingLabels{pluginsv1alpha1.LabelCluster: request.Spec.Target.Name},
-	); err != nil {
-		return nil, nil, fmt.Errorf("listing the Grants of the cluster %s: %w", request.Spec.Target.Name, err)
+	if err := p.reader.List(ctx, &list, client.InNamespace(request.Namespace)); err != nil {
+		return nil, nil, fmt.Errorf("listing the Grants of the namespace %s: %w", request.Namespace, err)
 	}
+	// spec.cluster is immutable, and a label can change.
+	list.Items = slices.DeleteFunc(list.Items, func(g pluginsv1alpha1.Grant) bool {
+		return g.Spec.Cluster.Name != request.Spec.Target.Name
+	})
 
 	slices.SortFunc(list.Items, func(a, b pluginsv1alpha1.Grant) int {
 		return cmp.Or(a.CreationTimestamp.Compare(b.CreationTimestamp.Time), cmp.Compare(a.Name, b.Name))
