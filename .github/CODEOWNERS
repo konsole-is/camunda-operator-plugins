@@ -7,3 +7,8 @@
 /internal/gatewayaccess/          @sourcehawk
 /charts/gateway-access/           @sourcehawk
 /docs/plugins/gateway-access.md   @sourcehawk
+
+/cmd/rustfs/                      @sourcehawk
+/internal/rustfs/                 @sourcehawk
+/charts/rustfs/                   @sourcehawk
+/docs/plugins/rustfs.md           @sourcehawk
