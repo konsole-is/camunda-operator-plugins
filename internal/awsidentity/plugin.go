@@ -87,8 +87,9 @@ type Plugin struct {
 // Reconcile keeps the role of the request, its trust, and with Pod Identity
 // its associations, then puts the allowed Grants of the cluster on the role
 // and writes their conditions. It is Pending with the reason
-// MissingServiceAccount when spec.target names no ServiceAccount. A refused
-// AWS call is an error.
+// MissingServiceAccount when spec.target names no ServiceAccount. A failed
+// AWS call is an error, except a policy document that IAM refuses, which
+// sets Applied=False on its Grant.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -96,6 +97,9 @@ func (p *Plugin) Reconcile(
 	request := req.Object
 	sas := serviceAccounts(request.Spec.Target)
 	if len(sas) == 0 {
+		if err := p.revoke(ctx, req); err != nil {
+			return pluginkit.Result{}, err
+		}
 		return pluginkit.Result{Pending: &pluginkit.Waiting{
 			Reason:  ReasonMissingServiceAccount,
 			Message: "The request names no ServiceAccount in spec.target",
@@ -160,8 +164,40 @@ func (p *Plugin) Reconcile(
 	return res, nil
 }
 
-// ensureRole keeps the role of the claim of req, trusted by sas, and records
-// an event when it created or updated the role.
+// revoke makes the role of req, when it exists, trust nobody, and deletes its
+// associations with Pod Identity.
+func (p *Plugin) revoke(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
+	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
+	if err != nil || arn == "" {
+		return err
+	}
+
+	role, err := p.ensureRole(ctx, req, nil)
+	if err != nil {
+		return err
+	}
+
+	if p.mode == awskit.ModePodIdentity {
+		_, err = p.ensureAssociations(ctx, req, nil, role)
+	}
+	return err
+}
+
+// liveRoleARN returns the ARN of the role name, or "" when it does not exist.
+func (p *Plugin) liveRoleARN(ctx context.Context, name string) (string, error) {
+	out, err := p.clients.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
+	if awskit.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading the IAM role %s: %w", name, err)
+	}
+	return aws.ToString(out.Role.Arn), nil
+}
+
+// ensureRole keeps the role of the claim of req, trusted by sas, or by nobody
+// when sas is empty, and records an event when it created or updated the
+// role.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -302,7 +338,8 @@ func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[s
 }
 
 // deleteAssociations deletes the associations of the role roleName in the
-// namespace of req, with Pod Identity. It does nothing when the role is gone.
+// namespace of req, with Pod Identity. It also deletes them when the role is
+// gone, if req has a principal output.
 func (p *Plugin) deleteAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -312,21 +349,19 @@ func (p *Plugin) deleteAssociations(
 		return nil
 	}
 
-	out, err := p.clients.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(roleName)})
-	if awskit.IsNotFound(err) {
+	arn, err := p.liveRoleARN(ctx, roleName)
+	if err != nil {
+		return err
+	}
+	if arn == "" {
+		// A role that someone deleted by hand can still have associations.
+		arn = req.Object.Status.Outputs[outputPrincipal]
+	}
+	if arn == "" {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("reading the IAM role %s: %w", roleName, err)
-	}
 
-	deleted, err := awskit.DeleteAssociations(
-		ctx,
-		p.clients.EKS,
-		p.eksCluster,
-		req.Object.Namespace,
-		aws.ToString(out.Role.Arn),
-	)
+	deleted, err := awskit.DeleteAssociations(ctx, p.clients.EKS, p.eksCluster, req.Object.Namespace, arn)
 	for _, sa := range deleted {
 		req.Event(
 			corev1.EventTypeNormal,

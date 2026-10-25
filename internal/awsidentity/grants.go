@@ -58,7 +58,7 @@ func (p *Plugin) syncGrants(
 	req pluginkit.Request[Params, map[string]string],
 	role awskit.Role,
 ) (grantCounts, bool, error) {
-	grants, err := p.clusterGrants(ctx, req.Object)
+	grants, retained, err := p.clusterGrants(ctx, req.Object)
 	if err != nil {
 		return grantCounts{}, false, err
 	}
@@ -68,14 +68,36 @@ func (p *Plugin) syncGrants(
 		return grantCounts{}, false, err
 	}
 
-	policies := make([]grantPolicy, 0, len(grants))
+	policies := make([]grantPolicy, 0, len(grants)+len(retained))
 	for _, g := range grants {
 		policies = append(policies, g.policy)
 	}
-	plan := planPolicies(current, policies)
+	plan := planPolicies(current, append(policies, retained...))
 
-	if err := p.applyPlan(ctx, req, role, current, grants, &plan); err != nil {
+	put, err := p.applyPlan(ctx, role, current, grants, &plan)
+	if err != nil {
 		return grantCounts{}, false, err
+	}
+
+	for _, policy := range plan.remove {
+		req.Event(
+			corev1.EventTypeNormal,
+			eventReasonPolicyRemoved,
+			eventActionDelete,
+			"Removed the inline policy %s of a Grant that is gone from the IAM role %s",
+			policy,
+			role.Name,
+		)
+	}
+	for _, policy := range put {
+		req.Event(
+			corev1.EventTypeNormal,
+			eventReasonPolicyApplied,
+			eventActionUpdate,
+			"Put the inline policy %s of a Grant on the IAM role %s",
+			policy,
+			role.Name,
+		)
 	}
 
 	counts := grantCounts{total: len(grants), size: plan.size}
@@ -104,8 +126,14 @@ func (p *Plugin) syncGrants(
 }
 
 // clusterGrants returns the Grants of the cluster of request that belong to
-// its claim, read fresh, sorted by creation time and then by name.
-func (p *Plugin) clusterGrants(ctx context.Context, request *pluginsv1alpha1.PluginRequest) ([]clusterGrant, error) {
+// its claim, read fresh, sorted by creation time and then by name. It also
+// returns, as refused, the policy of each Grant whose request is gone, such
+// as after an Orphan deletion of that request, so that the role keeps the
+// statement that it has for it and gets no new one.
+func (p *Plugin) clusterGrants(
+	ctx context.Context,
+	request *pluginsv1alpha1.PluginRequest,
+) ([]clusterGrant, []grantPolicy, error) {
 	var list pluginsv1alpha1.GrantList
 	if err := p.reader.List(
 		ctx,
@@ -113,7 +141,7 @@ func (p *Plugin) clusterGrants(ctx context.Context, request *pluginsv1alpha1.Plu
 		client.InNamespace(request.Namespace),
 		client.MatchingLabels{pluginsv1alpha1.LabelCluster: request.Spec.Target.Name},
 	); err != nil {
-		return nil, fmt.Errorf("listing the Grants of the cluster %s: %w", request.Spec.Target.Name, err)
+		return nil, nil, fmt.Errorf("listing the Grants of the cluster %s: %w", request.Spec.Target.Name, err)
 	}
 
 	slices.SortFunc(list.Items, func(a, b pluginsv1alpha1.Grant) int {
@@ -121,6 +149,7 @@ func (p *Plugin) clusterGrants(ctx context.Context, request *pluginsv1alpha1.Plu
 	})
 
 	var grants []clusterGrant
+	var retained []grantPolicy
 	for _, g := range list.Items {
 		if !g.DeletionTimestamp.IsZero() {
 			continue
@@ -128,21 +157,29 @@ func (p *Plugin) clusterGrants(ctx context.Context, request *pluginsv1alpha1.Plu
 
 		owner, err := p.grantRequest(ctx, &g)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if owner == nil || owner.Spec.ClaimRef != request.Spec.ClaimRef {
+		if owner == nil {
+			retained = append(retained, grantPolicy{
+				grant:   g.Name,
+				policy:  policyName(g.Name),
+				refused: rejected("The request of the Grant is gone"),
+			})
+			continue
+		}
+		if owner.Spec.ClaimRef != request.Spec.ClaimRef {
 			continue
 		}
 
 		matches, err := p.matchesTemplate(ctx, &g, owner)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		grants = append(grants, clusterGrant{grant: g, policy: p.grantPolicy(&g), matches: matches})
 	}
 
-	return grants, nil
+	return grants, retained, nil
 }
 
 // grantRequest returns the request of the request label of grant, or nil
@@ -241,17 +278,26 @@ func templateChanged(message string) cond {
 	return cond{status: metav1.ConditionFalse, reason: pluginsv1alpha1.ReasonTemplateChanged, message: message}
 }
 
-// applyPlan puts and removes the policies of plan on role, and records an
-// event for each. A document that IAM refuses turns its Grant into
-// Applied=False in plan, with the reason Rejected or OverSizeLimit.
+// applyPlan removes the policies of plan from role, puts its policies, and
+// returns the names of the policies that it put. A document that IAM
+// refuses turns its Grant into Applied=False in plan, with the reason
+// Rejected or OverSizeLimit.
 func (p *Plugin) applyPlan(
 	ctx context.Context,
-	req pluginkit.Request[Params, map[string]string],
 	role awskit.Role,
 	current map[string][]byte,
 	grants []clusterGrant,
 	plan *policyPlan,
-) error {
+) ([]string, error) {
+	// The plan does not count the removed policies, and IAM counts them
+	// until they are gone.
+	for _, policy := range plan.remove {
+		if err := awskit.DeleteInlinePolicy(ctx, p.clients.IAM, role.Name, policy); err != nil {
+			return nil, err
+		}
+	}
+
+	var put []string
 	for _, g := range grants {
 		doc, ok := plan.put[g.policy.policy]
 		if !ok {
@@ -262,42 +308,20 @@ func (p *Plugin) applyPlan(
 		var reason string
 		switch {
 		case err == nil:
-			req.Event(
-				corev1.EventTypeNormal,
-				eventReasonPolicyApplied,
-				eventActionUpdate,
-				"Put the Grant %s on the IAM role %s as the inline policy %s",
-				g.grant.Name,
-				role.Name,
-				g.policy.policy,
-			)
+			put = append(put, g.policy.policy)
 			continue
 		case awskit.IsMalformedPolicy(err):
 			reason = pluginsv1alpha1.ReasonRejected
 		case awskit.IsLimitExceeded(err):
 			reason = pluginsv1alpha1.ReasonOverSizeLimit
 		default:
-			return err
+			return nil, err
 		}
 
 		old, onRole := current[g.policy.policy]
-		plan.applied[g.grant.Name] = notApplied(reason, "IAM refused the policy: "+awskit.Message(err), onRole)
+		plan.applied[g.policy.grant] = notApplied(reason, "IAM refused the policy: "+awskit.Message(err), onRole)
 		plan.size += awskit.PolicySize(old) - awskit.PolicySize(doc)
 	}
 
-	for _, policy := range plan.remove {
-		if err := awskit.DeleteInlinePolicy(ctx, p.clients.IAM, role.Name, policy); err != nil {
-			return err
-		}
-		req.Event(
-			corev1.EventTypeNormal,
-			eventReasonPolicyRemoved,
-			eventActionDelete,
-			"Removed the inline policy %s of a Grant that is gone from the IAM role %s",
-			policy,
-			role.Name,
-		)
-	}
-
-	return nil
+	return put, nil
 }

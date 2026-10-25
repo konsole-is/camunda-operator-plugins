@@ -52,10 +52,18 @@ func TestTrustPolicyWithPodIdentityTrustsTheEKSService(t *testing.T) {
 		"Action":["sts:AssumeRole","sts:TagSession"]}]}`, string(doc))
 }
 
-func TestTrustPolicyRefusesNoServiceAccount(t *testing.T) {
-	_, err := TrustPolicy(ModeIRSA, provider, "team-a", nil)
+func TestTrustPolicyWithoutServiceAccountsDeniesThePrincipalOfTheMode(t *testing.T) {
+	irsa, err := TrustPolicy(ModeIRSA, provider, "team-a", nil)
+	require.NoError(t, err)
+	podIdentity, err := TrustPolicy(ModePodIdentity, OIDCProvider{}, "team-a", nil)
+	require.NoError(t, err)
 
-	assert.ErrorContains(t, err, "no ServiceAccount")
+	assert.JSONEq(t, `{"Version":"2012-10-17","Statement":[{"Effect":"Deny",
+		"Principal":{"Federated":"arn:aws:iam::111122223333:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/ABC"},
+		"Action":"sts:AssumeRoleWithWebIdentity"}]}`, string(irsa))
+	assert.JSONEq(t, `{"Version":"2012-10-17","Statement":[{"Effect":"Deny",
+		"Principal":{"Service":"pods.eks.amazonaws.com"},
+		"Action":["sts:AssumeRole","sts:TagSession"]}]}`, string(podIdentity))
 }
 
 func TestTrustPolicyWithIRSANeedsAProvider(t *testing.T) {

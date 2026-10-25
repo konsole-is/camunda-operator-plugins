@@ -155,9 +155,9 @@ The registrations have no parameters. A claim changes nothing.
 
 The plugin writes no Grants of its own. It reads the Grants of other plugins and puts them on the role:
 
-- It reads each Grant in the namespace of the request whose label `plugins.camunda.io/cluster` names the cluster of the request. It ignores a Grant whose request is gone or belongs to another claim.
+- It reads each Grant in the namespace of the request whose label `plugins.camunda.io/cluster` names the cluster of the request. It ignores a Grant whose request belongs to another claim. A Grant whose request is gone, for example after an `Orphan` deletion of that request, keeps the statement that the role has for it, gets no new one, and gets no conditions.
 - A Grant with the format `aws-iam-statement` becomes one inline policy `grant-<Grant name>` on the role, with the fragment as its one statement.
-- The plugin refuses a statement with an action outside `allowedActions`, with `NotAction`, or without `Action`. An action is read as text: the pattern `s3:*` allows the action `s3:Get*`, and the pattern `s3:GetObject` does not.
+- The plugin refuses a statement with an action outside `allowedActions`, with `NotAction`, or without `Action`. An action with a wildcard passes only when one pattern covers each action that it stands for: the pattern `s3:*` allows the action `s3:Get*`, and the pattern `s3:GetObject?` does not allow `s3:GetObject*`.
 - IAM allows 10,240 characters, white space not counted, for all inline policies of a role together. The plugin applies the Grants in the order of their creation, and refuses a Grant that would take the role over the limit.
 - A refused Grant that was never applied puts nothing on the role.
 - An applied Grant stays applied. When its fragment changes and the new fragment is refused, or its template changes in the registration, the role keeps the statement that it had. Only a deleted Grant loses its policy.
@@ -188,7 +188,7 @@ The registrations offer the deletion policies `Delete` and `Orphan`.
 
 | Reason | Condition | What to do |
 | --- | --- | --- |
-| `MissingServiceAccount` | `OutputsReady` and `Ready` of the request | The request names no ServiceAccount in `spec.target`. The claim controller sets it. Check the claim and the operator version. |
+| `MissingServiceAccount` | `OutputsReady` and `Ready` of the request | The request names no ServiceAccount in `spec.target`. A role that the request already has then trusts nobody, and with Pod Identity it loses its associations. The claim controller sets the ServiceAccounts. Check the claim and the operator version. |
 | `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, for example `AccessDenied` when the controller role lacks a permission above. With Pod Identity, the message can say that a ServiceAccount has an association for a role of another claim: the plugin does not move it. Delete that association, or rename the ServiceAccount. pluginkit tries again. |
 | `DeleteFailed` | `Ready` of a deleted request | The plugin could not delete the role or an association. The message gives the AWS error. The finalizer stays, and pluginkit tries again. |
 | `Unhealthy` | `Ready` of the registration | The controller cannot call STS with its credentials, or it cannot read the permissions boundary. The message gives the error. Check the controller role and `permissionsBoundaryArn`. |

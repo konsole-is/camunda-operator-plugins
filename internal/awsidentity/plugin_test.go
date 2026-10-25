@@ -18,6 +18,8 @@ package awsidentity
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -66,7 +68,33 @@ func TestReconcileWaitsForAServiceAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res.Pending)
 	assert.Equal(t, ReasonMissingServiceAccount, res.Pending.Reason)
-	assert.Empty(t, fake.Calls())
+	assert.Equal(t, []string{"GetRole"}, fake.Calls(), "a request without a role gets none")
+}
+
+func TestApplyPlanFreesTheSpaceOfARemovedPolicyBeforeItPuts(t *testing.T) {
+	fake := awsfake.NewIAM()
+	opts := validOptions()
+	opts.Clients.IAM = fake
+	p, err := newPlugin(opts)
+	require.NoError(t, err)
+	role, _, err := awskit.EnsureRole(context.Background(), fake, awskit.RoleSpec{
+		Name:        "camunda-r",
+		TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
+	})
+	require.NoError(t, err)
+	old, replacement := policyOfSize(t, 6000), policyOfSize(t, 5000)
+	require.NoError(t, awskit.PutInlinePolicy(context.Background(), fake, role.Name, "grant-old", old))
+	current := map[string][]byte{"grant-old": old}
+	grants := []clusterGrant{{policy: grantPolicy{grant: "new", policy: "grant-new", doc: replacement}}}
+	plan := planPolicies(current, []grantPolicy{grants[0].policy})
+
+	put, err := p.applyPlan(context.Background(), role, current, grants, &plan)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"grant-new"}, put)
+	assert.Equal(t, metav1.ConditionTrue, plan.applied["new"].status, plan.applied["new"].message)
+	got, _ := fake.Role(role.Name)
+	assert.Equal(t, []string{"grant-new"}, slices.Collect(maps.Keys(got.InlinePolicies)))
 }
 
 func TestNewPluginAcceptsEachMode(t *testing.T) {

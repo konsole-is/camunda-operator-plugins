@@ -28,6 +28,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
@@ -297,6 +300,44 @@ var _ = Describe("the AWS identity hub", func() {
 		}, 2*time.Second).Should(Succeed())
 	})
 
+	It("keeps the policy of a grant whose request is gone", func() {
+		s := newGrantSetup()
+		kept := grantFor(s.other, "orders-backup-read", readFragment)
+		Expect(k8s.Create(ctx, kept)).To(Succeed())
+		expectGrant(kept, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+
+		Expect(k8s.Delete(ctx, s.other)).To(Succeed())
+		// The hub reads every Grant of the cluster in one pass, so once a later
+		// Grant is Ready, the hub has seen the request gone.
+		later := newOtherRequest(s.namespace, "orders-later", "orders")
+		laterGrant := grantFor(later, "orders-later-read", readFragment)
+		Expect(k8s.Create(ctx, laterGrant)).To(Succeed())
+		expectGrant(laterGrant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+
+		Expect(roleOf(Default, irsa, s.namespace).InlinePolicies).To(HaveKey("grant-orders-backup-read"))
+	})
+
+	It("revokes the trust of a request that names no ServiceAccount any more", func() {
+		ns := newNamespace()
+		request := hubRequest(irsa.registration, ns, "orders-es-es")
+		readyRequest(request)
+
+		Eventually(func(g Gomega) {
+			got := read(g, request.DeepCopy())
+			got.Spec.Target.ServiceAccountName = ""
+			got.Spec.Target.AdditionalServiceAccounts = nil
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(roleOf(g, irsa, ns).TrustPolicy).To(MatchJSON(`{"Version":"2012-10-17","Statement":[{
+				"Effect":"Deny","Principal":{"Federated":"` + providerARN + `"},
+				"Action":"sts:AssumeRoleWithWebIdentity"}]}`))
+			got := read(g, request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Reason).To(Equal("MissingServiceAccount"))
+		}, timeout).Should(Succeed())
+	})
+
 	It("removes the policy of a deleted grant", func() {
 		s := newGrantSetup()
 		grant := grantFor(s.other, "orders-backup-read", readFragment)
@@ -346,6 +387,29 @@ var _ = Describe("the AWS identity hub", func() {
 		role, ok := irsa.iam.Role(awskit.RoleName("camunda", s.namespace, "orders"))
 		Expect(ok).To(BeTrue())
 		Expect(role.InlinePolicies).To(HaveKey("grant-orders-backup-read"))
+	})
+
+	It("deletes the associations of a request whose role was deleted by hand", func() {
+		ns := newNamespace()
+		request := hubRequest(podIdentity.registration, ns)
+		readyRequest(request)
+		Eventually(func(g Gomega) {
+			g.Expect(read(g, request.DeepCopy()).Status.Outputs).To(HaveKey("principal"))
+		}, timeout).Should(Succeed())
+
+		_, err := podIdentity.iam.DeleteRole(ctx, &iam.DeleteRoleInput{
+			RoleName: aws.String(awskit.RoleName("camunda", ns, "orders")),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8s.Delete(ctx, request)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			err := irsa.mgr.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(request), request.DeepCopy())
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		}, timeout).Should(Succeed())
+		for _, a := range podIdentity.eks.Associations() {
+			Expect(a.Namespace).NotTo(Equal(ns))
+		}
 	})
 
 	It("keeps one Pod Identity association for each ServiceAccount", func() {

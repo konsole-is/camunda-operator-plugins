@@ -50,38 +50,41 @@ func ParseMode(s string) (Mode, error) {
 // namespace assume in mode. With ModeIRSA it trusts provider for each
 // ServiceAccount and no other. With ModePodIdentity it trusts the EKS Pod
 // Identity service, and the associations decide which ServiceAccounts get
-// the role. It refuses an empty serviceAccounts, and ModeIRSA without a
-// provider.
+// the role. With no serviceAccounts it denies the principal of mode, so that
+// nobody assumes the role. It refuses ModeIRSA without a provider.
 func TrustPolicy(mode Mode, provider OIDCProvider, namespace string, serviceAccounts []string) ([]byte, error) {
+	effect := "Allow"
 	if len(serviceAccounts) == 0 {
-		return nil, errors.New("the trust policy names no ServiceAccount")
+		effect = "Deny"
 	}
 
-	var statement any
+	var statement map[string]any
 	switch mode {
 	case ModeIRSA:
 		if provider.ARN == "" || provider.Issuer == "" {
 			return nil, errors.New("a trust policy for IRSA needs the OIDC provider of the EKS cluster")
 		}
 
-		subjects := make([]string, 0, len(serviceAccounts))
-		for _, sa := range serviceAccounts {
-			subjects = append(subjects, "system:serviceaccount:"+namespace+":"+sa)
-		}
-		slices.Sort(subjects)
-
 		statement = map[string]any{
-			"Effect":    "Allow",
+			"Effect":    effect,
 			"Principal": map[string]string{"Federated": provider.ARN},
 			"Action":    "sts:AssumeRoleWithWebIdentity",
-			"Condition": map[string]any{"StringEquals": map[string]any{
+		}
+		if len(serviceAccounts) > 0 {
+			subjects := make([]string, 0, len(serviceAccounts))
+			for _, sa := range serviceAccounts {
+				subjects = append(subjects, "system:serviceaccount:"+namespace+":"+sa)
+			}
+			slices.Sort(subjects)
+
+			statement["Condition"] = map[string]any{"StringEquals": map[string]any{
 				provider.Issuer + ":aud": "sts.amazonaws.com",
 				provider.Issuer + ":sub": slices.Compact(subjects),
-			}},
+			}}
 		}
 	case ModePodIdentity:
 		statement = map[string]any{
-			"Effect":    "Allow",
+			"Effect":    effect,
 			"Principal": map[string]string{"Service": "pods.eks.amazonaws.com"},
 			"Action":    []string{"sts:AssumeRole", "sts:TagSession"},
 		}
