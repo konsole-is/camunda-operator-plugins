@@ -54,7 +54,10 @@ func NewCeiling(patterns []string) (Ceiling, error) {
 			)
 		}
 
-		expr := strings.NewReplacer(`\*`, ".*", `\?`, ".").Replace(regexp.QuoteMeta(p))
+		// A ? of a pattern stands for one action character, which a * of the
+		// action is not, so a match shows that the pattern covers each action
+		// that the action wildcard stands for.
+		expr := strings.NewReplacer(`\*`, ".*", `\?`, `[^*]`).Replace(regexp.QuoteMeta(p))
 		c.patterns = append(c.patterns, regexp.MustCompile("(?i)^"+expr+"$"))
 	}
 
@@ -68,9 +71,7 @@ type refusal struct {
 }
 
 // check returns nil when fragment is one IAM statement whose actions the
-// ceiling allows. A pattern matches an action as an IAM wildcard, without
-// regard to case. An action is read as text, so the pattern s3:* allows the
-// action s3:Get*, and the pattern s3:GetObject does not.
+// ceiling allows.
 func (c Ceiling) check(fragment []byte) *refusal {
 	var statement struct {
 		Effect    string

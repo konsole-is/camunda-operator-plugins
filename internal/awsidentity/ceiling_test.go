@@ -54,6 +54,22 @@ func TestCeilingRefusesAnActionOutsideThePatterns(t *testing.T) {
 	}
 }
 
+func TestCeilingRefusesAWildcardActionThatAPatternDoesNotContain(t *testing.T) {
+	c, err := NewCeiling([]string{"s3:GetObject?", "kms:*Key", "ec2:Describe*"})
+	require.NoError(t, err)
+
+	for _, action := range []string{"s3:GetObject*", "kms:*", "kms:Get*", "s3:GetObject?*"} {
+		got := c.check([]byte(`{"Effect":"Allow","Action":"` + action + `","Resource":"*"}`))
+
+		require.NotNil(t, got, action)
+		assert.Equal(t, pluginsv1alpha1.ReasonOverCeiling, got.reason, action)
+	}
+
+	for _, action := range []string{"s3:GetObject?", "s3:GetObjectX", "kms:*Key", "kms:Get*Key", "ec2:Describe*Instances?"} {
+		assert.Nil(t, c.check([]byte(`{"Effect":"Allow","Action":"`+action+`","Resource":"*"}`)), action)
+	}
+}
+
 func TestCeilingRejectsAStatementItCannotCheck(t *testing.T) {
 	c, err := NewCeiling([]string{"s3:*"})
 	require.NoError(t, err)
