@@ -12,7 +12,7 @@ For each request, the plugin creates these objects in RustFS:
 - One policy that allows the reads and writes of a backup on that bucket and its objects, and nothing else.
 - One user with that policy. The access key ID of the user is the name of the bucket. The plugin makes a random secret key of 40 characters.
 
-The bucket, the policy, and the user are three objects with the same name: `<namespace>-<request>-<hash>`, at most 63 characters. `<hash>` is 6 hex characters of a hash of the namespace and the request name. A dot in a name becomes a hyphen. The plugin finds each object again by this name, so it never makes a second bucket for one request.
+The bucket, the policy, and the user are three objects with the same name: `<namespace>-<request>-<hash>`, at most 63 characters. `<hash>` is 16 hex characters of a hash of the namespace and the request name. A dot in a name becomes a hyphen. The plugin finds each object again by this name, so it never makes a second bucket for one request.
 
 Zeebe needs a backup bucket that no other cluster uses, so each cluster gets its own bucket. The key of one cluster cannot read or write the bucket of another cluster, or any other bucket.
 

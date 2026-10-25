@@ -25,13 +25,18 @@ import (
 // maxNameLength is the longest name that S3 accepts for a bucket.
 const maxNameLength = 63
 
+// hashLength is the number of hex characters of the hash in a name. A
+// request in another namespace must not find a second name with the same
+// hash, or it shares the bucket and the user.
+const hashLength = 16
+
 // resourceName returns the one name of the bucket, the user, and the policy
 // of the request namespace/request: a valid bucket name of at most 63
 // characters. The hash keeps two requests apart whose joined names read the
 // same, such as a-b/c and a/b-c, or differ only after the cut.
 func resourceName(namespace, request string) string {
 	sum := sha256.Sum256([]byte(namespace + "/" + request))
-	suffix := "-" + hex.EncodeToString(sum[:])[:6]
+	suffix := "-" + hex.EncodeToString(sum[:])[:hashLength]
 
 	prefix := strings.ReplaceAll(namespace+"-"+request, ".", "-")
 	prefix = strings.TrimRight(prefix[:min(len(prefix), maxNameLength-len(suffix))], "-")

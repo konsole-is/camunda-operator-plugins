@@ -28,7 +28,7 @@ func TestResourceName(t *testing.T) {
 	valid := regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
 
 	short := resourceName("team-a", "orders-backup-storage")
-	assert.Regexp(t, `^team-a-orders-backup-storage-[0-9a-f]{6}$`, short)
+	assert.Regexp(t, `^team-a-orders-backup-storage-[0-9a-f]{16}$`, short)
 	assert.Equal(t, short, resourceName("team-a", "orders-backup-storage"), "the name is stable")
 
 	long := resourceName(strings.Repeat("n", 63), strings.Repeat("r", 63))
@@ -43,13 +43,20 @@ func TestResourceName(t *testing.T) {
 		"two names that differ after the cut",
 	)
 
+	assert.NotEqual(
+		t,
+		resourceName(strings.Repeat("n", 56)+"a", "orders-119-backup-storage"),
+		resourceName(strings.Repeat("n", 56)+"b", "orders-295-backup-storage"),
+		"two names whose hashes share their first 6 hex characters",
+	)
+
 	dotted := resourceName("team-a", "orders.v2")
 	assert.Regexp(t, valid, dotted)
 	assert.NotContains(t, dotted, ".")
 
 	// A cut that ends on a hyphen must not leave two hyphens before the hash.
-	assert.Regexp(t, valid, resourceName(strings.Repeat("n", 54), "r-request"))
-	assert.NotContains(t, resourceName(strings.Repeat("n", 54), "r-request"), "--")
+	assert.Regexp(t, valid, resourceName(strings.Repeat("n", 45), "r-request"))
+	assert.NotContains(t, resourceName(strings.Repeat("n", 45), "r-request"), "--")
 }
 
 func TestSecretName(t *testing.T) {
