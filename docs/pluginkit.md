@@ -127,9 +127,12 @@ Each Grant of the request has a row in `status.resources` with the kind `Grant`,
 pluginkit writes the status of the request once for each reconcile. The `Ready` condition comes from the first rule that matches:
 
 1. `OutputsReady` is not `True`: `Ready` is `False` with the reason of `OutputsReady`.
-2. A Grant of the request has `Ready=False`: `Ready` is `False` with reason `GrantRejected`. The message names the Grant and its reason. A Grant without a `Ready` condition does not count.
-3. `Result.NotReady` is set: `Ready` is `False` with its reason.
-4. Else `Ready` is `True` with reason `Healthy`.
+2. A Grant of the request has `Ready=False`: `Ready` is `False` with reason `GrantRejected`. The message names the Grant and its reason.
+3. A Grant of the request does not have `Ready=True` yet: `Ready` is `False` with reason `WaitingForGrants`. The message names the Grant. The identity extension sets `Ready` on the Grant when it applied the permission.
+4. `Result.NotReady` is set: `Ready` is `False` with its reason.
+5. Else `Ready` is `True` with reason `Healthy`.
+
+`OutputsReady` does not wait for the Grants. A test of a plugin that runs no identity extension must set `Ready=True` on the Grants itself before the request can get `Ready=True`.
 
 When another writer changed the request after the read, the status write fails with a conflict. pluginkit then reconciles the request again after one second.
 

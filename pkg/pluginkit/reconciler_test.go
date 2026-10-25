@@ -124,6 +124,7 @@ var _ = Describe("the request reconciler", func() {
 		request := createRequest("outputs-then-ready")
 
 		Eventually(func(g Gomega) {
+			readyGrants(g, request)
 			current := readRequest(g, request)
 			outputs := meta.FindStatusCondition(current.Status.Conditions, pluginsv1alpha1.ConditionOutputsReady)
 			ready := meta.FindStatusCondition(current.Status.Conditions, "Ready")
@@ -144,6 +145,33 @@ var _ = Describe("the request reconciler", func() {
 			ready := condition(g, request, "Ready")
 			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(ready.Reason).To(Equal("Healthy"))
+		}).Should(Succeed())
+	})
+
+	It("waits for its grants before it reports Ready", func() {
+		request := createRequest("grant-waiting")
+
+		Eventually(func(g Gomega) {
+			ready := condition(g, request, "Ready")
+			g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(ready.Reason).To(Equal(pluginsv1alpha1.ReasonWaitingForGrants))
+			g.Expect(ready.Message).To(ContainSubstring(pluginkit.GrantName(request.Name, "read")))
+			g.Expect(condition(g, request, pluginsv1alpha1.ConditionOutputsReady).Status).
+				To(Equal(metav1.ConditionTrue))
+			g.Expect(readRequest(g, request).Status.Outputs).To(HaveKeyWithValue("configMap", testRequestName+"-data"))
+		}).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginsv1alpha1.ReasonWaitingForGrants))
+		}).WithTimeout(time.Second).Should(Succeed())
+
+		// The spec plays the identity extension. Only a reconcile that read
+		// this Grant status can write Ready=True.
+		Eventually(func(g Gomega) { readyGrants(g, request) }).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			ready := condition(g, request, "Ready")
+			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(ready.Reason).To(Equal(v1.ReasonHealthy))
 		}).Should(Succeed())
 	})
 
