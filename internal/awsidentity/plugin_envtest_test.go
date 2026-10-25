@@ -341,6 +341,27 @@ var _ = Describe("the AWS identity hub", func() {
 		Expect(roleOf(Default, irsa, s.namespace).InlinePolicies).To(HaveKey("grant-orders-backup-read"))
 	})
 
+	It("keeps the policy of a grant whose request label moves to another claim", func() {
+		s := newGrantSetup()
+		billing := newOtherRequest(s.namespace, "billing-backup", "billing")
+		grant := grantFor(s.other, "orders-backup-read", readFragment)
+		Expect(k8s.Create(ctx, grant)).To(Succeed())
+		expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+
+		Eventually(func(g Gomega) {
+			got := read(g, grant.DeepCopy())
+			got.Labels[pluginsv1alpha1.LabelRequest] = billing.Name
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		// The hub reads every Grant of the cluster in one pass, so once a later
+		// Grant is Ready, the hub has seen the label change.
+		later := grantFor(s.other, "orders-later-read", readFragment)
+		Expect(k8s.Create(ctx, later)).To(Succeed())
+		expectGrant(later, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+
+		Expect(roleOf(Default, irsa, s.namespace).InlinePolicies).To(HaveKey("grant-orders-backup-read"))
+	})
+
 	It("keeps the policy of a grant whose request is gone", func() {
 		s := newGrantSetup()
 		kept := grantFor(s.other, "orders-backup-read", readFragment)
@@ -376,6 +397,10 @@ var _ = Describe("the AWS identity hub", func() {
 				"Action":"sts:AssumeRoleWithWebIdentity"}]}`))
 			got := read(g, request.DeepCopy())
 			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Reason).To(Equal("MissingServiceAccount"))
+			g.Expect(got.Status.Resources).To(ContainElement(And(
+				HaveField("Kind", "IAMRole"),
+				HaveField("Name", irsa.roleName(ns)),
+			)))
 		}, timeout).Should(Succeed())
 	})
 

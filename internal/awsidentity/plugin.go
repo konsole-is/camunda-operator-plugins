@@ -97,13 +97,17 @@ func (p *Plugin) Reconcile(
 	request := req.Object
 	sas := serviceAccounts(request.Spec.Target)
 	if len(sas) == 0 {
-		if err := p.revoke(ctx, req); err != nil {
+		resources, err := p.revoke(ctx, req)
+		if err != nil {
 			return pluginkit.Result{}, err
 		}
-		return pluginkit.Result{Pending: &pluginkit.Waiting{
-			Reason:  ReasonMissingServiceAccount,
-			Message: "The request names no ServiceAccount in spec.target",
-		}}, nil
+		return pluginkit.Result{
+			Pending: &pluginkit.Waiting{
+				Reason:  ReasonMissingServiceAccount,
+				Message: "The request names no ServiceAccount in spec.target",
+			},
+			Resources: resources,
+		}, nil
 	}
 
 	role, err := p.ensureRole(ctx, req, sas)
@@ -111,13 +115,7 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{}, err
 	}
 
-	resources := []pluginsv1alpha1.ResourceRef{{
-		Kind:     kindIAMRole,
-		Name:     role.Name,
-		ID:       role.ARN,
-		Role:     "Cloud identity of the cluster " + request.Spec.Target.Name,
-		OnOrphan: pluginsv1alpha1.OnOrphanKept,
-	}}
+	resources := []pluginsv1alpha1.ResourceRef{roleResource(role, request)}
 	if p.mode == awskit.ModePodIdentity {
 		associations, err := p.ensureAssociations(ctx, req, sas, role)
 		if err != nil {
@@ -164,23 +162,39 @@ func (p *Plugin) Reconcile(
 	return res, nil
 }
 
+func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) pluginsv1alpha1.ResourceRef {
+	return pluginsv1alpha1.ResourceRef{
+		Kind:     kindIAMRole,
+		Name:     role.Name,
+		ID:       role.ARN,
+		Role:     "Cloud identity of the cluster " + request.Spec.Target.Name,
+		OnOrphan: pluginsv1alpha1.OnOrphanKept,
+	}
+}
+
 // revoke makes the role of req, when it exists, trust nobody, and deletes its
-// associations with Pod Identity.
-func (p *Plugin) revoke(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
+// associations with Pod Identity. It returns the row of the role, which
+// stays, or none when there is no role.
+func (p *Plugin) revoke(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+) ([]pluginsv1alpha1.ResourceRef, error) {
 	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
 	if err != nil || arn == "" {
-		return err
+		return nil, err
 	}
 
 	role, err := p.ensureRole(ctx, req, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if p.mode == awskit.ModePodIdentity {
-		_, err = p.ensureAssociations(ctx, req, nil, role)
+		if _, err := p.ensureAssociations(ctx, req, nil, role); err != nil {
+			return nil, err
+		}
 	}
-	return err
+	return []pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, nil
 }
 
 // liveRoleARN returns the ARN of the role name, or "" when it does not exist.
