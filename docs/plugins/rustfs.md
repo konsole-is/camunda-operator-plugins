@@ -60,7 +60,7 @@ kubectl create secret generic rustfs-admin --namespace camunda-operator-plugins 
 | `rustfs.adminSecret.accessKeyKey` | `accessKey` | The key of the admin access key in that Secret. |
 | `rustfs.adminSecret.secretKeyKey` | `secretKey` | The key of the admin secret key in that Secret. |
 | `rustfs.consoleUrl` | `""` | The URL of the RustFS console. When it is set, each request links to it. |
-| `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. A Go duration such as `30m`. `0` turns it off. The plugin also reads the used size every 5 minutes, which corrects drift too, so a `resync` of more than 5 minutes changes nothing today. |
+| `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. A Go duration such as `30m`. `0` turns it off. The plugin also reconciles each request every 5 minutes to read the used size. That reconcile corrects drift and records the event too, so a `resync` of more than 5 minutes changes nothing today. |
 | `registrations` | `rustfs-bucket` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. The item `limits` shows the tested RustFS releases. |
 | `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/rustfs` | The image of the controller. |
 | `image.tag` | the `appVersion` of the chart | The tag of the image. |

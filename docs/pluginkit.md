@@ -105,7 +105,7 @@ pluginkit serves each `PluginRequest` whose label `plugins.camunda.io/registrati
 
 A change outside the cluster starts no reconcile. Someone can delete a bucket policy in the console of the cloud, and the request still reports `Ready=True`. When `Config.Resync` is not zero, pluginkit reconciles each served request again after that time, also when nothing in the cluster changed. Your `Reconcile` reads the resources outside the cluster, compares them with the desired state, and repairs each difference.
 
-pluginkit adds a random part of up to 10% to the time: with a `Resync` of one hour, the next reconcile comes after 60 to 66 minutes. Because of this, the requests of a fleet do not all call the cloud API at the same time. When `Result.RequeueAfter` is shorter than this time, `RequeueAfter` wins. A request whose parameters do not pass the schema, and a deleted request, get no resync. `Setup` refuses a negative `Resync`.
+After each reconcile, pluginkit adds a new random part of up to 10% to the time: with a `Resync` of one hour, the next reconcile comes after 60 to 66 minutes. Because of this, the requests of a fleet do not all call the cloud API at the same time. When `Result.RequeueAfter` is shorter than this time, `RequeueAfter` wins. A request whose parameters do not pass the schema, and a deleted request, get no resync. `Setup` returns an error for a negative `Resync`.
 
 Put each repair in `Result.Corrected`. For each reconcile with a `Corrected` list, pluginkit records one event on the request:
 
