@@ -37,6 +37,7 @@ spec:
             - -endpoint={{ required "rustfs.endpoint is required" .Values.rustfs.endpoint }}
             - -region={{ .Values.rustfs.region }}
             - -console-url={{ .Values.rustfs.consoleUrl }}
+            - -resync={{ .Values.resync }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

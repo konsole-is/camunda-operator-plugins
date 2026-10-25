@@ -105,29 +105,40 @@ type Plugin struct {
 // Reconcile creates the bucket, the policy, and the user of the request when
 // they are missing, and returns the Secret and the ObjectStorageConfig. It
 // keeps the key of the user while the Secret holds it, and sets a new key
-// when the Secret is gone. An error of RustFS is returned with the step that
-// failed.
+// when the Secret is gone. A request that published its output already
+// reports each object that it creates again, and a policy that it attaches
+// again, as corrected drift. An error of RustFS is returned with the step
+// that failed.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 ) (pluginkit.Result, error) {
 	name := resourceName(req.Object.Namespace, req.Object.Name)
+	var changed repairs
 
 	created, err := p.buckets.EnsureBucket(ctx, name)
 	if err != nil {
 		return pluginkit.Result{}, fmt.Errorf("creating the bucket %q: %w", name, err)
 	}
 	if created {
+		changed.bucket = true
 		req.Event(corev1.EventTypeNormal, eventReasonBucketCreated, eventActionCreate, "Created the bucket %s", name)
 	}
 
-	if err := p.ensurePolicy(ctx, req, name); err != nil {
+	if changed.policy, err = p.ensurePolicy(ctx, req, name); err != nil {
 		return pluginkit.Result{}, err
 	}
 
-	key, err := p.ensureUser(ctx, req, name)
+	key, err := p.ensureUser(ctx, req, name, &changed)
 	if err != nil {
 		return pluginkit.Result{}, err
+	}
+
+	// Before the first output, a create is the first one, or the retry of a
+	// reconcile that failed.
+	var corrected []string
+	if req.Object.Status.Outputs[outputObjectStorageConfig] != "" {
+		corrected = changed.corrected(name)
 	}
 
 	size, sizeKnown, sizeErr := p.bucketSize(ctx, name)
@@ -142,37 +153,66 @@ func (p *Plugin) Reconcile(
 		Links:        links(p.settings.ConsoleURL),
 		Resources:    resources(name, p.settings.Endpoint, req.Object.Name),
 		RequeueAfter: sizeRequeue,
+		Corrected:    corrected,
 	}, nil
 }
 
+// repairs is what one reconcile created or attached in RustFS.
+type repairs struct {
+	bucket, policy, user, attached bool
+}
+
+// corrected names each repair of the RustFS objects name. A policy attached
+// to a created user is part of the create.
+func (c repairs) corrected(name string) []string {
+	var out []string
+	if c.bucket {
+		out = append(out, "created the bucket "+name+", which was gone")
+	}
+	if c.policy {
+		out = append(out, "created the policy "+name+", which was gone")
+	}
+	if c.user {
+		out = append(out, "created the user "+name+", which was gone")
+	}
+	if c.attached && !c.user {
+		out = append(out, "attached the policy "+name+" to the user "+name+" again")
+	}
+	return out
+}
+
+// ensurePolicy creates the policy name when it is missing, and reports
+// whether it did.
 func (p *Plugin) ensurePolicy(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	name string,
-) error {
+) (bool, error) {
 	exists, err := p.admin.PolicyExists(ctx, name)
 	if err != nil {
-		return fmt.Errorf("reading the policy %q: %w", name, err)
+		return false, fmt.Errorf("reading the policy %q: %w", name, err)
 	}
 
 	if exists {
-		return nil
+		return false, nil
 	}
 
 	if err := p.admin.AddPolicy(ctx, name, userPolicy(name)); err != nil {
-		return fmt.Errorf("creating the policy %q: %w", name, err)
+		return false, fmt.Errorf("creating the policy %q: %w", name, err)
 	}
 	req.Event(corev1.EventTypeNormal, eventReasonPolicyCreated, eventActionCreate, "Created the policy %s", name)
-	return nil
+	return true, nil
 }
 
 // ensureUser returns the secret key of the user name, whose policy is the
 // policy name. It creates the user, or sets a new key, when the Secret of the
-// request does not hold the key of the user.
+// request does not hold the key of the user. It sets the user and attached
+// fields of changed.
 func (p *Plugin) ensureUser(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	name string,
+	changed *repairs,
 ) (string, error) {
 	key, err := p.storedKey(ctx, req.Object, name)
 	if err != nil {
@@ -196,6 +236,7 @@ func (p *Plugin) ensureUser(
 			return "", fmt.Errorf("setting the key of the user %q: %w", name, err)
 		}
 		if missing {
+			changed.user = true
 			req.Event(corev1.EventTypeNormal, eventReasonUserCreated, eventActionCreate, "Created the user %s", name)
 		} else {
 			req.Event(
@@ -212,6 +253,7 @@ func (p *Plugin) ensureUser(
 		if err := p.admin.AttachPolicy(ctx, name, name); err != nil {
 			return "", fmt.Errorf("attaching the policy %q to the user: %w", name, err)
 		}
+		changed.attached = true
 		req.Event(
 			corev1.EventTypeNormal,
 			eventReasonPolicyAttached,

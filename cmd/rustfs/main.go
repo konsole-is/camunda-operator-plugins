@@ -23,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -71,6 +72,12 @@ func main() {
 		"console-url",
 		"",
 		"The URL of the RustFS console. Each request links to it when it is set.",
+	)
+	flag.DurationVar(
+		&opts.Resync,
+		"resync",
+		time.Hour,
+		"The time after which the controller reconciles each request again. 0 turns it off.",
 	)
 	registrations := flag.String(
 		"registrations",

@@ -30,6 +30,8 @@ The summary of a request shows the bucket, its used size, and the endpoint. When
 
 The used size comes from the scanner of RustFS, so it lags behind the writes. The plugin reads it again every 5 minutes.
 
+Someone can delete the bucket, the user, or the policy in RustFS, or detach the policy from the user. At the next reconcile, the plugin creates each one again and attaches the policy again. It records one `DriftCorrected` event on the request that names each repair, and the summary item `Last drift corrected` shows the time. A bucket that the plugin creates again is empty: the plugin cannot bring back the backups of a deleted bucket.
+
 While the Secret holds the secret key of the user, the plugin does not change the key. If the Secret is gone, the plugin writes it again. When the plugin no longer has the key, it sets a new secret key on the user first, and the old key stops working. A delete of the Secret is not a key rotation: a reconcile that read the Secret before the delete writes it again with the same key.
 
 ## Prerequisites
@@ -58,6 +60,7 @@ kubectl create secret generic rustfs-admin --namespace camunda-operator-plugins 
 | `rustfs.adminSecret.accessKeyKey` | `accessKey` | The key of the admin access key in that Secret. |
 | `rustfs.adminSecret.secretKeyKey` | `secretKey` | The key of the admin secret key in that Secret. |
 | `rustfs.consoleUrl` | `""` | The URL of the RustFS console. When it is set, each request links to it. |
+| `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. A Go duration such as `30m`. `0` turns it off. The plugin also reads the used size every 5 minutes, which corrects drift too, so a `resync` of more than 5 minutes changes nothing today. |
 | `registrations` | `rustfs-bucket` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. The item `limits` shows the tested RustFS releases. |
 | `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/rustfs` | The image of the controller. |
 | `image.tag` | the `appVersion` of the chart | The tag of the image. |

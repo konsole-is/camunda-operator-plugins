@@ -20,6 +20,13 @@ rustfs:
   # consoleUrl, when set, is the link of each request to the RustFS console.
   consoleUrl: ""
 
+# resync is the time after which the controller reconciles each request
+# again, and creates a bucket, a user, or a policy that was deleted in RustFS.
+# The controller also reconciles each request every 5 minutes to read the used
+# size of its bucket.
+# 0 turns the resync off.
+resync: 1h
+
 # registrations are the PluginRegistrations that the controller writes at
 # startup and serves. Each item is a name and the fields of a registration
 # spec. The chart grants the controller the verb serve on each name, and on no

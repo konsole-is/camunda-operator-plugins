@@ -63,6 +63,8 @@ type Options struct {
 	// HealthInterval is the time between two checks that RustFS answers and
 	// accepts the admin key. Zero is the default of pluginkit.
 	HealthInterval time.Duration
+	// Resync is the pluginkit.Config.Resync of the plugin.
+	Resync time.Duration
 }
 
 // NewManager returns a manager for cfg that publishes and serves the
@@ -125,6 +127,7 @@ func newManager(cfg *rest.Config, opts Options, a admin, b buckets) (ctrl.Manage
 		Owns:           []client.Object{&corev1.Secret{}, &v1.ObjectStorageConfig{}},
 		Health:         a.Ping,
 		HealthInterval: opts.HealthInterval,
+		Resync:         opts.Resync,
 	}, plugin); err != nil {
 		return nil, fmt.Errorf("setting up the plugin: %w", err)
 	}

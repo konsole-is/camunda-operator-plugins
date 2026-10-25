@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,6 +48,31 @@ func secretOf(request *pluginsv1alpha1.PluginRequest) *corev1.Secret {
 
 func contractOf(request *pluginsv1alpha1.PluginRequest) *v1.ObjectStorageConfig {
 	return &v1.ObjectStorageConfig{ObjectMeta: metav1.ObjectMeta{Namespace: request.Namespace, Name: request.Name}}
+}
+
+// touch changes an annotation of request, which starts a reconcile.
+func touch(request *pluginsv1alpha1.PluginRequest) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		read := readRequest(g, request)
+		read.Annotations = map[string]string{"example.com/touch": time.Now().String()}
+		g.Expect(k8s.Update(ctx, read)).To(Succeed())
+	}, timeout).Should(Succeed())
+}
+
+// driftEvents returns the DriftCorrected events on request.
+func driftEvents(g Gomega, request *pluginsv1alpha1.PluginRequest) []eventsv1.Event {
+	read := readRequest(g, request)
+	var list eventsv1.EventList
+	g.Expect(k8s.List(ctx, &list, client.InNamespace(request.Namespace))).To(Succeed())
+
+	var found []eventsv1.Event
+	for _, e := range list.Items {
+		if e.Regarding.UID == read.UID && e.Reason == "DriftCorrected" {
+			found = append(found, e)
+		}
+	}
+	return found
 }
 
 var _ = Describe("the rustfs plugin", func() {
@@ -134,6 +160,57 @@ var _ = Describe("the rustfs plugin", func() {
 			user, _ := fake.user(resourceName(ns, request.Name))
 			g.Expect(string(secret.Data[secretKeySecretAccessKey])).To(Equal(user.secretKey))
 			g.Expect(fake.addUsers()).To(BeNumerically(">", calls))
+		}, timeout).Should(Succeed())
+	})
+
+	It("creates again what was deleted in RustFS, and reports the drift", func() {
+		ns := newNamespace()
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
+		readyRequest(request)
+		name := resourceName(ns, request.Name)
+		Expect(driftEvents(Default, request)).To(BeEmpty(), "the first create is not drift")
+
+		_, err := fake.DeleteBucket(ctx, name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fake.RemovePolicy(ctx, name)).To(Succeed())
+		Expect(fake.RemoveUser(ctx, name)).To(Succeed())
+		touch(request)
+
+		Eventually(func(g Gomega) {
+			g.Expect(fake.hasBucket(name)).To(BeTrue())
+			_, ok := fake.policy(name)
+			g.Expect(ok).To(BeTrue())
+			user, ok := fake.user(name)
+			g.Expect(ok).To(BeTrue())
+			g.Expect(user.policy).To(Equal(name))
+
+			events := driftEvents(g, request)
+			g.Expect(events).To(HaveLen(1))
+			g.Expect(events[0].Note).To(SatisfyAll(
+				ContainSubstring("created the bucket "+name+", which was gone"),
+				ContainSubstring("created the policy "+name+", which was gone"),
+				ContainSubstring("created the user "+name+", which was gone"),
+			))
+			g.Expect(readRequest(g, request).Status.Summary).
+				To(ContainElement(HaveField("Label", "Last drift corrected")))
+		}, timeout).Should(Succeed())
+	})
+
+	It("attaches the policy again when it was detached in RustFS, and reports the drift", func() {
+		ns := newNamespace()
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
+		readyRequest(request)
+		name := resourceName(ns, request.Name)
+
+		Expect(fake.AttachPolicy(ctx, "", name)).To(Succeed())
+		touch(request)
+
+		Eventually(func(g Gomega) {
+			user, _ := fake.user(name)
+			g.Expect(user.policy).To(Equal(name))
+			events := driftEvents(g, request)
+			g.Expect(events).To(HaveLen(1))
+			g.Expect(events[0].Note).To(ContainSubstring("attached the policy " + name + " to the user " + name + " again"))
 		}, timeout).Should(Succeed())
 	})
 
