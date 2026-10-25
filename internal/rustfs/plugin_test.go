@@ -52,7 +52,7 @@ func contractOf(request *pluginsv1alpha1.PluginRequest) *v1.ObjectStorageConfig 
 var _ = Describe("the rustfs plugin", func() {
 	It("creates a bucket, a user that only that bucket accepts, a Secret, and the contract", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, "orders-backup", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		name := resourceName(ns, request.Name)
 
@@ -99,7 +99,7 @@ var _ = Describe("the rustfs plugin", func() {
 
 	It("keeps the key on a later reconcile", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, "orders-backup", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		calls := fake.addUsers()
 		key := readSecret(Default, request).Data[secretKeySecretAccessKey]
@@ -118,7 +118,7 @@ var _ = Describe("the rustfs plugin", func() {
 
 	It("issues a new key when the Secret is gone", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, "orders-backup", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		calls := fake.addUsers()
 		oldKey := readSecret(Default, request).Data[secretKeySecretAccessKey]
@@ -145,7 +145,7 @@ var _ = Describe("the rustfs plugin", func() {
 		DeferCleanup(fake.heal, "AddUser")
 
 		ns := newNamespace()
-		request := bucketRequest(ns, "orders-backup", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -164,7 +164,7 @@ var _ = Describe("the rustfs plugin", func() {
 
 	It("deletes the bucket, the user, the policy, the Secret, and the contract with Delete", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, "orders-backup", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		name := resourceName(ns, request.Name)
 
@@ -184,7 +184,7 @@ var _ = Describe("the rustfs plugin", func() {
 
 	It("keeps everything with Orphan", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, "orders-backup", pluginsv1alpha1.DeletionPolicyOrphan)
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyOrphan)
 		readyRequest(request)
 		name := resourceName(ns, request.Name)
 
@@ -208,7 +208,7 @@ var _ = Describe("the rustfs plugin", func() {
 
 	It("keeps the finalizer while the bucket cannot be deleted", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, "orders-backup", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 
 		fake.fail("DeleteBucket", errors.New("bucket busy"))

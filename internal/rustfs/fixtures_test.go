@@ -148,13 +148,13 @@ func newNamespace() string {
 	return name
 }
 
-// bucketRequest returns a request of rustfs-bucket, as a claim controller
-// writes it, for the cluster orders.
-func bucketRequest(namespace, name string, policy pluginsv1alpha1.DeletionPolicy) *pluginsv1alpha1.PluginRequest {
+// bucketRequest returns the request orders-backup of rustfs-bucket, as a claim
+// controller writes it, for the cluster orders.
+func bucketRequest(namespace string, policy pluginsv1alpha1.DeletionPolicy) *pluginsv1alpha1.PluginRequest {
 	return &pluginsv1alpha1.PluginRequest{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
-			Name:      name,
+			Name:      "orders-backup",
 			Labels: map[string]string{
 				pluginsv1alpha1.LabelSection:      "backup-storage",
 				pluginsv1alpha1.LabelRegistration: registration,
