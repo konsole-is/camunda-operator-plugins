@@ -22,6 +22,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,7 +72,7 @@ func TestReconcileWaitsForAServiceAccount(t *testing.T) {
 	assert.Equal(t, []string{"GetRole"}, fake.Calls(), "a request without a role gets none")
 }
 
-func TestApplyPlanFreesTheSpaceOfARemovedPolicyBeforeItPuts(t *testing.T) {
+func newTestRole(t *testing.T) (*Plugin, *awsfake.IAM, awskit.Role) {
 	fake := awsfake.NewIAM()
 	opts := validOptions()
 	opts.Clients.IAM = fake
@@ -82,19 +83,45 @@ func TestApplyPlanFreesTheSpaceOfARemovedPolicyBeforeItPuts(t *testing.T) {
 		TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
 	})
 	require.NoError(t, err)
+	return p, fake, role
+}
+
+func TestWritePoliciesFreesTheSpaceOfARemovedPolicyBeforeItPuts(t *testing.T) {
+	p, fake, role := newTestRole(t)
 	old, replacement := policyOfSize(t, 6000), policyOfSize(t, 5000)
 	require.NoError(t, awskit.PutInlinePolicy(context.Background(), fake, role.Name, "grant-old", old))
-	current := map[string][]byte{"grant-old": old}
-	grants := []clusterGrant{{policy: grantPolicy{grant: "new", policy: "grant-new", doc: replacement}}}
-	plan := planPolicies(current, []grantPolicy{grants[0].policy})
 
-	put, err := p.applyPlan(context.Background(), role, current, grants, &plan)
+	plan, put, removed, err := p.writePolicies(
+		context.Background(),
+		role,
+		map[string][]byte{"grant-old": old},
+		[]grantPolicy{{grant: "new", policy: "grant-new", doc: replacement}},
+	)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"grant-new"}, put)
+	assert.Equal(t, []string{"grant-old"}, removed)
 	assert.Equal(t, metav1.ConditionTrue, plan.applied["new"].status, plan.applied["new"].message)
 	got, _ := fake.Role(role.Name)
 	assert.Equal(t, []string{"grant-new"}, slices.Collect(maps.Keys(got.InlinePolicies)))
+}
+
+func TestWritePoliciesPlansAgainAfterIAMRefusesADocument(t *testing.T) {
+	p, fake, role := newTestRole(t)
+	fake.FailNext("PutRolePolicy", &smithy.GenericAPIError{Code: "MalformedPolicyDocument", Message: "bad"})
+	big, small := policyOfSize(t, 10000), policyOfSize(t, 500)
+
+	plan, put, _, err := p.writePolicies(context.Background(), role, map[string][]byte{}, []grantPolicy{
+		{grant: "big", policy: "grant-big", doc: big},
+		{grant: "small", policy: "grant-small", doc: small},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"grant-small"}, put)
+	assert.Equal(t, pluginsv1alpha1.ReasonRejected, plan.applied["big"].reason)
+	assert.Contains(t, plan.applied["big"].message, "bad")
+	assert.Equal(t, metav1.ConditionTrue, plan.applied["small"].status, plan.applied["small"].message)
+	assert.Equal(t, 500, plan.size)
 }
 
 func TestNewPluginAcceptsEachMode(t *testing.T) {

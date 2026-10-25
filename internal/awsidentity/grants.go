@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
@@ -72,14 +73,13 @@ func (p *Plugin) syncGrants(
 	for _, g := range grants {
 		policies = append(policies, g.policy)
 	}
-	plan := planPolicies(current, append(policies, retained...))
 
-	put, err := p.applyPlan(ctx, role, current, grants, &plan)
+	plan, put, removed, err := p.writePolicies(ctx, role, current, append(policies, retained...))
 	if err != nil {
 		return grantCounts{}, false, err
 	}
 
-	for _, policy := range plan.remove {
+	for _, policy := range removed {
 		req.Event(
 			corev1.EventTypeNormal,
 			eventReasonPolicyRemoved,
@@ -128,8 +128,8 @@ func (p *Plugin) syncGrants(
 // clusterGrants returns the Grants of the cluster of request that belong to
 // its claim, read fresh, sorted by creation time and then by name. It also
 // returns, as refused, the policy of each Grant whose request is gone, such
-// as after an Orphan deletion of that request, so that the role keeps the
-// statement that it has for it and gets no new one.
+// as after an Orphan deletion of that request, or does not own it, so that
+// the role keeps the statement that it has for it and gets no new one.
 func (p *Plugin) clusterGrants(
 	ctx context.Context,
 	request *pluginsv1alpha1.PluginRequest,
@@ -159,11 +159,13 @@ func (p *Plugin) clusterGrants(
 		if err != nil {
 			return nil, nil, err
 		}
-		if owner == nil {
+		if owner == nil || !owns(owner, &g) {
 			retained = append(retained, grantPolicy{
-				grant:   g.Name,
-				policy:  policyName(g.Name),
-				refused: rejected("The request of the Grant is gone"),
+				grant:  g.Name,
+				policy: policyName(g.Name),
+				refused: rejected(
+					"The request of the Grant is gone, or it is not of the registration and cluster of the Grant",
+				),
 			})
 			continue
 		}
@@ -180,6 +182,14 @@ func (p *Plugin) clusterGrants(
 	}
 
 	return grants, retained, nil
+}
+
+// The grant admission policy checks only the registration label, so a
+// plugin could name the request of another registration.
+func owns(request *pluginsv1alpha1.PluginRequest, grant *pluginsv1alpha1.Grant) bool {
+	return request.Spec.Registration == grant.Labels[pluginsv1alpha1.LabelRegistration] &&
+		request.Spec.Target.Kind == kindCamundaCluster &&
+		request.Spec.Target.Name == grant.Labels[pluginsv1alpha1.LabelCluster]
 }
 
 // grantRequest returns the request of the request label of grant, or nil
@@ -278,50 +288,62 @@ func templateChanged(message string) cond {
 	return cond{status: metav1.ConditionFalse, reason: pluginsv1alpha1.ReasonTemplateChanged, message: message}
 }
 
-// applyPlan removes the policies of plan from role, puts its policies, and
-// returns the names of the policies that it put. A document that IAM
-// refuses turns its Grant into Applied=False in plan, with the reason
-// Rejected or OverSizeLimit.
-func (p *Plugin) applyPlan(
+// writePolicies puts policies on role in their order, and removes each
+// policy of the hub that is not in policies. When IAM refuses a document,
+// the returned plan refuses that policy with the reason Rejected or
+// OverSizeLimit. It returns the plan that it wrote and the policies that it
+// put and removed.
+func (p *Plugin) writePolicies(
 	ctx context.Context,
 	role awskit.Role,
 	current map[string][]byte,
-	grants []clusterGrant,
-	plan *policyPlan,
-) ([]string, error) {
-	// The plan does not count the removed policies, and IAM counts them
-	// until they are gone.
-	for _, policy := range plan.remove {
-		if err := awskit.DeleteInlinePolicy(ctx, p.clients.IAM, role.Name, policy); err != nil {
-			return nil, err
+	policies []grantPolicy,
+) (policyPlan, []string, []string, error) {
+	current = maps.Clone(current)
+	policies = slices.Clone(policies)
+	var put, removed []string
+	for {
+		plan := planPolicies(current, policies)
+
+		// The plan does not count the removed policies, but the IAM size limit
+		// counts every inline policy on the role until it is deleted.
+		for _, policy := range plan.remove {
+			if err := awskit.DeleteInlinePolicy(ctx, p.clients.IAM, role.Name, policy); err != nil {
+				return policyPlan{}, nil, nil, err
+			}
+			delete(current, policy)
+			removed = append(removed, policy)
+		}
+
+		refusedOne := false
+		for i, g := range policies {
+			doc, ok := plan.put[g.policy]
+			if !ok {
+				continue
+			}
+
+			err := awskit.PutInlinePolicy(ctx, p.clients.IAM, role.Name, g.policy, doc)
+			switch {
+			case err == nil:
+				current[g.policy] = doc
+				put = append(put, g.policy)
+				continue
+			case awskit.IsMalformedPolicy(err):
+				policies[i].refused = rejected("IAM refused the policy: " + awskit.Message(err))
+			case awskit.IsLimitExceeded(err):
+				policies[i].refused = &refusal{
+					reason:  pluginsv1alpha1.ReasonOverSizeLimit,
+					message: "IAM refused the policy: " + awskit.Message(err),
+				}
+			default:
+				return policyPlan{}, nil, nil, err
+			}
+			refusedOne = true
+			break
+		}
+
+		if !refusedOne {
+			return plan, put, removed, nil
 		}
 	}
-
-	var put []string
-	for _, g := range grants {
-		doc, ok := plan.put[g.policy.policy]
-		if !ok {
-			continue
-		}
-
-		err := awskit.PutInlinePolicy(ctx, p.clients.IAM, role.Name, g.policy.policy, doc)
-		var reason string
-		switch {
-		case err == nil:
-			put = append(put, g.policy.policy)
-			continue
-		case awskit.IsMalformedPolicy(err):
-			reason = pluginsv1alpha1.ReasonRejected
-		case awskit.IsLimitExceeded(err):
-			reason = pluginsv1alpha1.ReasonOverSizeLimit
-		default:
-			return nil, err
-		}
-
-		old, onRole := current[g.policy.policy]
-		plan.applied[g.policy.grant] = notApplied(reason, "IAM refused the policy: "+awskit.Message(err), onRole)
-		plan.size += awskit.PolicySize(old) - awskit.PolicySize(doc)
-	}
-
-	return put, nil
 }

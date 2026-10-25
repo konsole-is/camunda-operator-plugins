@@ -300,6 +300,27 @@ var _ = Describe("the AWS identity hub", func() {
 		}, 2*time.Second).Should(Succeed())
 	})
 
+	It("puts no statement for a grant that names a request of another registration", func() {
+		s := newGrantSetup()
+		// A request of the claim that another registration serves.
+		stranger := otherRequest(s.namespace, "orders-stranger", "orders", "orders")
+		stranger.Spec.Registration = "other-plugin"
+		stranger.Labels[pluginsv1alpha1.LabelRegistration] = "other-plugin"
+		Expect(k8s.Create(ctx, stranger)).To(Succeed())
+		forged := grantFor(s.other, "orders-forged-read", readFragment)
+		forged.Labels[pluginsv1alpha1.LabelRequest] = stranger.Name
+		Expect(k8s.Create(ctx, forged)).To(Succeed())
+
+		// The hub reads every Grant of the cluster in one pass, so once a later
+		// Grant is Ready, the hub has seen the forged one.
+		own := grantFor(s.other, "orders-backup-read", readFragment)
+		Expect(k8s.Create(ctx, own)).To(Succeed())
+		expectGrant(own, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+
+		Expect(roleOf(Default, irsa, s.namespace).InlinePolicies).NotTo(HaveKey("grant-orders-forged-read"))
+		Expect(grantConditions(Default, forged)).To(BeEmpty())
+	})
+
 	It("keeps the policy of a grant whose request is gone", func() {
 		s := newGrantSetup()
 		kept := grantFor(s.other, "orders-backup-read", readFragment)
