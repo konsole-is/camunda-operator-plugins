@@ -94,6 +94,8 @@ CAUTION: Use `Delete` only when you do not need the backups. `Delete` erases eac
 
 With `Orphan`, the plugin keeps the bucket, the user, the policy, the Secret, and the `ObjectStorageConfig`. The Secret and the `ObjectStorageConfig` lose their owner reference to the request, and keep their labels.
 
+The name of the bucket comes from the namespace and the name of the request. Thus a later request with the same namespace and name uses the kept bucket, user, and policy again, with the backups in the bucket. If that request has the policy `Delete`, its delete erases those backups too.
+
 ## Troubleshooting
 
 | Reason | Condition | What to do |
