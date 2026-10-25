@@ -60,6 +60,17 @@ func touch(request *pluginsv1alpha1.PluginRequest) {
 	}, timeout).Should(Succeed())
 }
 
+// settle waits until request stays unchanged for 3 seconds, so that no
+// reconcile that read it before a change of the spec is still running.
+func settle(request *pluginsv1alpha1.PluginRequest) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		before := readRequest(g, request).ResourceVersion
+		time.Sleep(3 * time.Second)
+		g.Expect(readRequest(g, request).ResourceVersion).To(Equal(before))
+	}, timeout).Should(Succeed())
+}
+
 // driftEvents returns the DriftCorrected events on request.
 func driftEvents(g Gomega, request *pluginsv1alpha1.PluginRequest) []eventsv1.Event {
 	read := readRequest(g, request)
@@ -167,6 +178,7 @@ var _ = Describe("the rustfs plugin", func() {
 		ns := newNamespace()
 		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
+		settle(request)
 		name := resourceName(ns, request.Name)
 		Expect(driftEvents(Default, request)).To(BeEmpty(), "the first create is not drift")
 
@@ -200,6 +212,7 @@ var _ = Describe("the rustfs plugin", func() {
 		ns := newNamespace()
 		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
+		settle(request)
 		name := resourceName(ns, request.Name)
 
 		_, err := fake.DeleteBucket(ctx, name)
@@ -224,6 +237,7 @@ var _ = Describe("the rustfs plugin", func() {
 		ns := newNamespace()
 		request := bucketRequest(ns, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
+		settle(request)
 		name := resourceName(ns, request.Name)
 
 		Expect(fake.AttachPolicy(ctx, "", name)).To(Succeed())
