@@ -60,8 +60,8 @@ type Options struct {
 	LeaderElectionID string
 	// ReportCertificateExpiry adds the expiry of the listener certificate to
 	// the summary of each https request. The ServiceAccount then needs get on
-	// the certificate Secret. The item follows a renewed certificate and the
-	// clock only with a Resync.
+	// the certificate Secret. No change of the certificate Secret and no
+	// passing of time reconciles the request; a Resync does.
 	ReportCertificateExpiry bool
 	// Resync is the pluginkit.Config.Resync of the plugin.
 	Resync time.Duration
