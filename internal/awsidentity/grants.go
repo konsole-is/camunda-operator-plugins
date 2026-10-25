@@ -315,6 +315,7 @@ func (p *Plugin) writePolicies(
 			removed = append(removed, policy)
 		}
 
+		passed := len(put)
 		refusedOne := false
 		for i, g := range policies {
 			doc, ok := plan.put[g.policy]
@@ -342,7 +343,9 @@ func (p *Plugin) writePolicies(
 			break
 		}
 
-		if !refusedOne {
+		// A put or a refusal changes the size, so a Grant that the plan
+		// refused for the size limit can fit now.
+		if !refusedOne && len(put) == passed {
 			return plan, put, removed, nil
 		}
 	}
