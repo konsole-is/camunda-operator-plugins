@@ -30,7 +30,7 @@ The summary of a request shows the bucket, its used size, and the endpoint. When
 
 The used size comes from the scanner of RustFS, so it lags behind the writes. The plugin reads it again every 5 minutes.
 
-While the Secret holds the secret key of the user, the plugin does not change the key. If someone deletes the Secret, the plugin sets a new secret key on the user and writes the Secret again. The old key then stops working.
+While the Secret holds the secret key of the user, the plugin does not change the key. If the Secret is gone, the plugin writes it again. When the plugin no longer has the key, it sets a new secret key on the user first, and the old key stops working. A delete of the Secret is not a key rotation: a reconcile that read the Secret before the delete writes it again with the same key.
 
 ## Prerequisites
 
