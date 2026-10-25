@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/go-logr/logr v1.4.4
 	github.com/konsole-is/camunda-operator/api v0.2.1-0.20261021214556-8982ff45676b
-	github.com/konsole-is/camunda-operator/conformance v0.0.0-20261021214556-8982ff45676b
+	github.com/konsole-is/camunda-operator/conformance v0.0.0-20261024225545-5c9b1c4af551
 	github.com/onsi/ginkgo/v2 v2.33.0
 	github.com/onsi/gomega v1.44.0
 	github.com/sourcehawk/operator-component-framework v0.24.0
