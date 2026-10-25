@@ -35,7 +35,7 @@ import (
 const kindCamundaCluster = "CamundaCluster"
 
 // watches reconciles the requests of a cluster again when a Grant of the
-// cluster changes its spec, comes, or goes, when another request of the
+// cluster changes its spec or its labels, comes, or goes, when another request of the
 // cluster changes its spec or its outputs, and when the spec of a
 // registration changes that a Grant of the cluster names. pluginkit ignores
 // the mapped requests of registrations that the hub does not serve.
@@ -46,7 +46,10 @@ func watches(c client.Reader) []pluginkit.Watch {
 			Requests: func(ctx context.Context, obj client.Object) []reconcile.Request {
 				return clusterRequests(ctx, c, obj.GetNamespace(), obj.GetLabels()[pluginsv1alpha1.LabelCluster])
 			},
-			Predicates: []predicate.Predicate{predicate.GenerationChangedPredicate{}},
+			// The labels name the request and the registration of a Grant.
+			Predicates: []predicate.Predicate{
+				predicate.Or(predicate.GenerationChangedPredicate{}, predicate.LabelChangedPredicate{}),
+			},
 		},
 		{
 			Object: &pluginsv1alpha1.PluginRequest{},
