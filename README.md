@@ -29,7 +29,7 @@ docs/               one page for each plugin, and the pluginkit page
 hack/               the tools of the Makefile
 ```
 
-The `gateway-access` plugin serves the access section: it gives a cluster or a management plane host names, and routes them through a Gateway API Gateway. [`docs/pluginkit.md`](docs/pluginkit.md) describes the library for plugin authors.
+The `gateway-access` plugin serves the access section: it gives a cluster or a management plane host names, and routes them through a Gateway API Gateway. The `aws-identity` plugin serves the cloud identity section: it gives each cluster on EKS one IAM role, and puts the grants of other plugins on it. [`docs/pluginkit.md`](docs/pluginkit.md) describes the library for plugin authors.
 
 ## Development
 

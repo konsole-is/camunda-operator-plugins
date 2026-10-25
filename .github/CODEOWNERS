@@ -7,3 +7,9 @@
 /internal/gatewayaccess/          @sourcehawk
 /charts/gateway-access/           @sourcehawk
 /docs/plugins/gateway-access.md   @sourcehawk
+
+/cmd/aws-identity/                @sourcehawk
+/internal/awsidentity/            @sourcehawk
+/charts/aws-identity/             @sourcehawk
+/docs/plugins/aws-identity.md     @sourcehawk
+/pkg/awskit/                      @sourcehawk

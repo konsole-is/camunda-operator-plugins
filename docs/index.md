@@ -9,3 +9,4 @@ Plugin authors read [pluginkit](pluginkit.md), the shared library of every plugi
 ## Pages
 
 - [Gateway access](plugins/gateway-access.md): host names and Gateway API routes for clusters, Optimize, and management planes.
+- [AWS identity](plugins/aws-identity.md): one IAM role for each cluster, with the grants of other plugins on it.
