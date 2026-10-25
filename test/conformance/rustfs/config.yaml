@@ -10,6 +10,8 @@ timeouts:
 skip:
   - id: REQ-LOGS
     reason: pluginkit logs the request as namespace/name, not as its name
+  - id: ORDER-REGISTRATION-FIRST
+    reason: pluginkit can serve a request before it writes Ready=True on the registration
 cases:
   - name: basic
     target:

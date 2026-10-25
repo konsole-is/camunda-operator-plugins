@@ -27,6 +27,14 @@ done
 "$dir/setup.sh"
 "$repo/test/kind/plugin.sh" "$plugin" "$dir/values.yaml"
 
+# The suite reads the registration once, and the plugin writes it after its
+# pod is Ready.
+registration=$(awk '$1 == "registration:" { print $2 }' "$dir/config.yaml")
+echo "==> Waiting for the PluginRegistration $registration"
+kubectl wait "pluginregistration/$registration" --for=create --timeout=120s
+kubectl wait "pluginregistration/$registration" --for=condition=Accepted --timeout=120s
+kubectl wait "pluginregistration/$registration" --for=condition=Ready --timeout=120s
+
 echo "==> Running the conformance suite against $plugin"
 mkdir -p "$(dirname "$REPORT")"
 cd "$repo"
