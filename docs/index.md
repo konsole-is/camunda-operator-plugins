@@ -9,3 +9,4 @@ Plugin authors read [pluginkit](pluginkit.md), the shared library of every plugi
 ## Pages
 
 - [Gateway access](plugins/gateway-access.md): host names and Gateway API routes for clusters, Optimize, and management planes.
+- [RustFS bucket](plugins/rustfs.md): a RustFS bucket and an access key for the backups of each cluster.
