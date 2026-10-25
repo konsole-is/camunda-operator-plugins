@@ -14,6 +14,8 @@ spec:
     metadata:
       annotations:
         checksum/registrations: {{ include "aws-identity.registrations" . | sha256sum }}
+        # IRSA reads the annotations of the ServiceAccount when a pod starts.
+        checksum/serviceaccount: {{ toYaml .Values.serviceAccount.annotations | sha256sum }}
       labels:
         {{- include "aws-identity.selectorLabels" . | nindent 8 }}
     spec:
