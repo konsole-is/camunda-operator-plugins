@@ -15,7 +15,7 @@ type Plugin[P, I any] interface {
 ```
 
 - `Reconcile` brings the resources of a request to their desired state. It returns a `Result`: the outputs, the Kubernetes objects to apply, and the status fields. pluginkit calls it only for a request whose parameters pass the schema of the registration.
-- `Delete` deletes what pluginkit does not delete itself: each resource outside the cluster, and each cluster-scoped object, by name. It must succeed when the resources are already gone.
+- `Delete` deletes what pluginkit does not delete itself: each resource outside the cluster, and each cluster-scoped object, by name. It must succeed when the resources are already gone. Two requests in two namespaces can have the same name. A plugin that finds its cluster-scoped objects by label must match all three labels: `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/request-namespace`.
 - `Orphan` releases the resources of a request with the deletion policy `Orphan`, for example the tags that tie a cloud resource to the request.
 
 `Request.Object` is a copy of the `PluginRequest`. `Request.Log` is a logger with the key `request`. Call `Request.Event` once for each external action, such as the create of a bucket.
@@ -25,7 +25,7 @@ The fields of `Result`:
 | Field | What pluginkit does with it |
 | --- | --- |
 | `Outputs` | Writes them to `status.outputs`. Each key must be an output of the registration. Another key is an error. |
-| `Objects` | Applies them with server-side apply, and adds the labels `plugins.camunda.io/registration` and `plugins.camunda.io/request`. A namespaced object gets an owner reference to the request and must be in the namespace of the request. A cluster-scoped object gets the labels only. |
+| `Objects` | Applies them with server-side apply, and adds the labels `plugins.camunda.io/registration` and `plugins.camunda.io/request`. A namespaced object gets an owner reference to the request and must be in the namespace of the request. A cluster-scoped object gets no owner reference. It also gets the label `plugins.camunda.io/request-namespace` with the namespace of the request. |
 | `Pending` | A `*pluginkit.Waiting` with a `Reason` and a `Message`. When set, the outputs are not ready. `OutputsReady` and `Ready` are `False` with its reason, and the outputs of the last reconcile stay. pluginkit applies no object and no Grant, and keeps the Grants that exist. It still writes `Summary`, `Links`, `PodSelector`, and `Resources`. Set `RequeueAfter` too, to look again. |
 | `NotReady` | A `*pluginkit.Waiting`. When set, `Ready` is `False` with its reason. `OutputsReady` comes from the applied objects. |
 | `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. pluginkit adds a row to `status.resources` for each Grant of the request, so `Resources` does not need them. |
@@ -127,9 +127,12 @@ Each Grant of the request has a row in `status.resources` with the kind `Grant`,
 pluginkit writes the status of the request once for each reconcile. The `Ready` condition comes from the first rule that matches:
 
 1. `OutputsReady` is not `True`: `Ready` is `False` with the reason of `OutputsReady`.
-2. A Grant of the request has `Ready=False`: `Ready` is `False` with reason `GrantRejected`. The message names the Grant and its reason. A Grant without a `Ready` condition does not count.
-3. `Result.NotReady` is set: `Ready` is `False` with its reason.
-4. Else `Ready` is `True` with reason `Healthy`.
+2. A Grant of the request has `Ready=False`: `Ready` is `False` with reason `GrantRejected`. The message names the Grant and its reason.
+3. A Grant of the request does not have `Ready=True` yet: `Ready` is `False` with reason `WaitingForGrants`. The message names the Grant. The identity extension sets `Ready` on the Grant when it applied the permission.
+4. `Result.NotReady` is set: `Ready` is `False` with its reason.
+5. Else `Ready` is `True` with reason `Healthy`.
+
+`OutputsReady` does not wait for the Grants. A test of a plugin that runs no identity extension must set `Ready=True` on the Grants itself before the request can get `Ready=True`.
 
 When another writer changed the request after the read, the status write fails with a conflict. pluginkit then reconciles the request again after one second.
 

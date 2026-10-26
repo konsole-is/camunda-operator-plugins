@@ -10,3 +10,4 @@ Plugin authors read [pluginkit](pluginkit.md), the shared library of every plugi
 
 - [Gateway access](plugins/gateway-access.md): host names and Gateway API routes for clusters, Optimize, and management planes.
 - [AWS identity](plugins/aws-identity.md): one IAM role for each cluster, with the grants of other plugins on it.
+- [RustFS bucket](plugins/rustfs.md): a RustFS bucket and an access key for the backups of each cluster.

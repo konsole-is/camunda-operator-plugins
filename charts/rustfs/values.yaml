@@ -1,0 +1,48 @@
+image:
+  repository: ghcr.io/konsole-is/camunda-operator-plugins/rustfs
+  # An empty tag is the appVersion of the chart, which the release sets.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+rustfs:
+  # endpoint is the S3 endpoint of RustFS, as the controller and the Camunda
+  # pods reach it. It goes into every ObjectStorageConfig.
+  endpoint: http://rustfs.rustfs.svc:9000
+  region: us-east-1
+  # adminSecret names a Secret in the release namespace with an access key
+  # that can create buckets, users, and policies.
+  adminSecret:
+    name: rustfs-admin
+    accessKeyKey: accessKey
+    secretKeyKey: secretKey
+  # consoleUrl, when set, is the link of each request to the RustFS console.
+  consoleUrl: ""
+
+# registrations are the PluginRegistrations that the controller writes at
+# startup and serves. Each item is a name and the fields of a registration
+# spec. The chart grants the controller the verb serve on each name, and on no
+# other registration. The chart refuses to render without one.
+registrations:
+  - name: rustfs-bucket
+    sections: [backup-storage]
+    label: RustFS bucket
+    description: Creates one RustFS bucket and one access key for the backups of each cluster.
+    docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/rustfs.md
+    mode: Optional
+    deletionPolicies: [Delete, Orphan]
+    outputs:
+      - key: objectStorageConfig
+        description: The ObjectStorageConfig of the bucket, in the namespace of the claim.
+    limits:
+      - label: Tested RustFS versions
+        value: ">=1.0.1 <1.1.0"
+        description: The RustFS releases that the plugin is tested against.
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 128Mi

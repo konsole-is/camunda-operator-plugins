@@ -32,9 +32,9 @@ import (
 // prepareOwned returns a copy of obj, ready to apply for req: without its
 // status, and with the registration and request labels added to its own. A
 // namespaced object goes to the namespace of req when it names none, and gets
-// a controller owner reference to req. A cluster-scoped object gets the labels
-// only. A namespaced object in another namespace, and a cluster-scoped object
-// with a namespace, are errors.
+// a controller owner reference to req. A cluster-scoped object gets no owner
+// reference, and also gets the request namespace label. A namespaced object in
+// another namespace, and a cluster-scoped object with a namespace, are errors.
 func prepareOwned(
 	req *pluginsv1alpha1.PluginRequest,
 	obj client.Object,
@@ -72,6 +72,8 @@ func prepareOwned(
 				u.GetNamespace(),
 			)
 		}
+		labels[pluginsv1alpha1.LabelRequestNamespace] = req.Namespace
+		u.SetLabels(labels)
 		return u, nil
 	}
 

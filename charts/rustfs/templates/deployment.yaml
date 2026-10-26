@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rustfs.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustfs.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "rustfs.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/registrations: {{ toYaml .Values.registrations | sha256sum }}
+      labels:
+        {{- include "rustfs.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "rustfs.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -registrations=/etc/plugin/registrations.yaml
+            - -leader-elect
+            - -leader-election-id={{ include "rustfs.fullname" . }}
+            - -endpoint={{ required "rustfs.endpoint is required" .Values.rustfs.endpoint }}
+            - -region={{ .Values.rustfs.region }}
+            - -console-url={{ .Values.rustfs.consoleUrl }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_ACCOUNT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            # The admin key is in the environment, not in the arguments, so
+            # that it is not in the Pod spec.
+            - name: RUSTFS_ADMIN_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rustfs.adminSecret.name }}
+                  key: {{ .Values.rustfs.adminSecret.accessKeyKey }}
+            - name: RUSTFS_ADMIN_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rustfs.adminSecret.name }}
+                  key: {{ .Values.rustfs.adminSecret.secretKeyKey }}
+          volumeMounts:
+            - name: registrations
+              mountPath: /etc/plugin
+              readOnly: true
+          ports:
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: registrations
+          configMap:
+            name: {{ include "rustfs.fullname" . }}-registrations

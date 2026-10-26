@@ -13,3 +13,7 @@
 /charts/aws-identity/             @sourcehawk
 /docs/plugins/aws-identity.md     @sourcehawk
 /pkg/awskit/                      @sourcehawk
+/cmd/rustfs/                      @sourcehawk
+/internal/rustfs/                 @sourcehawk
+/charts/rustfs/                   @sourcehawk
+/docs/plugins/rustfs.md           @sourcehawk

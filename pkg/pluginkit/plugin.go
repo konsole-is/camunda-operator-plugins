@@ -45,7 +45,9 @@ type Plugin[P, I any] interface {
 	// cluster, and each cluster-scoped object, by name. pluginkit deletes the
 	// Grants of the request, and the garbage collector deletes the namespaced
 	// objects. The finalizer stays until Delete returns nil, so Delete must
-	// succeed for resources that are already gone.
+	// succeed for resources that are already gone. A plugin that finds its
+	// cluster-scoped objects by label matches the labels registration,
+	// request, and request-namespace.
 	Delete(ctx context.Context, req Request[P, I]) error
 	// Orphan releases the resources of a request with the deletion policy
 	// Orphan, for example the tags that tie a cloud resource to the request.
@@ -91,9 +93,10 @@ type Result struct {
 	// OutputsReady comes from the applied objects.
 	NotReady *Waiting
 	// Objects are the Kubernetes objects of the request. pluginkit applies
-	// them with server-side apply, labels them, and gives each namespaced one
-	// an owner reference to the request. A namespaced object must be in the
-	// namespace of the request.
+	// them with server-side apply, labels them, gives each cluster-scoped one
+	// the request namespace label, and gives each namespaced one an owner
+	// reference to the request. A namespaced object must be in the namespace
+	// of the request.
 	Objects []client.Object
 	// Summary is status.summary. status.summaryTime changes only when the
 	// summary changes.

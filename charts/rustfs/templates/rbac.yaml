@@ -1,0 +1,102 @@
+{{- /* A serve rule without resourceNames grants serve on every registration. */}}
+{{- if not .Values.registrations }}
+{{- fail "registrations must name at least one registration" }}
+{{- end }}
+# The grant admission policy of the operator chart admits a Grant only from a
+# requester with the verb serve on the registration of the Grant. This role
+# grants serve on the registrations of this chart, and on no other.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rustfs.clusterName" . }}-serve
+  labels:
+    {{- include "rustfs.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginregistrations"]
+    verbs: ["serve"]
+    resourceNames:
+      {{- range .Values.registrations }}
+      - {{ required "each registration needs a name" .name | quote }}
+      {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "rustfs.clusterName" . }}-serve
+  labels:
+    {{- include "rustfs.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "rustfs.clusterName" . }}-serve
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rustfs.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# The controller applies its registrations, keeps their Ready condition,
+# serves their requests, and writes the Secret and the ObjectStorageConfig of
+# each request.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rustfs.clusterName" . }}-controller
+  labels:
+    {{- include "rustfs.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginregistrations"]
+    verbs: ["get", "create", "patch"]
+    resourceNames:
+      {{- range .Values.registrations }}
+      - {{ required "each registration needs a name" .name | quote }}
+      {{- end }}
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginregistrations/status"]
+    verbs: ["update"]
+    resourceNames:
+      {{- range .Values.registrations }}
+      - {{ .name | quote }}
+      {{- end }}
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginrequests"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginrequests/status"]
+    verbs: ["update"]
+  # An owner reference with blockOwnerDeletion needs update on the
+  # finalizers of the owner.
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["pluginrequests/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["plugins.camunda.io"]
+    resources: ["grants"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # pluginkit watches the Secrets and the ObjectStorageConfigs that the
+  # controller writes through the cache of the manager, which lists them in
+  # every namespace.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["core.camunda.io"]
+    resources: ["objectstorageconfigs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "rustfs.clusterName" . }}-controller
+  labels:
+    {{- include "rustfs.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "rustfs.clusterName" . }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rustfs.fullname" . }}
+    namespace: {{ .Release.Namespace }}

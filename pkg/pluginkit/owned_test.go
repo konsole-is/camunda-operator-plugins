@@ -80,9 +80,24 @@ func TestPrepareOwnedGivesAClusterScopedObjectTheLabelsOnly(t *testing.T) {
 	got, err := prepareOwned(ownedRequest(), sc, false, ownedScheme(t))
 
 	require.NoError(t, err)
-	assert.Equal(t, wantLabels(nil), got.GetLabels())
+	assert.Equal(t, wantLabels(map[string]string{pluginsv1alpha1.LabelRequestNamespace: "team-a"}), got.GetLabels())
 	assert.Empty(t, got.GetOwnerReferences())
 	assert.Empty(t, got.GetNamespace())
+}
+
+func TestPrepareOwnedSetsTheRequestNamespaceOverThePluginLabel(t *testing.T) {
+	sc := &storagev1.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "camunda-team-a-orders",
+			Labels: map[string]string{pluginsv1alpha1.LabelRequestNamespace: "team-b"},
+		},
+		Provisioner: "x",
+	}
+
+	got, err := prepareOwned(ownedRequest(), sc, false, ownedScheme(t))
+
+	require.NoError(t, err)
+	assert.Equal(t, "team-a", got.GetLabels()[pluginsv1alpha1.LabelRequestNamespace])
 }
 
 func TestPrepareOwnedKeepsTheLabelsOfThePlugin(t *testing.T) {

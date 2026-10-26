@@ -99,6 +99,23 @@ var _ = Describe("the deletion of a request", func() {
 		Expect(cm.OwnerReferences).To(ConsistOf(HaveField("Kind", "PluginRequest")))
 	})
 
+	It("deletes the cluster-scoped object of one of two requests of the same name and keeps the other", func() {
+		a := servedWithKey("delete-same-name-a")
+		b := servedWithKey("delete-same-name-b")
+		scA := &storagev1.StorageClass{}
+		scA.Name = storageClassName(a)
+		scB := &storagev1.StorageClass{}
+		scB.Name = storageClassName(b)
+
+		Expect(k8s.Delete(ctx, a)).To(Succeed())
+
+		Eventually(gone(a)).Should(BeTrue())
+		Expect(gone(scA)()).To(BeTrue())
+		Expect(k8s.Get(ctx, client.ObjectKeyFromObject(scB), scB)).To(Succeed())
+		Expect(scB.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequestNamespace, b.Namespace))
+		Expect(readRequest(Default, b).DeletionTimestamp).To(BeNil())
+	})
+
 	It("deletes a grant whose owner reference was removed", func() {
 		request := servedWithKey("grant-without-owner")
 		plugin.setDeleteErr(errors.New("not yet"))
@@ -170,6 +187,7 @@ var _ = Describe("the deletion of a request", func() {
 		sc := &storagev1.StorageClass{}
 		sc.Name = storageClassName(request)
 		Expect(gone(sc)()).To(BeFalse())
+		Expect(sc.Labels).To(HaveKeyWithValue(pluginsv1alpha1.LabelRequestNamespace, request.Namespace))
 	})
 
 	It("releases an object of the Orphan policy that lost its labels", func() {

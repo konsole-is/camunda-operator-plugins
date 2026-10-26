@@ -224,6 +224,7 @@ ENVTEST_CRD_FILES = \
 	core.camunda.io_camundaclusters.yaml \
 	core.camunda.io_camundamanagementclusters.yaml \
 	core.camunda.io_camundaoptimizes.yaml \
+	core.camunda.io_objectstorageconfigs.yaml \
 	plugins.camunda.io_grants.yaml \
 	plugins.camunda.io_pluginregistrations.yaml \
 	plugins.camunda.io_pluginrequests.yaml \

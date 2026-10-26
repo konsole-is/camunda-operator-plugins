@@ -30,9 +30,10 @@ import (
 
 // readyCondition returns Ready of a request. The first rule that matches
 // wins: OutputsReady that is not True gives its reason and message; a Grant
-// with Ready=False gives GrantRejected and names the first such Grant by name;
-// notReady gives its reason and message; otherwise Ready is True with reason
-// Healthy. A Grant without a Ready condition does not count.
+// with Ready=False gives GrantRejected; a Grant whose Ready is not True gives
+// WaitingForGrants; notReady gives its reason and message; otherwise Ready is
+// True with reason Healthy. A Grant rule names the first matching Grant by
+// name.
 func readyCondition(
 	outputsReady metav1.Condition,
 	grants []pluginsv1alpha1.Grant,
@@ -51,11 +52,24 @@ func readyCondition(
 		return ready
 	}
 
-	if rejected := firstRejected(grants); rejected != nil {
+	rejected := firstGrant(grants, func(g *pluginsv1alpha1.Grant) bool {
+		return meta.IsStatusConditionFalse(g.Status.Conditions, v1.ConditionReady)
+	})
+	if rejected != nil {
 		cond := meta.FindStatusCondition(rejected.Status.Conditions, v1.ConditionReady)
 		ready.Status = metav1.ConditionFalse
 		ready.Reason = pluginsv1alpha1.ReasonGrantRejected
 		ready.Message = fmt.Sprintf("Grant %s is not ready: %s: %s", rejected.Name, cond.Reason, cond.Message)
+		return ready
+	}
+
+	waiting := firstGrant(grants, func(g *pluginsv1alpha1.Grant) bool {
+		return !meta.IsStatusConditionTrue(g.Status.Conditions, v1.ConditionReady)
+	})
+	if waiting != nil {
+		ready.Status = metav1.ConditionFalse
+		ready.Reason = pluginsv1alpha1.ReasonWaitingForGrants
+		ready.Message = fmt.Sprintf("Grant %s waits for the identity extension", waiting.Name)
 		return ready
 	}
 
@@ -66,12 +80,12 @@ func readyCondition(
 	return ready
 }
 
-func firstRejected(grants []pluginsv1alpha1.Grant) *pluginsv1alpha1.Grant {
+func firstGrant(grants []pluginsv1alpha1.Grant, match func(*pluginsv1alpha1.Grant) bool) *pluginsv1alpha1.Grant {
 	sorted := slices.Clone(grants)
 	slices.SortFunc(sorted, func(a, b pluginsv1alpha1.Grant) int { return strings.Compare(a.Name, b.Name) })
 
 	for i := range sorted {
-		if meta.IsStatusConditionFalse(sorted[i].Status.Conditions, v1.ConditionReady) {
+		if match(&sorted[i]) {
 			return &sorted[i]
 		}
 	}
