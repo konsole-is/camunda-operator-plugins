@@ -17,11 +17,11 @@ limitations under the License.
 package awsidentity
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
-
-	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 )
 
 // The names that the hub gives and publishes.
@@ -33,6 +33,8 @@ const (
 	// policyPrefix starts the name of each inline policy that the hub writes
 	// for a Grant. The hub removes only policies with this prefix.
 	policyPrefix = "grant-"
+	// maxPolicyName is the longest name of an inline policy in IAM.
+	maxPolicyName = 128
 
 	outputPrincipal   = "principal"
 	outputAnnotations = "serviceAccountAnnotations"
@@ -40,9 +42,17 @@ const (
 )
 
 // policyName returns the name of the inline policy of the Grant grant. It
-// fits the 128 characters of IAM.
+// fits the 128 characters of IAM: a longer name is cut and ends with _ and a
+// hash. A Kubernetes name has no _, so no Grant name gives the cut name of
+// another.
 func policyName(grant string) string {
-	return awskit.FitName(policyPrefix+grant, 128)
+	name := policyPrefix + grant
+	if len(name) <= maxPolicyName {
+		return name
+	}
+
+	sum := sha256.Sum256([]byte(grant))
+	return name[:maxPolicyName-9] + "_" + hex.EncodeToString(sum[:])[:8]
 }
 
 // serviceAccounts returns the ServiceAccounts that the role of target

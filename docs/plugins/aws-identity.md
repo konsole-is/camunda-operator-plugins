@@ -156,7 +156,7 @@ The registrations have no parameters. A claim changes nothing.
 The plugin writes no Grants of its own. It reads the Grants of other plugins and puts them on the role:
 
 - It reads each Grant in the namespace of the request whose `spec.cluster.name` names the cluster of the request. A Grant whose request is gone, for example after an `Orphan` deletion of that request, or whose request is of another claim, or not of the registration and the cluster of the Grant, keeps the statement that the role has for it, gets no new one, and gets no conditions.
-- A Grant with the format `aws-iam-statement` becomes one inline policy `grant-<Grant name>` on the role, with the fragment as its one statement.
+- A Grant with the format `aws-iam-statement` becomes one inline policy `grant-<Grant name>` on the role, with the fragment as its one statement. When that name is longer than the 128 characters of IAM, it is cut and ends with `_` and 8 hex digits of a hash. A Grant name has no `_`, so two Grants never share a policy.
 - The plugin refuses a statement with an action outside `allowedActions`, with `NotAction`, or without `Action`. An action with a wildcard passes only when one pattern covers each action that it stands for: the pattern `s3:*` allows the action `s3:Get*`, and the pattern `s3:GetObject?` does not allow `s3:GetObject*`.
 - IAM allows 10,240 characters, white space not counted, for all inline policies of a role together. The plugin applies the Grants in the order of their creation, and refuses a Grant that would take the role over the limit.
 - A refused Grant that was never applied puts nothing on the role.

@@ -20,7 +20,6 @@ import (
 	"context"
 	"maps"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -218,18 +217,16 @@ func TestHealthChecksTheCredentialsAndTheBoundary(t *testing.T) {
 
 func TestWritePoliciesGivesTheNameOfARefusedHolderToTheOtherGrant(t *testing.T) {
 	p, _, role := newTestRole(t)
-	long := strings.Repeat("a", 200)
-	alias := strings.TrimPrefix(policyName(long), policyPrefix)
-
 	type result struct {
 		plan policyPlan
 		put  []string
 		err  error
 	}
-	// IAM refuses the document of the holder each time, as it is not JSON.
+
+	// IAM refuses the document of the holder a each time, as it is not JSON.
 	policies := []grantPolicy{
-		{grant: long, policy: policyName(long), doc: policyOfSize(t, 100)},
-		{grant: alias, policy: policyName(alias), doc: []byte("not json")},
+		{grant: "b", policy: "grant-shared", doc: policyOfSize(t, 100)},
+		{grant: "a", policy: "grant-shared", doc: []byte("not json")},
 	}
 	done := make(chan result, 1)
 	go func() {
@@ -241,10 +238,10 @@ func TestWritePoliciesGivesTheNameOfARefusedHolderToTheOtherGrant(t *testing.T) 
 	case r := <-done:
 		// The refused holder gives up the name, so the other Grant gets it.
 		require.NoError(t, r.err)
-		assert.Equal(t, []string{policyName(long)}, r.put)
-		assert.Equal(t, pluginsv1alpha1.ReasonRejected, r.plan.applied[alias].reason)
-		assert.Contains(t, r.plan.applied[alias].message, "IAM refused the policy")
-		assert.Equal(t, metav1.ConditionTrue, r.plan.applied[long].status)
+		assert.Equal(t, []string{"grant-shared"}, r.put)
+		assert.Equal(t, pluginsv1alpha1.ReasonRejected, r.plan.applied["a"].reason)
+		assert.Contains(t, r.plan.applied["a"].message, "IAM refused the policy")
+		assert.Equal(t, metav1.ConditionTrue, r.plan.applied["b"].status)
 	case <-time.After(5 * time.Second):
 		assert.Fail(t, "writePolicies did not return")
 	}

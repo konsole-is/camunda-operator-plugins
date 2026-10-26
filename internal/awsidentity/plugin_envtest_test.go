@@ -500,6 +500,38 @@ var _ = Describe("the AWS identity hub", func() {
 		}
 	})
 
+	It(
+		"deletes the associations of a request whose role was deleted by hand and that lost its ServiceAccounts",
+		func() {
+			ns := newNamespace()
+			request := hubRequest(podIdentity.registration, ns)
+			readyRequest(request)
+			Eventually(func(g Gomega) {
+				g.Expect(read(g, request.DeepCopy()).Status.Outputs).To(HaveKey("principal"))
+			}, timeout).Should(Succeed())
+
+			_, err := podIdentity.iam.DeleteRole(ctx, &iam.DeleteRoleInput{
+				RoleName: aws.String(podIdentity.roleName(ns)),
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				got := read(g, request.DeepCopy())
+				got.Spec.Target.ServiceAccountName = ""
+				got.Spec.Target.AdditionalServiceAccounts = nil
+				g.Expect(k8s.Update(ctx, got)).To(Succeed())
+			}, timeout).Should(Succeed())
+
+			Eventually(func(g Gomega) {
+				for _, a := range podIdentity.eks.Associations() {
+					g.Expect(a.Namespace).NotTo(Equal(ns))
+				}
+				got := read(g, request.DeepCopy())
+				g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Reason).
+					To(Equal("MissingServiceAccount"))
+			}, timeout).Should(Succeed())
+		},
+	)
+
 	It("keeps one Pod Identity association for each ServiceAccount", func() {
 		ns := newNamespace()
 		request := hubRequest(podIdentity.registration, ns, "orders-es-es")

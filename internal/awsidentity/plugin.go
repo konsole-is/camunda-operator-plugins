@@ -175,8 +175,13 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 	}}
 
 	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
-	if err != nil || arn == "" {
+	if err != nil {
 		return res, err
+	}
+	if arn == "" {
+		// The associations of a role that someone deleted by hand still hold
+		// the ServiceAccounts.
+		return res, p.deleteAssociations(ctx, req, p.roleName(req.Object))
 	}
 
 	role, err := p.ensureRole(ctx, req, nil)

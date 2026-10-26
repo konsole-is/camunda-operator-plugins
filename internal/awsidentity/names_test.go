@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -45,4 +46,13 @@ func TestPolicyNameFitsIAM(t *testing.T) {
 		policyName("orders-backup-storage-bucket-read-write-1a2b3c4d"),
 	)
 	assert.Len(t, policyName(strings.Repeat("g", 253)), 128)
+}
+
+func TestPolicyNameOfALongGrantIsNoGrantName(t *testing.T) {
+	long := strings.Repeat("a", 200)
+	cut := strings.TrimPrefix(policyName(long), policyPrefix)
+
+	assert.Len(t, policyName(long), 128)
+	assert.NotEmpty(t, validation.IsDNS1123Subdomain(cut), "a Grant cannot have the name %s", cut)
+	assert.NotEqual(t, policyName(long), policyName(strings.Repeat("a", 201)))
 }
