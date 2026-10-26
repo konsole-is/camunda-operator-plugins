@@ -20,7 +20,9 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
@@ -212,4 +214,38 @@ func TestHealthChecksTheCredentialsAndTheBoundary(t *testing.T) {
 
 	p.clients.IAM.(*awsfake.IAM).AddPolicy(testBoundary)
 	assert.NoError(t, p.health(context.Background()))
+}
+
+func TestWritePoliciesGivesTheNameOfARefusedHolderToTheOtherGrant(t *testing.T) {
+	p, _, role := newTestRole(t)
+	long := strings.Repeat("a", 200)
+	alias := strings.TrimPrefix(policyName(long), policyPrefix)
+
+	type result struct {
+		plan policyPlan
+		put  []string
+		err  error
+	}
+	// IAM refuses the document of the holder each time, as it is not JSON.
+	policies := []grantPolicy{
+		{grant: long, policy: policyName(long), doc: policyOfSize(t, 100)},
+		{grant: alias, policy: policyName(alias), doc: []byte("not json")},
+	}
+	done := make(chan result, 1)
+	go func() {
+		plan, put, _, err := p.writePolicies(context.Background(), role, map[string][]byte{}, policies)
+		done <- result{plan, put, err}
+	}()
+
+	select {
+	case r := <-done:
+		// The refused holder gives up the name, so the other Grant gets it.
+		require.NoError(t, r.err)
+		assert.Equal(t, []string{policyName(long)}, r.put)
+		assert.Equal(t, pluginsv1alpha1.ReasonRejected, r.plan.applied[alias].reason)
+		assert.Contains(t, r.plan.applied[alias].message, "IAM refused the policy")
+		assert.Equal(t, metav1.ConditionTrue, r.plan.applied[long].status)
+	case <-time.After(5 * time.Second):
+		assert.Fail(t, "writePolicies did not return")
+	}
 }

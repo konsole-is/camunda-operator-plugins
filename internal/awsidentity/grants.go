@@ -314,8 +314,9 @@ func (p *Plugin) writePolicies(
 		passed := len(put)
 		refusedOne := false
 		for i, g := range policies {
+			// A Grant whose policy name another Grant holds has no put of its own.
 			doc, ok := plan.put[g.policy]
-			if !ok {
+			if !ok || plan.applied[g.grant].status != metav1.ConditionTrue {
 				continue
 			}
 
