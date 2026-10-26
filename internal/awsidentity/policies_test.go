@@ -123,3 +123,29 @@ func TestPlanPoliciesLeavesAnEqualPolicyAlone(t *testing.T) {
 	assert.Empty(t, plan.put)
 	assert.Equal(t, cond{status: metav1.ConditionTrue, reason: "Healthy", message: appliedMessage}, plan.applied["a"])
 }
+
+func TestPlanPoliciesGivesAnAliasedPolicyNameToTheFirstGrant(t *testing.T) {
+	long := strings.Repeat("a", 200)
+	alias := strings.TrimPrefix(policyName(long), policyPrefix)
+	require.Equal(t, policyName(long), policyName(alias))
+	require.Less(t, alias, long)
+	first, second := policyOfSize(t, 100), policyOfSize(t, 200)
+
+	plan := planPolicies(nil, []grantPolicy{
+		{grant: long, policy: policyName(long), doc: second},
+		{grant: alias, policy: policyName(alias), doc: first},
+	})
+
+	assert.Equal(t, map[string][]byte{policyName(alias): first}, plan.put)
+	assert.Equal(t, metav1.ConditionTrue, plan.applied[alias].status)
+	assert.Equal(t, metav1.ConditionFalse, plan.applied[long].status)
+	assert.Equal(t, pluginsv1alpha1.ReasonRejected, plan.applied[long].reason)
+	assert.Contains(t, plan.applied[long].message, alias)
+
+	// The next pass finds the policy of the holder and writes nothing.
+	again := planPolicies(plan.put, []grantPolicy{
+		{grant: long, policy: policyName(long), doc: second},
+		{grant: alias, policy: policyName(alias), doc: first},
+	})
+	assert.Empty(t, again.put)
+}

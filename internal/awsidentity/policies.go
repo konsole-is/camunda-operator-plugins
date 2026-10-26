@@ -90,11 +90,26 @@ func planPolicies(current map[string][]byte, grants []grantPolicy) policyPlan {
 	}
 	slices.Sort(plan.remove)
 
+	// Two Grants whose names fit to one policy name would write that policy in
+	// turn, so the Grant with the first name holds it.
+	holders := map[string]string{}
+	for _, g := range grants {
+		if h, ok := holders[g.policy]; g.refused == nil && (!ok || g.grant < h) {
+			holders[g.policy] = g.grant
+		}
+	}
+
 	for _, g := range grants {
 		old, onRole := current[g.policy]
 		switch {
 		case g.refused != nil:
 			plan.applied[g.grant] = notApplied(g.refused.reason, g.refused.message, onRole)
+		case holders[g.policy] != g.grant:
+			plan.applied[g.grant] = notApplied(pluginsv1alpha1.ReasonRejected, fmt.Sprintf(
+				"The IAM policy name %s is also the name of the policy of the Grant %s",
+				g.policy,
+				holders[g.policy],
+			), false)
 		case onRole && awskit.SamePolicy(old, g.doc):
 			plan.applied[g.grant] = isApplied()
 		default:
