@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
@@ -106,8 +107,13 @@ type grantSetup struct {
 }
 
 func newGrantSetup() grantSetup {
+	return newGrantSetupFor(irsa)
+}
+
+// newGrantSetupFor is newGrantSetup with a hub request of h.
+func newGrantSetupFor(h *hub) grantSetup {
 	ns := newNamespace()
-	s := grantSetup{namespace: ns, hub: hubRequest(irsa.registration, ns)}
+	s := grantSetup{namespace: ns, hub: hubRequest(h.registration, ns)}
 	readyRequest(s.hub)
 
 	Expect(k8s.Create(ctx, otherRegistrationWith(ns, "read", readTemplate))).To(Succeed())
@@ -531,6 +537,38 @@ var _ = Describe("the AWS identity hub", func() {
 			}, timeout).Should(Succeed())
 		},
 	)
+
+	It("removes the policy of a deleted grant while an association fails", func() {
+		s := newGrantSetupFor(podIdentity)
+		grant := grantFor(s.other, "orders-backup-read", readFragment)
+		Expect(k8s.Create(ctx, grant)).To(Succeed())
+		expectGrant(grant, pluginsv1alpha1.ConditionApplied, metav1.ConditionTrue, v1.ReasonHealthy)
+
+		// Another role holds the ServiceAccount taken, so each association of
+		// the request for it fails.
+		_, err := podIdentity.eks.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
+			ClusterName:    aws.String(eksCluster),
+			Namespace:      aws.String(s.namespace),
+			ServiceAccount: aws.String("taken"),
+			RoleArn:        aws.String("arn:aws:iam::111122223333:role/other"),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			got := read(g, s.hub.DeepCopy())
+			got.Spec.Target.AdditionalServiceAccounts = []string{"taken"}
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		Eventually(func(g Gomega) {
+			ready := conditionOf(read(g, s.hub.DeepCopy()).Status.Conditions, v1.ConditionReady)
+			g.Expect(ready.Message).To(ContainSubstring("belongs to another claim"))
+		}, timeout).Should(Succeed())
+
+		Expect(k8s.Delete(ctx, grant)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(roleOf(g, podIdentity, s.namespace).InlinePolicies).To(BeEmpty())
+		}, timeout).Should(Succeed())
+	})
 
 	It("keeps one Pod Identity association for each ServiceAccount", func() {
 		ns := newNamespace()

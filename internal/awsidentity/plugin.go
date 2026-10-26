@@ -19,6 +19,7 @@ package awsidentity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -109,7 +110,11 @@ func (p *Plugin) Reconcile(
 	if p.mode == awskit.ModePodIdentity {
 		associations, err := p.ensureAssociations(ctx, req, sas, role)
 		if err != nil {
-			return pluginkit.Result{}, err
+			// The ServiceAccounts that the role trusts keep their sessions, so
+			// a Grant that is gone loses its policy also when an association
+			// fails.
+			_, _, syncErr := p.syncGrants(ctx, req, role)
+			return pluginkit.Result{}, errors.Join(err, syncErr)
 		}
 
 		for _, a := range associations {
@@ -191,7 +196,8 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 
 	if p.mode == awskit.ModePodIdentity {
 		if _, err := p.ensureAssociations(ctx, req, nil, role); err != nil {
-			return pluginkit.Result{}, err
+			_, _, syncErr := p.syncGrants(ctx, req, role)
+			return pluginkit.Result{}, errors.Join(err, syncErr)
 		}
 	}
 
