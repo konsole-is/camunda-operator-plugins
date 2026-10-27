@@ -124,8 +124,10 @@ func newPublisher(c client.Client, reader client.Reader, cfg Config) *Publisher 
 // Start applies each registration with server-side apply under FieldManager,
 // with the controller and the ServiceAccount of the Config. A failed apply is
 // logged and tried again. Then Start sets Ready of each registration from the
-// health check, at each health interval, until ctx ends. It never changes the
-// Accepted condition, which the operator owns. It returns nil when ctx ends.
+// health check, at each health interval, until ctx ends. Published turns true
+// at the first interval after which each registration holds that Ready. Start
+// never changes the Accepted condition, which the operator owns. It returns
+// nil when ctx ends.
 func (p *Publisher) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("publisher")
 	ctx = logf.IntoContext(ctx, log)
@@ -133,13 +135,14 @@ func (p *Publisher) Start(ctx context.Context) error {
 	if !p.publish(ctx) {
 		return nil
 	}
-	p.published.Store(true)
 	log.Info("Applied the PluginRegistrations of the plugin")
 
 	ticker := time.NewTicker(p.cfg.HealthInterval)
 	defer ticker.Stop()
 	for {
-		p.updateReady(ctx)
+		if p.updateReady(ctx) {
+			p.published.Store(true)
+		}
 
 		select {
 		case <-ctx.Done():
@@ -155,7 +158,8 @@ func (p *Publisher) NeedLeaderElection() bool {
 	return true
 }
 
-// Published reports whether each registration of the plugin is applied.
+// Published reports whether each registration of the plugin is applied and
+// has held Ready from the health check.
 func (p *Publisher) Published() bool {
 	return p.published.Load()
 }
@@ -205,10 +209,10 @@ func (p *Publisher) apply(ctx context.Context) error {
 	return nil
 }
 
-// updateReady sets Ready of each registration from one health check. A
-// registration whose Ready and observedGeneration already hold the result
-// is not written.
-func (p *Publisher) updateReady(ctx context.Context) {
+// updateReady sets Ready of each registration from one health check, and
+// reports whether each registration holds the result. A registration whose
+// Ready and observedGeneration already hold the result is not written.
+func (p *Publisher) updateReady(ctx context.Context) bool {
 	log := logf.FromContext(ctx)
 
 	cond := metav1.Condition{Type: v1.ConditionReady, Status: metav1.ConditionTrue, Reason: v1.ReasonHealthy}
@@ -223,10 +227,12 @@ func (p *Publisher) updateReady(ctx context.Context) {
 		}
 	}
 
+	held := true
 	for _, r := range p.cfg.Registrations {
 		var registration pluginsv1alpha1.PluginRegistration
 		if err := p.reader.Get(ctx, client.ObjectKey{Name: r.Name}, &registration); err != nil {
 			log.Error(err, "Could not read the PluginRegistration", "registration", r.Name)
+			held = false
 			continue
 		}
 
@@ -240,8 +246,13 @@ func (p *Publisher) updateReady(ctx context.Context) {
 		// A conflict means that the operator wrote Accepted after the read.
 		// The next health interval writes Ready from a fresh read.
 		err := component.FlushStatus(ctx, component.ReconcileContext{Client: p.client, Owner: &registration})
+		if err != nil {
+			held = false
+		}
 		if err != nil && !apierrors.IsConflict(err) {
 			log.Error(err, "Could not write Ready of the PluginRegistration", "registration", r.Name)
 		}
 	}
+
+	return held
 }

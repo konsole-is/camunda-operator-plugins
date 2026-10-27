@@ -18,6 +18,7 @@ package pluginkit_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"time"
 
@@ -106,7 +107,7 @@ func settledReconciles(namespace string) int {
 }
 
 var _ = Describe("the request reconciler", func() {
-	It("writes the registration before it serves the first request", func() {
+	It("writes the registration with Ready before it serves the first request", func() {
 		request := &pluginsv1alpha1.PluginRequest{
 			ObjectMeta: metav1.ObjectMeta{Namespace: servedFirstNamespace, Name: testRequestName},
 		}
@@ -516,7 +517,9 @@ var _ = Describe("the request reconciler", func() {
 			}
 			var decoded map[string]any
 			Expect(json.Unmarshal([]byte(line), &decoded)).To(Succeed(), "the line %q is not JSON", line)
-			if decoded["request"] == request.Namespace+"/"+request.Name {
+			if reflect.DeepEqual(decoded["request"], map[string]any{
+				"name": request.Name, "namespace": request.Namespace,
+			}) {
 				found = true
 			}
 		}

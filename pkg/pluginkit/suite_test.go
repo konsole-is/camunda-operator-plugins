@@ -53,7 +53,7 @@ var (
 	k8s     client.Client
 	plugin  *testPlugin
 	drift   = &driftPlugin{values: map[string]string{}}
-	health  = &healthKnob{}
+	health  = &healthKnob{firstDelay: 2 * time.Second}
 	logs    = &syncBuffer{}
 )
 
@@ -127,10 +127,14 @@ var _ = AfterSuite(func() {
 	Expect(testEnv.Stop()).To(Succeed())
 })
 
-// healthKnob is the health check of the test plugin.
+// healthKnob is the health check of the test plugin. Its first check takes
+// firstDelay, so that a request is served before the first Ready unless the
+// publisher waits for it.
 type healthKnob struct {
-	mu  sync.Mutex
-	err error
+	mu         sync.Mutex
+	err        error
+	firstDelay time.Duration
+	checked    bool
 }
 
 func (h *healthKnob) set(err error) {
@@ -139,7 +143,19 @@ func (h *healthKnob) set(err error) {
 	h.err = err
 }
 
-func (h *healthKnob) check(context.Context) error {
+func (h *healthKnob) check(ctx context.Context) error {
+	h.mu.Lock()
+	first := !h.checked
+	h.checked = true
+	h.mu.Unlock()
+
+	if first {
+		select {
+		case <-ctx.Done():
+		case <-time.After(h.firstDelay):
+		}
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.err

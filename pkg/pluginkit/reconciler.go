@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -95,11 +96,11 @@ func (r *reconciler[P, I]) Reconcile(ctx context.Context, req ctrl.Request) (res
 		return ctrl.Result{}, nil
 	}
 
-	log := logf.FromContext(ctx).WithValues("request", req.String())
+	log := logf.FromContext(ctx).WithValues("request", klog.KObj(request))
 	ctx = logf.IntoContext(ctx, log)
 
-	// The contract says that a plugin writes its registration before it
-	// serves a request.
+	// The contract says that a plugin writes its registration, with Ready
+	// from its health check, before it serves a request.
 	if !r.publisher.Published() {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}

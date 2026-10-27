@@ -7,11 +7,6 @@ timeouts:
   outputsReady: 2m
   ready: 5m
   deletion: 3m
-skip:
-  - id: REQ-LOGS
-    reason: pluginkit logs the request as namespace/name, not as its name
-  - id: ORDER-REGISTRATION-FIRST
-    reason: pluginkit can serve a request before it writes Ready=True on the registration
 cases:
   - name: cluster
     parameters: &parameters
