@@ -167,6 +167,33 @@ docker-buildx: ## Build the image of PLUGIN as IMG for PLATFORMS, and push or lo
 	$(CONTAINER_TOOL) buildx build $(BUILDX_OUTPUT) --platform=$(PLATFORMS) \
 		--build-arg PLUGIN=$(PLUGIN) --build-arg VERSION=$(VERSION) -t $(IMG) .
 
+##@ Kind
+
+# The kind targets run in CI: they create a kind cluster and fill it. Never
+# point them at a cluster that you use.
+KIND_CLUSTER ?= camunda-operator-plugins
+# OPERATOR_DIR is a checkout of the operator at API_REF. The kind cluster runs
+# the operator built from it, so it matches the api module of go.mod.
+OPERATOR_DIR ?= $(LOCALBIN)/camunda-operator
+OPERATOR_REPO ?= https://github.com/konsole-is/camunda-operator.git
+# CONFORMANCE_REPORT is the JUnit report of conformance-kind.
+CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
+# renovate: datasource=github-releases depName=envoyproxy/gateway
+ENVOY_GATEWAY_VERSION ?= v1.9.2
+# renovate: datasource=docker depName=rustfs/rustfs
+RUSTFS_VERSION ?= 1.0.1
+
+.PHONY: operator-source
+operator-source: ## Check out the operator at API_REF into OPERATOR_DIR.
+	API_REF="$(API_REF)" OPERATOR_REPO="$(OPERATOR_REPO)" test/kind/operator-source.sh "$(OPERATOR_DIR)"
+
+.PHONY: conformance-kind
+conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run the conformance suite against PLUGIN. CI only.
+	KIND_CLUSTER="$(KIND_CLUSTER)" OPERATOR_DIR="$(OPERATOR_DIR)" CHART_NAMESPACE="$(CHART_NAMESPACE)" \
+	REPORT="$(CONFORMANCE_REPORT)" GATEWAY_API_VERSION="$(GATEWAY_API_VERSION)" \
+	ENVOY_GATEWAY_VERSION="$(ENVOY_GATEWAY_VERSION)" RUSTFS_VERSION="$(RUSTFS_VERSION)" \
+		test/conformance/run.sh "$(PLUGIN)"
+
 ##@ Dependencies
 
 LOCALBIN ?= $(shell pwd)/bin

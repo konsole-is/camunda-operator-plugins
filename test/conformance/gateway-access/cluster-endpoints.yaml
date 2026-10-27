@@ -1,0 +1,38 @@
+# The status.endpoints that the operator would publish for a cluster whose
+# apps run beside the brokers.
+status:
+  endpoints:
+    - name: admin
+      service: conf-cluster-admin
+      port: 8080
+      pathPrefix: /admin
+      protocol: HTTP
+    - name: connectors
+      service: conf-cluster-connectors
+      port: 8080
+      pathPrefix: /inbound
+      protocol: HTTP
+    - name: default
+      service: conf-cluster-zeebe-gateway
+      port: 8080
+      pathPrefix: /
+      protocol: HTTP
+    - name: grpc
+      service: conf-cluster-zeebe-gateway
+      port: 26500
+      protocol: GRPC
+    - name: operate
+      service: conf-cluster-operate
+      port: 8080
+      pathPrefix: /operate
+      protocol: HTTP
+    - name: rest
+      service: conf-cluster-zeebe-gateway
+      port: 8080
+      pathPrefix: /v2
+      protocol: HTTP
+    - name: tasklist
+      service: conf-cluster-tasklist
+      port: 8080
+      pathPrefix: /tasklist
+      protocol: HTTP

@@ -1,0 +1,3 @@
+# The chart values of the conformance run. The defaults of the chart point at
+# the server of test/kind/rustfs.sh.
+{}

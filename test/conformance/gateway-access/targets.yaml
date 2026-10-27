@@ -1,0 +1,118 @@
+# The targets of config.yaml. The Services have no selector: the Gateway
+# needs each backend of a route to exist, not to answer.
+apiVersion: core.camunda.io/v1
+kind: CamundaCluster
+metadata:
+  name: conf-cluster
+spec:
+  pause: true
+  platformConfigRef: platform
+  storageRef: storage
+---
+apiVersion: core.camunda.io/v1
+kind: CamundaManagementCluster
+metadata:
+  name: conf-plane
+spec:
+  platformConfigRef: platform
+  identityProvider:
+    oidc: {}
+  identity:
+    version: 8.9.0
+    externalUrl: https://identity.example.com
+    databaseConfigRef: identity-db
+    admin:
+      claimName: oid
+      claimValue: admin
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-cluster-admin
+spec:
+  ports:
+    - name: port-8080
+      port: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-cluster-connectors
+spec:
+  ports:
+    - name: port-8080
+      port: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-cluster-zeebe-gateway
+spec:
+  ports:
+    - name: port-8080
+      port: 8080
+    - name: port-26500
+      port: 26500
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-cluster-operate
+spec:
+  ports:
+    - name: port-8080
+      port: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-cluster-tasklist
+spec:
+  ports:
+    - name: port-8080
+      port: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-plane-console
+spec:
+  ports:
+    - name: port-8080
+      port: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-plane-identity
+spec:
+  ports:
+    - name: port-8084
+      port: 8084
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-plane-keycloak
+spec:
+  ports:
+    - name: port-8080
+      port: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-plane-web-modeler-webapp
+spec:
+  ports:
+    - name: port-8070
+      port: 8070
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conf-plane-web-modeler-websockets
+spec:
+  ports:
+    - name: port-8060
+      port: 8060

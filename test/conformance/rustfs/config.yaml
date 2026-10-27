@@ -1,0 +1,20 @@
+# The run of plugin-conformance against the registration rustfs-bucket. The
+# plugin does not read its target, so no target exists. The case runs once
+# with Delete and once with Orphan.
+registration: rustfs-bucket
+namespace: conformance-rustfs
+timeouts:
+  outputsReady: 2m
+  ready: 5m
+  deletion: 3m
+skip:
+  - id: REQ-LOGS
+    reason: pluginkit logs the request as namespace/name, not as its name
+  - id: ORDER-REGISTRATION-FIRST
+    reason: pluginkit can serve a request before it writes Ready=True on the registration
+cases:
+  - name: basic
+    target:
+      kind: CamundaCluster
+      name: orders
+      serviceAccountName: orders-camunda

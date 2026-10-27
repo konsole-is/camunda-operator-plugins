@@ -1,0 +1,33 @@
+# The run of plugin-conformance against the registration gateway-public, on
+# the targets of targets.yaml. Every request of a run names the claim
+# conformance, so both cases render the same hosts, on routes of their own.
+registration: gateway-public
+namespace: conformance-gateway
+timeouts:
+  outputsReady: 2m
+  ready: 5m
+  deletion: 3m
+skip:
+  - id: REQ-LOGS
+    reason: pluginkit logs the request as namespace/name, not as its name
+  - id: ORDER-REGISTRATION-FIRST
+    reason: pluginkit can serve a request before it writes Ready=True on the registration
+cases:
+  - name: cluster
+    parameters: &parameters
+      gatewayRef:
+        namespace: gateway-system
+        name: public
+      listenerName: https
+      hostnamePattern: "{name}.{namespace}.example.com"
+      grpcHostnamePattern: "grpc-{name}.{namespace}.example.com"
+      optimizeHostnamePattern: "optimize-{name}.{namespace}.example.com"
+      managementHostnamePattern: "management-{name}.{namespace}.example.com"
+    target:
+      kind: CamundaCluster
+      name: conf-cluster
+  - name: plane
+    parameters: *parameters
+    target:
+      kind: CamundaManagementCluster
+      name: conf-plane

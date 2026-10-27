@@ -1,0 +1,4 @@
+# The chart values of the conformance run, over the defaults of the chart.
+certificateSecrets:
+  - namespace: gateway-system
+    name: public-tls
