@@ -1,0 +1,57 @@
+image:
+  repository: ghcr.io/konsole-is/camunda-operator-plugins/aws-identity
+  # An empty tag is the appVersion of the chart, which the release sets.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# mode is how the pods of a cluster assume its role: irsa (IAM roles for
+# service accounts) or podIdentity (EKS Pod Identity).
+mode: irsa
+
+# region is the AWS region of the API calls. Empty takes the region of the
+# AWS SDK chain, such as the AWS_REGION of the pod.
+region: ""
+
+# permissionsBoundaryArn is the managed policy that bounds every role. The
+# controller does not start without it.
+permissionsBoundaryArn: ""
+
+# allowedActions are the IAM action patterns, such as s3:*, that a grant of
+# another plugin can put on a role. They mirror the boundary. The controller
+# does not start without one.
+allowedActions: []
+
+# oidcProviderArn is the IAM OIDC provider of the EKS cluster. Mode irsa needs
+# it.
+oidcProviderArn: ""
+
+# eksClusterName is the EKS cluster of the Pod Identity associations. Mode
+# podIdentity needs it.
+eksClusterName: ""
+
+# endpointURL, when set, sends every AWS call to this endpoint, for example
+# LocalStack.
+endpointURL: ""
+
+serviceAccount:
+  # annotations of the ServiceAccount of the controller, for example the
+  # IRSA annotation of the role that the controller itself runs as.
+  annotations: {}
+
+# registrations are the PluginRegistrations that the controller writes at
+# startup and serves. Each item is a name and the fields of a registration
+# spec, merged over the defaults of mode. The chart grants the controller the
+# verb serve on each name, and on no other registration. The chart refuses to
+# render without one. With mode podIdentity, name the registration
+# aws-pod-identity.
+registrations:
+  - name: aws-irsa
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 128Mi

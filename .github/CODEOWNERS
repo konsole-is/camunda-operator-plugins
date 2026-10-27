@@ -8,6 +8,11 @@
 /charts/gateway-access/           @sourcehawk
 /docs/plugins/gateway-access.md   @sourcehawk
 
+/cmd/aws-identity/                @sourcehawk
+/internal/awsidentity/            @sourcehawk
+/charts/aws-identity/             @sourcehawk
+/docs/plugins/aws-identity.md     @sourcehawk
+/pkg/awskit/                      @sourcehawk
 /cmd/rustfs/                      @sourcehawk
 /internal/rustfs/                 @sourcehawk
 /charts/rustfs/                   @sourcehawk
