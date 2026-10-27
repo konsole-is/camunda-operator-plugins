@@ -124,8 +124,6 @@ func (p *testPlugin) Reconcile(
 	}
 	p.reconciles[req.Object.Namespace]++
 
-	req.Log.Info("Served PluginRequest")
-
 	outputs := map[string]string{"configMap": req.Object.Name + "-data"}
 	if req.Parameters.Secret != "" {
 		var secret corev1.Secret

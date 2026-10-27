@@ -112,7 +112,13 @@ func (r *reconciler[P, I]) Reconcile(ctx context.Context, req ctrl.Request) (res
 		APIReader:     r.reader,
 		Owner:         request,
 	}
+	// stage changes the conditions in place, so before is a copy.
+	var before metav1.Condition
+	if ready := meta.FindStatusCondition(request.Status.Conditions, v1.ConditionReady); ready != nil {
+		before = *ready
+	}
 	defer func() {
+		logReadyChange(log, before, meta.FindStatusCondition(request.Status.Conditions, v1.ConditionReady))
 		result, err = flush(ctx, rec, result, err)
 	}()
 
@@ -121,6 +127,15 @@ func (r *reconciler[P, I]) Reconcile(ctx context.Context, req ctrl.Request) (res
 	}
 
 	return r.serve(ctx, rec, request, registration)
+}
+
+// logReadyChange writes one line when the status or the reason of Ready
+// changed, so that each request has a line from its first reconcile on.
+func logReadyChange(log logr.Logger, before metav1.Condition, after *metav1.Condition) {
+	if after == nil || before.Status == after.Status && before.Reason == after.Reason {
+		return
+	}
+	log.Info("Set Ready of PluginRequest", "status", after.Status, "reason", after.Reason)
 }
 
 // flush writes the status that the reconcile staged. A conflict is a requeue

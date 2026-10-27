@@ -512,7 +512,7 @@ var _ = Describe("the request reconciler", func() {
 
 		var found bool
 		for line := range strings.SplitSeq(logs.String(), "\n") {
-			if !strings.Contains(line, `"msg":"Served PluginRequest"`) {
+			if !strings.Contains(line, `"msg":"Set Ready of PluginRequest"`) {
 				continue
 			}
 			var decoded map[string]any
