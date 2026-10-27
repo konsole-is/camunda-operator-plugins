@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -95,11 +96,11 @@ func (r *reconciler[P, I]) Reconcile(ctx context.Context, req ctrl.Request) (res
 		return ctrl.Result{}, nil
 	}
 
-	log := logf.FromContext(ctx).WithValues("request", req.String())
+	log := logf.FromContext(ctx).WithValues("request", klog.KObj(request))
 	ctx = logf.IntoContext(ctx, log)
 
-	// The contract says that a plugin writes its registration before it
-	// serves a request.
+	// The contract says that a plugin writes its registration, with Ready
+	// from its health check, before it serves a request.
 	if !r.publisher.Published() {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
@@ -111,7 +112,13 @@ func (r *reconciler[P, I]) Reconcile(ctx context.Context, req ctrl.Request) (res
 		APIReader:     r.reader,
 		Owner:         request,
 	}
+	// stage changes the conditions in place, so before is a copy.
+	var before metav1.Condition
+	if ready := meta.FindStatusCondition(request.Status.Conditions, v1.ConditionReady); ready != nil {
+		before = *ready
+	}
 	defer func() {
+		logReadyChange(log, before, meta.FindStatusCondition(request.Status.Conditions, v1.ConditionReady))
 		result, err = flush(ctx, rec, result, err)
 	}()
 
@@ -120,6 +127,15 @@ func (r *reconciler[P, I]) Reconcile(ctx context.Context, req ctrl.Request) (res
 	}
 
 	return r.serve(ctx, rec, request, registration)
+}
+
+// logReadyChange writes one line when the status or the reason of Ready
+// changed, so that each request has a line from its first reconcile on.
+func logReadyChange(log logr.Logger, before metav1.Condition, after *metav1.Condition) {
+	if after == nil || before.Status == after.Status && before.Reason == after.Reason {
+		return
+	}
+	log.Info("Set Ready of PluginRequest", "status", after.Status, "reason", after.Reason)
 }
 
 // flush writes the status that the reconcile staged. A conflict is a requeue

@@ -18,7 +18,7 @@ type Plugin[P, I any] interface {
 - `Delete` deletes what pluginkit does not delete itself: each resource outside the cluster, and each cluster-scoped object, by name. It must succeed when the resources are already gone. Two requests in two namespaces can have the same name. A plugin that finds its cluster-scoped objects by label must match all three labels: `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/request-namespace`.
 - `Orphan` releases the resources of a request with the deletion policy `Orphan`, for example the tags that tie a cloud resource to the request.
 
-`Request.Object` is a copy of the `PluginRequest`. `Request.Log` is a logger with the key `request`. Call `Request.Event` once for each external action, such as the create of a bucket.
+`Request.Object` is a copy of the `PluginRequest`. `Request.Log` is a logger with the key `request`, whose value holds the `name` and the `namespace` of the request. pluginkit writes one line with this key each time the status or the reason of `Ready` of the request changes. Call `Request.Event` once for each external action, such as the create of a bucket.
 
 The fields of `Result`:
 
@@ -87,7 +87,7 @@ At startup, pluginkit applies each registration of the `Config` with server-side
 
 Then pluginkit runs `Health` at each `HealthInterval` (30 seconds by default). It sets `Ready` of each registration: `True` with reason `Healthy`, or `False` with reason `Unhealthy` and the error as message. It never changes `Accepted`, which the operator sets.
 
-pluginkit serves no request before all registrations are applied.
+pluginkit serves no request before all registrations are applied and hold `Ready` from the first run of `Health`. When the write of `Ready` fails, the first request waits for the next `HealthInterval`.
 
 ### Requests
 

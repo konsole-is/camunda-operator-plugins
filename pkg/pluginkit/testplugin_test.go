@@ -63,7 +63,7 @@ type testPlugin struct {
 	pending  *pluginkit.Waiting
 	// deleteErr is the error of Delete and of Orphan.
 	deleteErr error
-	// sawRegistrationFirst is 1 when the registration existed at the first
+	// sawRegistrationFirst is 1 when the registration had Ready at the first
 	// call of Reconcile, and 2 when it did not.
 	sawRegistrationFirst int
 	// deletedPolicies holds the policy parameter of each request that Delete
@@ -113,7 +113,8 @@ func (p *testPlugin) Reconcile(
 	if p.sawRegistrationFirst == 0 {
 		p.sawRegistrationFirst = 2
 		var registration pluginsv1alpha1.PluginRegistration
-		if p.reader.Get(ctx, client.ObjectKey{Name: testRegistrationName}, &registration) == nil {
+		err := p.reader.Get(ctx, client.ObjectKey{Name: testRegistrationName}, &registration)
+		if err == nil && meta.FindStatusCondition(registration.Status.Conditions, v1.ConditionReady) != nil {
 			p.sawRegistrationFirst = 1
 		}
 	}
@@ -122,8 +123,6 @@ func (p *testPlugin) Reconcile(
 		p.reconciles = map[string]int{}
 	}
 	p.reconciles[req.Object.Namespace]++
-
-	req.Log.Info("Served PluginRequest")
 
 	outputs := map[string]string{"configMap": req.Object.Name + "-data"}
 	if req.Parameters.Secret != "" {
