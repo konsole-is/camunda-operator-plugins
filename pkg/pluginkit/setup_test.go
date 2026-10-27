@@ -19,6 +19,7 @@ package pluginkit
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,6 +47,15 @@ func TestSetupRefusesAWatchWithoutRequests(t *testing.T) {
 	err := Setup(unreachableManager(t), cfg, nopPlugin{})
 
 	assert.ErrorContains(t, err, "pluginkit: Watches[1]")
+}
+
+func TestSetupRefusesANegativeResync(t *testing.T) {
+	cfg := watchConfig(Watch{Object: &corev1.Secret{}, Requests: noRequests})
+	cfg.Resync = -time.Minute
+
+	err := Setup(unreachableManager(t), cfg, nopPlugin{})
+
+	assert.ErrorContains(t, err, "pluginkit: the Resync")
 }
 
 // watchConfig returns a valid Config whose second Watch is w.

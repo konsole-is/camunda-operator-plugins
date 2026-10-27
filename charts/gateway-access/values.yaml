@@ -79,6 +79,11 @@ registrations:
 # certificateSecrets.
 reportCertificateExpiry: true
 
+# resync is the time after which the controller reconciles each request
+# again, also when nothing in the cluster changed. It keeps the certificate
+# expiry of the summary current. 0 turns it off.
+resync: 1h
+
 # certificateSecrets names the Secret of each listener certificate, so that
 # the controller can read only those. A certificate whose Secret is not in the
 # list shows its expiry as unknown.

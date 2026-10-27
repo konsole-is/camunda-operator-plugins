@@ -242,3 +242,105 @@ func TestGrantRows(t *testing.T) {
 	}, grantRows(grants))
 	assert.Empty(t, grantRows(nil))
 }
+
+func TestRequeueAfterResyncsWithinTenPercentAboveResync(t *testing.T) {
+	resync := time.Hour
+
+	for range 200 {
+		got := requeueAfter(0, resync)
+
+		assert.GreaterOrEqual(t, got, resync)
+		assert.LessOrEqual(t, got, resync+resync/10)
+	}
+}
+
+func TestRequeueAfterSpreadsTheResync(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for range 20 {
+		seen[requeueAfter(0, time.Hour)] = true
+	}
+
+	assert.Greater(t, len(seen), 1, "each requeue after the resync is the same")
+}
+
+func TestRequeueAfterKeepsAShorterRequeueOfThePlugin(t *testing.T) {
+	assert.Equal(t, 5*time.Minute, requeueAfter(5*time.Minute, time.Hour))
+}
+
+func TestRequeueAfterResyncsBeforeALongerRequeueOfThePlugin(t *testing.T) {
+	got := requeueAfter(6*time.Hour, time.Hour)
+
+	assert.GreaterOrEqual(t, got, time.Hour)
+	assert.LessOrEqual(t, got, time.Hour+6*time.Minute)
+}
+
+func TestRequeueAfterWithoutResync(t *testing.T) {
+	assert.Zero(t, requeueAfter(0, 0))
+	assert.Equal(t, 5*time.Minute, requeueAfter(5*time.Minute, 0))
+}
+
+func TestStageDriftSetsTheTimeOfTheCorrection(t *testing.T) {
+	old := pluginsv1alpha1.SummaryItem{
+		Label:    "Last drift corrected",
+		Value:    "2026-10-01T08:00:00Z",
+		Severity: pluginsv1alpha1.SeverityInfo,
+	}
+	size := pluginsv1alpha1.SummaryItem{Label: "Size", Value: "small", Severity: pluginsv1alpha1.SeverityInfo}
+	request := &pluginsv1alpha1.PluginRequest{Status: pluginsv1alpha1.PluginRequestStatus{
+		Summary: []pluginsv1alpha1.SummaryItem{size, old},
+	}}
+	now := time.Date(2026, 10, 25, 9, 30, 0, 0, time.UTC)
+
+	stageDrift(request, now)
+
+	assert.Equal(t, []pluginsv1alpha1.SummaryItem{size, {
+		Label:    "Last drift corrected",
+		Value:    "2026-10-25T09:30:00Z",
+		Severity: pluginsv1alpha1.SeverityInfo,
+	}}, request.Status.Summary)
+	assert.Equal(t, &metav1.Time{Time: now}, request.Status.SummaryTime)
+}
+
+func TestStageResultKeepsTheDriftItemThatTheReconcileStaged(t *testing.T) {
+	request := &pluginsv1alpha1.PluginRequest{}
+	now := time.Date(2026, 10, 25, 9, 30, 0, 0, time.UTC)
+	stageDrift(request, now)
+
+	stageResult(request, Result{Summary: []pluginsv1alpha1.SummaryItem{{Label: "Size", Value: "small"}}})
+
+	require.Len(t, request.Status.Summary, 2)
+	assert.Equal(t, "Size", request.Status.Summary[0].Label)
+	assert.Equal(t, "2026-10-25T09:30:00Z", request.Status.Summary[1].Value)
+	assert.NotNil(t, request.Status.SummaryTime)
+}
+
+func TestStageResultKeepsTheTimeOfTheLastCorrectedDrift(t *testing.T) {
+	last := pluginsv1alpha1.SummaryItem{
+		Label:    "Last drift corrected",
+		Value:    "2026-10-01T08:00:00Z",
+		Severity: pluginsv1alpha1.SeverityInfo,
+	}
+	request := &pluginsv1alpha1.PluginRequest{Status: pluginsv1alpha1.PluginRequestStatus{
+		Summary: []pluginsv1alpha1.SummaryItem{
+			{Label: "Size", Value: "small", Severity: pluginsv1alpha1.SeverityInfo},
+			last,
+		},
+	}}
+
+	stageResult(request, Result{Summary: []pluginsv1alpha1.SummaryItem{{Label: "Size", Value: "large"}}})
+
+	assert.Equal(t, []pluginsv1alpha1.SummaryItem{
+		{Label: "Size", Value: "large", Severity: pluginsv1alpha1.SeverityInfo},
+		last,
+	}, request.Status.Summary)
+}
+
+func TestStageResultAddsNoDriftItemBeforeTheFirstCorrection(t *testing.T) {
+	request := &pluginsv1alpha1.PluginRequest{}
+
+	stageResult(request, Result{Summary: []pluginsv1alpha1.SummaryItem{{Label: "Size", Value: "small"}}})
+
+	assert.Equal(t, []pluginsv1alpha1.SummaryItem{
+		{Label: "Size", Value: "small", Severity: pluginsv1alpha1.SeverityInfo},
+	}, request.Status.Summary)
+}

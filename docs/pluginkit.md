@@ -29,7 +29,8 @@ The fields of `Result`:
 | `Pending` | A `*pluginkit.Waiting` with a `Reason` and a `Message`. When set, the outputs are not ready. `OutputsReady` and `Ready` are `False` with its reason, and the outputs of the last reconcile stay. pluginkit applies no object and no Grant, and keeps the Grants that exist. It still writes `Summary`, `Links`, `PodSelector`, and `Resources`. Set `RequeueAfter` too, to look again. |
 | `NotReady` | A `*pluginkit.Waiting`. When set, `Ready` is `False` with its reason. `OutputsReady` comes from the applied objects. |
 | `Summary`, `Links`, `PodSelector`, `Resources` | Writes them to the status fields of the same name. `status.summaryTime` changes only when the summary changes. pluginkit adds a row to `status.resources` for each Grant of the request, so `Resources` does not need them. |
-| `RequeueAfter` | Reconciles the request again after this time. Use it to wait for a resource outside the cluster. |
+| `RequeueAfter` | Reconciles the request again after this time. Use it to wait for a resource outside the cluster. When the `Resync` of the `Config` comes first, the resync wins. |
+| `Corrected` | A list of the changes that this reconcile made outside the cluster to repair drift, for example `created the bucket orders, which was gone`. The first create of a resource is not drift, so leave it out. When the list is not empty, pluginkit records one `DriftCorrected` event on the request and sets the summary item `Last drift corrected` (see [Resync](#resync)). |
 
 To start a plugin, call `pluginkit.Setup` with the manager, a `Config`, and the plugin. The `internal/gatewayaccess` package is a complete example.
 
@@ -41,10 +42,13 @@ err := pluginkit.Setup(mgr, pluginkit.Config{
 	ServiceAccount: serviceAccount, // from pluginkit.ServiceAccountFromEnv
 	Owns:           []client.Object{&corev1.ConfigMap{}},
 	Health:         checkCredentials,
+	Resync:         time.Hour, // from a chart value
 }, plugin)
 ```
 
 `Owns` holds one object of each kind that `Result.Objects` returns, namespaced and cluster-scoped. A change to an object of a namespaced kind starts a reconcile of its request. pluginkit does not watch a cluster-scoped kind of `Owns`. To wait for one, add a `Watch` or return `RequeueAfter`. `Health` checks the plugin, for example its cloud credentials. A nil `Health` is always healthy.
+
+`Resync` reconciles each request again after this time, so that the plugin finds and repairs a change outside the cluster that no watch reports. Zero turns the resync off. [Resync](#resync) tells more.
 
 `Watches` starts a reconcile when an object that the plugin does not own changes. Examples are a Secret that a request names, the target `CamundaCluster`, and a cluster-scoped object that the plugin applies. A `pluginkit.Watch` holds one object of the kind to watch, and a `Requests` function. The function maps a changed object to the requests to reconcile. The optional `Predicates` filter the changes before the function runs. For example, `predicate.GenerationChangedPredicate{}` skips a change of the status only. pluginkit ignores a request of a registration that the plugin does not serve. `Setup` refuses a `Watch` without an `Object` or a `Requests` function.
 
@@ -96,6 +100,22 @@ pluginkit serves each `PluginRequest` whose label `plugins.camunda.io/registrati
 5. It renders the grant templates of the registration, and applies the objects and the Grants.
 6. It deletes each Grant of the request that it no longer renders.
 7. It writes the status of the request, once.
+
+### Resync
+
+A change outside the cluster starts no reconcile. Someone can delete a bucket policy in the console of the cloud, and the request still reports `Ready=True`. When `Config.Resync` is not zero, pluginkit reconciles each served request again after that time, also when nothing in the cluster changed. Your `Reconcile` reads the resources outside the cluster, compares them with the desired state, and repairs each difference.
+
+After each reconcile, pluginkit adds a new random part of up to 10% to the time: with a `Resync` of one hour, the next reconcile comes after 60 to 66 minutes. Because of this, the requests of a fleet do not all call the cloud API at the same time. When `Result.RequeueAfter` is shorter than this time, `RequeueAfter` wins. A request whose parameters do not pass the schema, and a deleted request, get no resync. `Setup` returns an error for a negative `Resync`.
+
+Put each repair in `Result.Corrected`. When a step after a repair fails, return the `Corrected` list with the error: the retry finds the resource repaired and corrects nothing, so the repair is reported only now. With an error, pluginkit reads no other field of `Result`. For each reconcile with a `Corrected` list, pluginkit records one event on the request:
+
+| Type | Reason | Action | Note |
+| --- | --- | --- | --- |
+| `Normal` | `DriftCorrected` | `Update` | `Corrected drift outside the cluster: ` and the items of the list, joined with `; ` |
+
+pluginkit also adds the summary item `Last drift corrected` to the summary of the request. Its value is the time of the last reconcile that corrected drift, in RFC 3339 format and UTC, for example `2026-10-25T08:00:00Z`. The item stays in later reconciles until the next correction. A request that never had drift has no such item.
+
+Set `Resync` from a chart value of the plugin, with a default of one hour. A plugin that manages no resource outside the cluster can leave it at zero.
 
 ### Templates
 

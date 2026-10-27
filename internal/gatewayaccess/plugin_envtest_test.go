@@ -103,6 +103,18 @@ func readyClusterRequest(namespace string) *pluginsv1alpha1.PluginRequest {
 	return request
 }
 
+// setCertificate writes the data of secret to the certificate Secret of the
+// suite.
+func setCertificate(secret *corev1.Secret) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		var current corev1.Secret
+		g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(secret), &current)).To(Succeed())
+		current.Data = secret.Data
+		g.Expect(k8s.Update(ctx, &current)).To(Succeed())
+	}, timeout).Should(Succeed())
+}
+
 var _ = Describe("the gateway-access plugin", func() {
 	It("publishes the outputs before the target exists", func() {
 		ns := newNamespace()
@@ -156,6 +168,35 @@ var _ = Describe("the gateway-access plugin", func() {
 			Expect(obj.GetLabels()).To(HaveKeyWithValue(pluginsv1alpha1.LabelRegistration, "gateway-public"))
 			Expect(obj.GetOwnerReferences()).To(ContainElement(HaveField("UID", read.UID)))
 		}
+	})
+
+	It("reads a renewed certificate again after the resync", func() {
+		ns := newNamespace()
+		request := readyClusterRequest(ns)
+		Expect(summaryValue(readRequest(Default, request), "Certificate expires").Severity).
+			To(Equal(pluginsv1alpha1.SeverityWarning))
+
+		// The plugin does not watch the certificate Secret, so after the
+		// reconciles of the routes settle, only the resync reads the renewed
+		// certificate.
+		Eventually(func(g Gomega) {
+			before := readRequest(g, request).ResourceVersion
+			time.Sleep(3 * time.Second)
+			g.Expect(readRequest(g, request).ResourceVersion).To(Equal(before))
+		}, timeout).Should(Succeed())
+		renewed, err := certificateSecret(time.Now().Add(60 * 24 * time.Hour))
+		Expect(err).NotTo(HaveOccurred())
+		setCertificate(renewed)
+		DeferCleanup(func() {
+			expiring, err := certificateSecret(time.Now().Add(10 * 24 * time.Hour))
+			Expect(err).NotTo(HaveOccurred())
+			setCertificate(expiring)
+		})
+
+		Eventually(func(g Gomega) {
+			item := summaryValue(readRequest(g, request), "Certificate expires")
+			g.Expect(item.Severity).To(Equal(pluginsv1alpha1.SeverityInfo))
+		}, timeout).Should(Succeed())
 	})
 
 	It("reports the reason of a refused route", func() {

@@ -60,8 +60,11 @@ type Options struct {
 	LeaderElectionID string
 	// ReportCertificateExpiry adds the expiry of the listener certificate to
 	// the summary of each https request. The ServiceAccount then needs get on
-	// the certificate Secret.
+	// the certificate Secret. No change of the certificate Secret and no
+	// passing of time reconciles the request; a Resync does.
 	ReportCertificateExpiry bool
+	// Resync is the pluginkit.Config.Resync of the plugin.
+	Resync time.Duration
 }
 
 // NewManager returns a manager for cfg that publishes and serves the
@@ -106,6 +109,7 @@ func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 		ServiceAccount: opts.ServiceAccount,
 		Owns:           []client.Object{&gatewayv1.HTTPRoute{}, &gatewayv1.GRPCRoute{}},
 		Watches:        watches(mgr.GetClient()),
+		Resync:         opts.Resync,
 	}, plugin); err != nil {
 		return nil, fmt.Errorf("setting up the plugin: %w", err)
 	}

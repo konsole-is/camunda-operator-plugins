@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,6 +51,17 @@ const (
 	outputsComponent = "outputs"
 	conflictRequeue  = time.Second
 )
+
+// The event and the summary item of a corrected drift.
+const (
+	eventReasonDriftCorrected = "DriftCorrected"
+	eventActionUpdate         = "Update"
+	labelDriftCorrected       = "Last drift corrected"
+)
+
+// resyncJitter is the largest part of Config.Resync that pluginkit adds to
+// it at random.
+const resyncJitter = 0.1
 
 // kindGrant is the kind of a status.resources row of a Grant.
 const kindGrant = "Grant"
@@ -164,6 +177,14 @@ func (r *reconciler[P, I]) serve(
 	}
 
 	res, err := r.plugin.Reconcile(ctx, pluginRequest)
+	// A retry finds the repaired resources and corrects nothing, so the drift
+	// is staged before each step that can fail.
+	if len(res.Corrected) > 0 {
+		r.events.Eventf(request, nil, corev1.EventTypeNormal, eventReasonDriftCorrected, eventActionUpdate,
+			"Corrected drift outside the cluster: %s", strings.Join(res.Corrected, "; "))
+		stageDrift(request, time.Now())
+	}
+
 	if err == nil {
 		err = checkOutputs(registration, res.Outputs)
 	}
@@ -184,7 +205,7 @@ func (r *reconciler[P, I]) serve(
 		stageResult(request, res)
 		stage(request, pluginsv1alpha1.ConditionOutputsReady, res.Pending.Reason, res.Pending.Message)
 		r.stageReady(request, nil, nil)
-		return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter(res.RequeueAfter, r.cfg.Resync)}, nil
 	}
 
 	data.Outputs = res.Outputs
@@ -216,7 +237,22 @@ func (r *reconciler[P, I]) serve(
 
 	r.stageReady(request, current, res.NotReady)
 
-	return ctrl.Result{RequeueAfter: res.RequeueAfter}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter(res.RequeueAfter, r.cfg.Resync)}, nil
+}
+
+// requeueAfter returns the time after which a served request reconciles
+// again: requested, the RequeueAfter of the plugin, or a time between resync
+// and 10% more when that comes first. Zero means no requeue.
+func requeueAfter(requested, resync time.Duration) time.Duration {
+	if resync == 0 {
+		return requested
+	}
+
+	jittered := wait.Jitter(resync, resyncJitter)
+	if requested > 0 && requested < jittered {
+		return requested
+	}
+	return jittered
 }
 
 // templateData returns the placeholder values of request, without outputs.
@@ -474,11 +510,29 @@ func (r *reconciler[P, I]) grantsOf(
 	return list.Items, nil
 }
 
-// stageResult stages the status fields that the plugin returned.
+// stageDrift sets the summary item "Last drift corrected" of request, and
+// status.summaryTime, to now.
+func stageDrift(request *pluginsv1alpha1.PluginRequest, now time.Time) {
+	item := pluginsv1alpha1.SummaryItem{
+		Label:    labelDriftCorrected,
+		Value:    now.UTC().Format(time.RFC3339),
+		Severity: pluginsv1alpha1.SeverityInfo,
+	}
+
+	summary := slices.DeleteFunc(slices.Clone(request.Status.Summary), func(i pluginsv1alpha1.SummaryItem) bool {
+		return i.Label == labelDriftCorrected
+	})
+	request.Status.Summary = append(summary, item)
+	request.Status.SummaryTime = &metav1.Time{Time: now}
+}
+
+// stageResult stages the status fields that the plugin returned. The summary
+// keeps the item "Last drift corrected" of the staged status.
 func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
+	summary := withDriftItem(res.Summary, request.Status.Summary)
+
 	// The CRD defaults an empty severity to Info, so the stored summary
 	// compares equal only with the same default.
-	summary := slices.Clone(res.Summary)
 	for i := range summary {
 		if summary[i].Severity == "" {
 			summary[i].Severity = pluginsv1alpha1.SeverityInfo
@@ -497,4 +551,16 @@ func stageResult(request *pluginsv1alpha1.PluginRequest, res Result) {
 	request.Status.Links = res.Links
 	request.Status.PodSelector = res.PodSelector
 	request.Status.Resources = res.Resources
+}
+
+// withDriftItem returns a copy of summary with the item "Last drift
+// corrected" of previous, when previous has one.
+func withDriftItem(summary, previous []pluginsv1alpha1.SummaryItem) []pluginsv1alpha1.SummaryItem {
+	all := slices.Clone(summary)
+	for _, item := range previous {
+		if item.Label == labelDriftCorrected {
+			return append(all, item)
+		}
+	}
+	return all
 }

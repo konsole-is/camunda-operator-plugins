@@ -36,8 +36,8 @@ import (
 // a controller named cfg.Name that serves each PluginRequest whose
 // registration label names one of them. The scheme of mgr must hold the
 // plugins.camunda.io kinds and each kind of cfg.Owns and cfg.Watches. Setup
-// refuses a cfg without a name or without a registration, a Watch without an
-// Object or a Requests function, and a nil plugin.
+// refuses a cfg without a name or without a registration, a negative Resync,
+// a Watch without an Object or a Requests function, and a nil plugin.
 func Setup[P, I any](mgr ctrl.Manager, cfg Config, plugin Plugin[P, I]) error {
 	if cfg.Name == "" {
 		return errors.New("pluginkit: the Config needs a Name")
@@ -45,6 +45,10 @@ func Setup[P, I any](mgr ctrl.Manager, cfg Config, plugin Plugin[P, I]) error {
 
 	if len(cfg.Registrations) == 0 {
 		return errors.New("pluginkit: the Config needs at least one registration")
+	}
+
+	if cfg.Resync < 0 {
+		return fmt.Errorf("pluginkit: the Resync %s is negative", cfg.Resync)
 	}
 
 	for i, w := range cfg.Watches {
