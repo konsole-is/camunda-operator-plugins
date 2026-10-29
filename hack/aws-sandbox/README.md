@@ -4,15 +4,20 @@ The CI of the AWS plugins runs against a real AWS account. A fake of IAM or STS 
 
 ## What the setup creates
 
-`template.yaml` is a CloudFormation template. It creates these resources:
+The Terraform configuration in `terraform/` creates these resources:
 
 | Resource | Name | Purpose |
 | --- | --- | --- |
 | IAM OIDC provider | `token.actions.githubusercontent.com` | GitHub Actions get AWS credentials without an access key. |
 | IAM role | `cpo-sandbox-ci` | The role of the CI jobs. Its credentials last one hour at most. See [Who gets the role](#who-gets-the-role). |
-| Managed policy | `cpo-sandbox-boundary` | The permissions of the CI role, and the permissions boundary of the CI role and of each role that a run creates. |
+| Managed policy | `cpo-sandbox-boundary` | The permissions boundary of the CI role and of each role that a run creates. |
+| Managed policies | `cpo-sandbox-ci-iam`, `cpo-sandbox-ci-storage` | The permissions of the CI role, within the boundary. |
 | S3 bucket | `cpo-sandbox-issuers-<account>-<region>` | The OIDC issuer documents of the kind cluster of each run. Objects expire after one day. |
-| Budget | `cpo-sandbox-monthly` | An optional monthly cost budget with email alerts. |
+| Budget | `cpo-sandbox-monthly` | A monthly cost budget with email alerts, when you give alert addresses. |
+| GitHub environments | `aws-sandbox`, `aws-sandbox-review` | The environments of the AWS jobs, with the variables `AWS_ROLE_ARN`, `AWS_REGION`, and `AWS_ISSUER_BUCKET`. |
+| GitHub variable | `AWS_SANDBOX_ACTOR_ID` | The user ID of the trusted user. |
+
+The Terraform state is in the S3 bucket `cpo-sandbox-tfstate-<account>-<region>`, which you create by hand before the first apply.
 
 ## Who gets the role
 
@@ -27,61 +32,54 @@ A job selects the environment from `github.actor_id` and the repository variable
 
 ## What a run can do
 
-The boundary allows IAM, STS, S3, and KMS only. Each resource must have a name that starts with `cpo-ci-`. Most actions also need the tag `cpo-ci-run` on the resource. The boundary does not allow these actions:
+The boundary allows IAM, STS, S3, and KMS only. Each resource must have a name that starts with `cpo-ci-`. A role that a run creates gets only the policies that the run writes, so the boundary is the only limit on it. The boundary does not allow these actions:
 
 - Create a role without the boundary or without the tag `cpo-ci-run`.
 - Attach a managed policy that does not start with `cpo-ci-`, such as `AdministratorAccess`.
-- Remove the boundary from a role.
+- Remove the boundary from a role, or the tag `cpo-ci-run` from a resource.
 - Create an IAM user, an access key, or a login profile.
-- Change the CI role, the boundary, or the issuer bucket.
+- Change a `cpo-sandbox-*` role, policy, or bucket. This includes the Terraform state.
 - Make a bucket public. A new bucket blocks public access, and the boundary does not allow a change of that block, of the ACLs, or of the object ownership.
 - Write an object into the issuer bucket other than the two issuer documents of a run.
-- Create a KMS key in a custom key store, or a multi-Region key.
+- Create a KMS key in a custom key store, a multi-Region key, or a key in another region.
 - Use any other service, such as EC2, EKS, or VPC.
+
+A managed policy holds at most 6,144 characters, and a role has one boundary. So the boundary holds wide grants and the limits, and the CI role gets its exact grants from the other policies. Terraform stops before the apply when a policy is too long.
 
 The cost of a run is a few cents. IAM and STS are free. A KMS key costs about 1 USD a month, counted by the hour, until it is scheduled for deletion.
 
-## Apply the template
+## Apply the configuration
 
-You need the AWS CLI, administrator access to the account, and admin access to the repository.
+You need the Terraform of `.tool-versions`, the AWS CLI, administrator access to the account, and admin access to the repository.
 
-1. Add the actor ID to the OIDC subject of the repository. The trust of the role reads it there:
+1. Create the state bucket. Use versioning, block all public access, and add a bucket policy that refuses requests without TLS:
+
+    ```sh
+    aws s3api create-bucket --bucket cpo-sandbox-tfstate-<account>-<region> \
+      --create-bucket-configuration LocationConstraint=<region>
+    aws s3api put-bucket-versioning --bucket cpo-sandbox-tfstate-<account>-<region> \
+      --versioning-configuration Status=Enabled
+    ```
+
+    For another account, set this bucket in the `backend "s3"` block of `terraform/versions.tf`.
+
+2. Add the actor ID to the OIDC subject of the repository. The trust of the role reads it there. The GitHub provider of Terraform cannot set `use_immutable_subject`, so this step is manual:
 
     ```sh
     gh api -X PUT repos/konsole-is/camunda-operator-plugins/actions/oidc/customization/sub \
       --input - <<<'{"use_default": false, "include_claim_keys": ["repo", "context", "actor_id"], "use_immutable_subject": true}'
     ```
 
-2. Create the stack:
+3. Apply the configuration:
 
     ```sh
-    aws cloudformation deploy \
-      --stack-name cpo-sandbox \
-      --template-file hack/aws-sandbox/template.yaml \
-      --capabilities CAPABILITY_NAMED_IAM \
-      --region eu-west-1
+    export GITHUB_TOKEN=$(gh auth token)
+    terraform -chdir=hack/aws-sandbox/terraform init
+    terraform -chdir=hack/aws-sandbox/terraform apply \
+      -var 'alert_emails=["<address>"]'
     ```
 
-    The parameter `GitHubSubject` is the `sub_claim_prefix` that the command of step 1 returns. `GitHubTrustedActorId` is the user ID of the trusted user (`gh api users/<login> --jq .id`). The defaults are those of this repository.
-
-3. If the account already has an OIDC provider for `token.actions.githubusercontent.com`, add `--parameter-overrides GitHubOidcProviderArn=<its ARN>`.
-4. To get cost alerts, add `BudgetEnabled=true AlertEmail=<address>` to the parameter overrides. You can also add `SecondAlertEmail=<address>`. In an account of an AWS organization, the management account must first enable "Linked account access" in its Cost Management preferences.
-5. Get the outputs of the stack:
-
-    ```sh
-    aws cloudformation describe-stacks --stack-name cpo-sandbox --region eu-west-1 \
-      --query 'Stacks[0].Outputs'
-    ```
-
-6. In the repository settings, create the environments `aws-sandbox` and `aws-sandbox-review`. Give `aws-sandbox-review` the trusted user as required reviewer. Give both environments these variables from the outputs:
-
-    | Variable | Output |
-    | --- | --- |
-    | `AWS_ROLE_ARN` | `CiRoleArn` |
-    | `AWS_REGION` | `Region` |
-    | `AWS_ISSUER_BUCKET` | `IssuerBucket` |
-
-7. Set the repository variable `AWS_SANDBOX_ACTOR_ID` to the user ID of the trusted user.
+    The defaults of `terraform/variables.tf` are those of this repository. If the account already has an OIDC provider for `token.actions.githubusercontent.com`, add `-var github_oidc_provider_arn=<its ARN>`. Without `alert_emails`, Terraform creates no budget. In an account of an AWS organization, the management account must first enable "Linked account access" in its Cost Management preferences.
 
 ## A run in CI
 

@@ -126,6 +126,12 @@ lint-renovate: ## Verify renovate.json5 with the validator of RENOVATE_VERSION. 
 lint-config: golangci-lint golangci-lint-schema ## Verify the golangci-lint configuration.
 	"$(GOLANGCI_LINT)" config verify --schema "$(GOLANGCI_LINT_SCHEMA)"
 
+.PHONY: lint-terraform
+lint-terraform: ## Check the format of the Terraform of hack/aws-sandbox and validate it, without its backend.
+	terraform -chdir=hack/aws-sandbox/terraform fmt -check -diff
+	terraform -chdir=hack/aws-sandbox/terraform init -backend=false -input=false
+	terraform -chdir=hack/aws-sandbox/terraform validate
+
 .PHONY: lint-workflows
 lint-workflows: ## Check the GitHub workflows with actionlint.
 	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)

@@ -38,6 +38,17 @@ jobs:
       - name: Check the workflows
         run: make lint-workflows
 
+      - name: Read the Terraform version
+        id: terraform
+        run: echo "version=$(awk '$1 == "terraform" { print $2 }' .tool-versions)" >> "${GITHUB_OUTPUT}"
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.terraform.outputs.version }}
+          terraform_wrapper: false
+      - name: Check the Terraform
+        run: make lint-terraform
+
       # Renovate's validator is an npm package. The runner's default Node is
       # older than the one Renovate supports.
       - name: Setup Node

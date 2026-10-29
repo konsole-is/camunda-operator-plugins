@@ -10,3 +10,7 @@ go.work
 *.swp
 *~
 *.kubeconfig
+# Terraform of hack/aws-sandbox: providers, plans, and variable values.
+.terraform/
+*.tfplan
+*.tfvars
