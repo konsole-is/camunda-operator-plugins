@@ -39,14 +39,6 @@ jobs:
       - name: Clone the code
         uses: actions/checkout@v7
 
-      - name: Show the OIDC subject
-        run: |
-          token=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
-          payload=$(cut -d. -f2 <<<"${token}" | tr '_-' '/+')
-          while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="${payload}="; done
-          base64 -d <<<"${payload}" | jq -r .sub
-
       - name: Get the credentials of the CI role
         uses: aws-actions/configure-aws-credentials@v6
         with:
