@@ -163,6 +163,36 @@ data "aws_iam_policy_document" "boundary" {
     }
   }
   statement {
+    effect = "Deny"
+    actions = [
+      "iam:CreateRole",
+      "iam:CreatePolicy",
+      "iam:CreateOpenIDConnectProvider",
+      "iam:TagRole",
+      "iam:TagPolicy",
+      "iam:TagOpenIDConnectProvider",
+      "kms:CreateKey",
+      "kms:TagResource",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "Null"
+      variable = "aws:RequestTag/cpo-ci-run"
+      values   = ["false"]
+    }
+    condition {
+      test     = "StringNotLike"
+      variable = "aws:RequestTag/cpo-ci-run"
+      values   = ["cpo-ci-?*"]
+    }
+  }
+  # cpo-ci-* also matches a path, and the sweep lists roles and policies by name.
+  statement {
+    effect    = "Deny"
+    actions   = ["iam:CreateRole", "iam:CreatePolicy"]
+    resources = ["${local.iam}:role/*/*", "${local.iam}:policy/*/*"]
+  }
+  statement {
     effect    = "Deny"
     actions   = ["iam:UntagRole", "iam:UntagPolicy", "iam:UntagOpenIDConnectProvider", "kms:UntagResource"]
     resources = ["*"]
@@ -209,6 +239,22 @@ data "aws_iam_policy_document" "boundary" {
       values   = [var.region]
     }
   }
+  # A key policy can shut out the sweep.
+  statement {
+    effect    = "Deny"
+    actions   = ["kms:PutKeyPolicy"]
+    resources = ["*"]
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["kms:CreateKey"]
+    resources = ["*"]
+    condition {
+      test     = "Bool"
+      variable = "kms:BypassPolicyLockoutSafetyCheck"
+      values   = ["true"]
+    }
+  }
   statement {
     effect    = "Deny"
     actions   = ["kms:ScheduleKeyDeletion"]
@@ -219,7 +265,8 @@ data "aws_iam_policy_document" "boundary" {
       values   = ["7"]
     }
   }
-  # A new bucket blocks public access. This keeps it so.
+  # A new bucket blocks public access, and this keeps it so. Object Lock would
+  # keep the sweep from deleting the objects.
   statement {
     effect = "Deny"
     actions = [
@@ -227,6 +274,9 @@ data "aws_iam_policy_document" "boundary" {
       "s3:PutObjectAcl",
       "s3:PutBucketOwnershipControls",
       "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketObjectLockConfiguration",
+      "s3:PutObjectRetention",
+      "s3:PutObjectLegalHold",
     ]
     resources = local.run_buckets
   }
