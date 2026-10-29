@@ -1,0 +1,464 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Sandbox account setup for the CI of the AWS plugins of camunda-operator-plugins.
+  GitHub Actions of one repository get a role through OIDC. The role, and every
+  role that a CI run creates, is bounded to IAM, STS, S3, and KMS on cpo-ci-*
+  names with a cpo-ci-run tag. Runs publish the OIDC issuers of their kind
+  clusters in one bucket. No long-lived keys. See README.md beside this file.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: GitHub}
+        Parameters: [GitHubOwner, GitHubRepository, GitHubEnvironment, GitHubOidcProviderArn]
+      - Label: {default: Cost alert}
+        Parameters: [BudgetEnabled, BudgetLimitUsd, AlertEmail, SecondAlertEmail]
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: konsole-is
+    Description: The owner of the repository whose workflows get the CI role.
+  GitHubRepository:
+    Type: String
+    Default: camunda-operator-plugins
+    Description: The repository whose workflows get the CI role.
+  GitHubEnvironment:
+    Type: String
+    Default: aws-sandbox
+    Description: The GitHub environment that holds the variables of the AWS jobs.
+  GitHubOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: >-
+      The ARN of an IAM OIDC provider for token.actions.githubusercontent.com
+      that the account already has. Empty creates one; an account holds only one.
+  BudgetEnabled:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >-
+      Create a monthly cost budget with email alerts. A member account of an
+      organization needs Budgets enabled by the management account first.
+  BudgetLimitUsd:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    Description: The monthly budget of the account in USD.
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: The email address of the budget alerts. Required when BudgetEnabled is true.
+  SecondAlertEmail:
+    Type: String
+    Default: ""
+    Description: A second email address of the budget alerts, or empty.
+
+Conditions:
+  CreateGitHubOidcProvider: !Equals [!Ref GitHubOidcProviderArn, ""]
+  CreateBudget: !Equals [!Ref BudgetEnabled, "true"]
+  HasSecondAlertEmail: !Not [!Equals [!Ref SecondAlertEmail, ""]]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateGitHubOidcProvider
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: GitHub Actions exchange their OIDC token for the CI role, so no access key exists.
+        must: An account has one provider per URL. Set GitHubOidcProviderArn when it exists.
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  Boundary:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          The most that the CI role and any role of a CI run may do. It is both
+          the boundary and the permissions of the CI role, so that a run role
+          can do what the CI role can, and no more.
+        must: >-
+          Allow only free or cents-per-run services (IAM, STS, S3, KMS) and only
+          on cpo-ci-* names. Never allow compute, EKS clusters, networking, IAM
+          users, access keys, or a change of a cpo-sandbox-* resource.
+    Properties:
+      ManagedPolicyName: cpo-sandbox-boundary
+      Description: Boundary and permissions of the CI of the AWS plugins. Only cpo-ci-* resources.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Identity
+            Effect: Allow
+            Action: [sts:GetCallerIdentity]
+            Resource: "*"
+
+          # Roles. A role is created only with the boundary and the run tag;
+          # a policy goes only on a role that has the boundary.
+          - Sid: CreateRunRoles
+            Effect: Allow
+            Action: [iam:CreateRole, iam:PutRolePermissionsBoundary]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
+              "Null":
+                aws:RequestTag/cpo-ci-run: "false"
+          - Sid: PolicyOnBoundedRunRoles
+            Effect: Allow
+            Action: [iam:PutRolePolicy, iam:DeleteRolePolicy, iam:DetachRolePolicy]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
+          - Sid: AttachOnlyRunPolicies
+            Effect: Allow
+            Action: [iam:AttachRolePolicy]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
+              ArnLike:
+                iam:PolicyARN: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-ci-*
+          - Sid: ChangeTaggedRunRoles
+            Effect: Allow
+            Action:
+              - iam:DeleteRole
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:UpdateRole
+              - iam:UpdateRoleDescription
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
+            Condition:
+              "Null":
+                aws:ResourceTag/cpo-ci-run: "false"
+          # Reads carry no tag condition: a read of a role that does not exist
+          # must answer NoSuchEntity, not AccessDenied.
+          - Sid: ReadRunRoles
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+              - iam:ListRoleTags
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
+          - Sid: AssumeRunRoles
+            Effect: Allow
+            Action: [sts:AssumeRole, sts:TagSession]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
+
+          # Managed policies of a run, for plugins that attach them.
+          - Sid: CreateRunPolicies
+            Effect: Allow
+            Action: [iam:CreatePolicy]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-ci-*
+            Condition:
+              "Null":
+                aws:RequestTag/cpo-ci-run: "false"
+          - Sid: ChangeTaggedRunPolicies
+            Effect: Allow
+            Action:
+              - iam:DeletePolicy
+              - iam:CreatePolicyVersion
+              - iam:DeletePolicyVersion
+              - iam:TagPolicy
+              - iam:UntagPolicy
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-ci-*
+            Condition:
+              "Null":
+                aws:ResourceTag/cpo-ci-run: "false"
+          - Sid: ReadPolicies
+            Effect: Allow
+            Action: [iam:GetPolicy, iam:GetPolicyVersion, iam:ListPolicyVersions, iam:ListPolicyTags]
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-ci-*
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
+
+          # The OIDC provider of the kind cluster of a run. Its issuer is a
+          # prefix of the issuer bucket.
+          - Sid: CreateRunOidcProviders
+            Effect: Allow
+            Action: [iam:CreateOpenIDConnectProvider, iam:TagOpenIDConnectProvider]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${IssuerBucket.RegionalDomainName}/*
+            Condition:
+              "Null":
+                aws:RequestTag/cpo-ci-run: "false"
+          - Sid: DeleteTaggedRunOidcProviders
+            Effect: Allow
+            Action: [iam:DeleteOpenIDConnectProvider]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${IssuerBucket.RegionalDomainName}/*
+            Condition:
+              "Null":
+                aws:ResourceTag/cpo-ci-run: "false"
+          - Sid: ReadOidcProviders
+            Effect: Allow
+            Action: [iam:GetOpenIDConnectProvider, iam:ListOpenIDConnectProviderTags]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${IssuerBucket.RegionalDomainName}/*
+          - Sid: ListForTheSweep
+            Effect: Allow
+            Action:
+              - iam:ListRoles
+              - iam:ListPolicies
+              - iam:ListOpenIDConnectProviders
+              - kms:ListKeys
+              - kms:ListAliases
+              - s3:ListAllMyBuckets
+            Resource: "*"
+
+          # The issuer documents of the runs.
+          - Sid: WriteIssuers
+            Effect: Allow
+            Action: [s3:PutObject, s3:GetObject, s3:DeleteObject]
+            Resource: !Sub ${IssuerBucket.Arn}/*
+          - Sid: ListIssuers
+            Effect: Allow
+            Action: [s3:ListBucket]
+            Resource: !GetAtt IssuerBucket.Arn
+
+          # Buckets of a run. S3 has no tag condition on CreateBucket, so the
+          # name bounds them; the sweep reads the bucket tag.
+          - Sid: RunBuckets
+            Effect: Allow
+            Action: s3:*
+            Resource:
+              - arn:aws:s3:::cpo-ci-*
+              - arn:aws:s3:::cpo-ci-*/*
+
+          # KMS keys of a run: AWS-owned key material only (a custom key store
+          # costs per hour), one region, run tag on create.
+          - Sid: CreateRunKeys
+            Effect: Allow
+            Action: [kms:CreateKey]
+            Resource: "*"
+            Condition:
+              "Null":
+                aws:RequestTag/cpo-ci-run: "false"
+              StringEquals:
+                kms:KeyOrigin: AWS_KMS
+              Bool:
+                kms:MultiRegion: "false"
+          - Sid: UseTaggedRunKeys
+            Effect: Allow
+            Action:
+              - kms:CancelKeyDeletion
+              - kms:CreateGrant
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:DisableKey
+              - kms:EnableKey
+              - kms:EnableKeyRotation
+              - kms:Encrypt
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyWithoutPlaintext
+              - kms:GetKeyPolicy
+              - kms:GetKeyRotationStatus
+              - kms:ListGrants
+              - kms:ListResourceTags
+              - kms:PutKeyPolicy
+              - kms:ReEncryptFrom
+              - kms:ReEncryptTo
+              - kms:RetireGrant
+              - kms:RevokeGrant
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:UpdateKeyDescription
+            Resource: !Sub arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*
+            Condition:
+              "Null":
+                aws:ResourceTag/cpo-ci-run: "false"
+          - Sid: DeleteTaggedRunKeysSoon
+            Effect: Allow
+            Action: [kms:ScheduleKeyDeletion]
+            Resource: !Sub arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*
+            Condition:
+              "Null":
+                aws:ResourceTag/cpo-ci-run: "false"
+              NumericEquals:
+                kms:ScheduleKeyDeletionPendingWindowInDays: 7
+          - Sid: RunKeyAliases
+            Effect: Allow
+            Action: [kms:CreateAlias, kms:DeleteAlias, kms:UpdateAlias]
+            Resource:
+              - !Sub arn:${AWS::Partition}:kms:*:${AWS::AccountId}:alias/cpo-ci-*
+              - !Sub arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*
+
+          # Explicit denies, so that no later allow can open these.
+          - Sid: DenyBoundaryEscape
+            Effect: Deny
+            Action:
+              - iam:DeleteRolePermissionsBoundary
+              - iam:CreateUser
+              - iam:CreateAccessKey
+              - iam:CreateLoginProfile
+              - iam:UpdateAccessKey
+            Resource: "*"
+          - Sid: DenyChangeOfTheSandbox
+            Effect: Deny
+            NotAction:
+              - iam:GetPolicy
+              - iam:GetPolicyVersion
+              - iam:ListPolicyVersions
+              - iam:ListPolicyTags
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-*
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-sandbox-*
+              - !GetAtt IssuerBucket.Arn
+              - !Sub ${IssuerBucket.Arn}/*
+          - Sid: DenyPublicRunBuckets
+            Effect: Deny
+            Action: [s3:PutBucketAcl, s3:PutObjectAcl]
+            Resource:
+              - arn:aws:s3:::cpo-ci-*
+              - arn:aws:s3:::cpo-ci-*/*
+
+  CiRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: The role of the AWS jobs of the plugins repository.
+        must: >-
+          Trust only tokens of the one repository: main, its pull requests, and
+          its environment. GitHub gives a pull request from a fork no token.
+    Properties:
+      RoleName: cpo-sandbox-ci
+      Description: GitHub Actions of the plugins repository. Bounded to cpo-ci-* resources.
+      MaxSessionDuration: 7200
+      PermissionsBoundary: !Ref Boundary
+      ManagedPolicyArns: [!Ref Boundary]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOwner}/${GitHubRepository}:ref:refs/heads/main
+                  - !Sub repo:${GitHubOwner}/${GitHubRepository}:pull_request
+                  - !Sub repo:${GitHubOwner}/${GitHubRepository}:environment:${GitHubEnvironment}
+
+  IssuerBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: >-
+          STS reads the discovery document and the keys of a kind cluster from
+          a public HTTPS URL. Each run writes them under <run-id>/.
+        must: >-
+          Public read only on the two issuer documents, never on other objects.
+          Objects expire after a day, so a lost run leaves nothing. No
+          versioning: the documents are throwaway.
+    Properties:
+      BucketName: !Sub cpo-sandbox-issuers-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-runs
+            Status: Enabled
+            ExpirationInDays: 1
+
+  IssuerBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref IssuerBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicIssuerDocuments
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource:
+              - !Sub ${IssuerBucket.Arn}/*/.well-known/openid-configuration
+              - !Sub ${IssuerBucket.Arn}/*/openid/v1/jwks
+          - Sid: HttpsOnly
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt IssuerBucket.Arn
+              - !Sub ${IssuerBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  Budget:
+    Type: AWS::Budgets::Budget
+    Condition: CreateBudget
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: A run that leaks resources shows as cost before the bill.
+    Properties:
+      Budget:
+        BudgetName: cpo-sandbox-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref BudgetLimitUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - {SubscriptionType: EMAIL, Address: !Ref AlertEmail}
+            - !If
+              - HasSecondAlertEmail
+              - {SubscriptionType: EMAIL, Address: !Ref SecondAlertEmail}
+              - !Ref AWS::NoValue
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - {SubscriptionType: EMAIL, Address: !Ref AlertEmail}
+            - !If
+              - HasSecondAlertEmail
+              - {SubscriptionType: EMAIL, Address: !Ref SecondAlertEmail}
+              - !Ref AWS::NoValue
+
+Outputs:
+  CiRoleArn:
+    Description: The repository variable AWS_ROLE_ARN of the aws-sandbox environment.
+    Value: !GetAtt CiRole.Arn
+  Region:
+    Description: The repository variable AWS_REGION of the aws-sandbox environment.
+    Value: !Ref AWS::Region
+  IssuerBucket:
+    Description: The repository variable AWS_ISSUER_BUCKET of the aws-sandbox environment.
+    Value: !Ref IssuerBucket
+  IssuerHost:
+    Description: The host of each run issuer, https://<host>/<run-id>.
+    Value: !GetAtt IssuerBucket.RegionalDomainName
+  BoundaryArn:
+    Description: The permissions boundary of every role of a run.
+    Value: !Ref Boundary

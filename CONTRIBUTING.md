@@ -68,6 +68,12 @@ Copy `test/conformance/gateway-access/` or `test/conformance/rustfs/` as a start
 
 `make conformance-kind PLUGIN=<plugin>` runs the job on your machine, after `make operator-source`. It needs Docker, kind, kubebuilder, kubectl, and helm. It creates the kind cluster `camunda-operator-plugins` and leaves it after the run. Delete it with `kind delete cluster --name camunda-operator-plugins`.
 
+### The AWS jobs
+
+The AWS plugins run against a real AWS sandbox account, not against fakes. A job gets the credentials of a CI role from GitHub with OIDC. No access key exists. `hack/aws-sandbox/README.md` tells how the account is set up and what a job can do there.
+
+GitHub gives no OIDC token to a pull request from a fork. As a result, the AWS jobs do not run on such a pull request. They run on `main` after the merge. A maintainer can push the branch to this repository to run them before the merge.
+
 ## 7. Before you open a pull request
 
 1. Run `make lint`, `make test`, `make chart-verify`, and `make lint-renovate`. Each one must pass.

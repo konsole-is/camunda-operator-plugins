@@ -1,0 +1,47 @@
+name: AWS sandbox
+
+# Removes what CI runs left in the AWS sandbox account: every resource with
+# the tag cpo-ci-run that is older than six hours. A cancelled run cannot
+# clean up after itself. A pull request that changes the sweep runs it too.
+# See hack/aws-sandbox/README.md.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/aws-sandbox.yml
+      - hack/aws-sandbox/**
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: aws-sandbox-sweep
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  sweep:
+    name: Sweep the AWS sandbox
+    # GitHub gives a pull request from a fork no OIDC token.
+    if: >-
+      github.repository == 'konsole-is/camunda-operator-plugins' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    environment: aws-sandbox
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Get the credentials of the CI role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Remove resources older than six hours
+        run: hack/aws-sandbox/sweep.sh --older-than 6
