@@ -126,6 +126,15 @@ lint-renovate: ## Verify renovate.json5 with the validator of RENOVATE_VERSION. 
 lint-config: golangci-lint golangci-lint-schema ## Verify the golangci-lint configuration.
 	"$(GOLANGCI_LINT)" config verify --schema "$(GOLANGCI_LINT_SCHEMA)"
 
+.PHONY: lint-terraform
+lint-terraform: ## Check the format of each Terraform configuration under terraform/ and validate it, without its backend.
+	@set -e; for dir in terraform/*/; do \
+		echo "$${dir}"; \
+		terraform -chdir="$${dir}" fmt -check -diff; \
+		terraform -chdir="$${dir}" init -backend=false -input=false >/dev/null; \
+		terraform -chdir="$${dir}" validate; \
+	done
+
 .PHONY: lint-workflows
 lint-workflows: ## Check the GitHub workflows with actionlint.
 	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)

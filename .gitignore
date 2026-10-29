@@ -10,3 +10,7 @@ go.work
 *.swp
 *~
 *.kubeconfig
+# Terraform: providers, plans, and variable values.
+.terraform/
+*.tfplan
+*.tfvars
