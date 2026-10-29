@@ -43,6 +43,6 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
       - name: Check Renovate configuration
         run: make lint-renovate
