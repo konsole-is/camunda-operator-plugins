@@ -34,14 +34,16 @@ A job selects the environment from `github.actor_id` and the repository variable
 
 The boundary allows IAM, STS, S3, and KMS only. Each resource must have a name that starts with `cpo-ci-`. A role that a run creates gets only the policies that the run writes, so the boundary is the only limit on it. The boundary does not allow these actions:
 
-- Create a role without the boundary or without the tag `cpo-ci-run`.
+- Create a role without the boundary or without the tag `cpo-ci-run`, or give that tag a value that does not start with `cpo-ci-`.
+- Create a role or policy with a path.
 - Attach a managed policy that does not start with `cpo-ci-`, such as `AdministratorAccess`.
 - Remove the boundary from a role, or the tag `cpo-ci-run` from a resource.
 - Create an IAM user, an access key, or a login profile.
 - Change a `cpo-sandbox-*` role, policy, or bucket. This includes the Terraform state.
-- Make a bucket public. A new bucket blocks public access, and the boundary does not allow a change of that block, of the ACLs, or of the object ownership.
+- Make a bucket public. A new bucket blocks public access, and the boundary does not allow a change of that block, of the ACLs, of the object ownership, or of the bucket policy.
+- Use Object Lock on a bucket. A locked object stops the sweep.
 - Write an object into the issuer bucket other than the two issuer documents of a run.
-- Create a KMS key in a custom key store, a multi-Region key, or a key in another region.
+- Create a KMS key in a custom key store, a multi-Region key, a key in another region, or a key with a key policy other than the default one.
 - Use any other service, such as EC2, EKS, or VPC.
 
 A managed policy holds at most 6,144 characters, and a role has one boundary. So the boundary holds wide grants and the limits, and the CI role gets its exact grants from the other policies. Terraform stops before the apply when a policy is too long.

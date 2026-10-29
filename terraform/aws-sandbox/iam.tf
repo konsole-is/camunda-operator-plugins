@@ -265,8 +265,8 @@ data "aws_iam_policy_document" "boundary" {
       values   = ["7"]
     }
   }
-  # A new bucket blocks public access, and this keeps it so. Object Lock would
-  # keep the sweep from deleting the objects.
+  # A new bucket blocks public access, and this keeps it so. Object Lock or a
+  # bucket policy can keep the sweep from deleting the objects.
   statement {
     effect = "Deny"
     actions = [
@@ -274,6 +274,7 @@ data "aws_iam_policy_document" "boundary" {
       "s3:PutObjectAcl",
       "s3:PutBucketOwnershipControls",
       "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketPolicy",
       "s3:PutBucketObjectLockConfiguration",
       "s3:PutObjectRetention",
       "s3:PutObjectLegalHold",

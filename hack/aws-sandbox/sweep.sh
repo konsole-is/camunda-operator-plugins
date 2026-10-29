@@ -46,6 +46,13 @@ older() {
   [ -z "${run}" ] && [ "$(date -d "$1" +%s)" -lt "${cutoff}" ]
 }
 
+# run_tag reads the tags of a resource as JSON and prints the value of
+# cpo-ci-run, or nothing. The boundary checks that key in any case, so a
+# run can write it in any case.
+run_tag() {
+  jq -r '[(.Tags // .TagSet // [])[] | select(((.Key // .TagKey) | ascii_downcase) == "cpo-ci-run") | (.Value // .TagValue)][0] // ""'
+}
+
 # step runs a delete_* function and keeps the sweep going when it fails.
 step() {
   if ! "$@"; then
@@ -112,7 +119,7 @@ if ! roles=$(aws iam list-roles --query "Roles[?starts_with(RoleName, 'cpo-ci-')
 fi
 while read -r role created; do
   [ -n "${role}" ] || continue
-  if ! tag=$(aws iam list-role-tags --role-name "${role}" --query "Tags[?Key=='cpo-ci-run'].Value | [0]" --output text); then
+  if ! tag=$(aws iam list-role-tags --role-name "${role}" --output json | run_tag); then
     failed=1
     continue
   fi
@@ -128,7 +135,7 @@ if ! policies=$(aws iam list-policies --scope Local --query "Policies[?starts_wi
 fi
 while read -r arn created; do
   [ -n "${arn}" ] || continue
-  if ! tag=$(aws iam list-policy-tags --policy-arn "${arn}" --query "Tags[?Key=='cpo-ci-run'].Value | [0]" --output text); then
+  if ! tag=$(aws iam list-policy-tags --policy-arn "${arn}" --output json | run_tag); then
     failed=1
     continue
   fi
@@ -145,8 +152,9 @@ fi
 for arn in ${providers}; do
   # The boundary allows reads only of the providers of the issuer bucket.
   provider=$(aws iam get-open-id-connect-provider --open-id-connect-provider-arn "${arn}" \
-    --query "[CreateDate, Tags[?Key=='cpo-ci-run'].Value | [0]]" --output text 2>/dev/null) || continue
-  read -r created tag <<<"${provider}"
+    --output json 2>/dev/null) || continue
+  created=$(jq -r .CreateDate <<<"${provider}")
+  tag=$(run_tag <<<"${provider}")
   if matches "${tag}" "${created}"; then
     echo "OIDC provider ${arn} (${tag})"
     step aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "${arn}"
@@ -160,8 +168,7 @@ fi
 while read -r bucket created; do
   [ -n "${bucket}" ] || continue
   # A bucket without tags answers NoSuchTagSet.
-  tag=$(aws s3api get-bucket-tagging --bucket "${bucket}" \
-    --query "TagSet[?Key=='cpo-ci-run'].Value | [0]" --output text 2>/dev/null) || tag=""
+  tag=$(aws s3api get-bucket-tagging --bucket "${bucket}" --output json 2>/dev/null | run_tag) || tag=""
   untagged=false
   if [ -z "${tag}" ] || [ "${tag}" = None ]; then
     untagged=true
@@ -179,8 +186,7 @@ if ! keys=$(aws kms list-keys --query 'Keys[].KeyId' --output text); then
 fi
 for key in ${keys}; do
   # The boundary allows reads only of tagged keys; others answer AccessDenied.
-  tag=$(aws kms list-resource-tags --key-id "${key}" \
-    --query "Tags[?TagKey=='cpo-ci-run'].TagValue | [0]" --output text 2>/dev/null) || continue
+  tag=$(aws kms list-resource-tags --key-id "${key}" --output json 2>/dev/null | run_tag) || continue
   if ! metadata=$(aws kms describe-key --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text); then
     failed=1
     continue
