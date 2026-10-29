@@ -7,8 +7,10 @@
 #   sweep.sh --run <run-id>          what that run created, at any age
 #   sweep.sh --older-than <hours>    what any run created that many hours ago
 #
-# It touches only cpo-ci-* names with the tag. Needs AWS_REGION and the
-# credentials of the CI role, whose boundary allows nothing else.
+# It removes a role, policy, OIDC provider, or KMS key only when it has the
+# tag. With --older-than, it also removes a cpo-ci-* bucket without the tag
+# that is that many hours old. Needs AWS_REGION and the credentials of the CI
+# role. It exits 1 when a removal or the listing of a resource type failed.
 set -euo pipefail
 
 run=""
@@ -36,8 +38,12 @@ matches() {
   if [ -n "${run}" ]; then
     [ "${tag}" = "${run}" ]
   else
-    [ "$(date -d "${created}" +%s)" -lt "${cutoff}" ]
+    older "${created}"
   fi
+}
+
+older() {
+  [ -z "${run}" ] && [ "$(date -d "$1" +%s)" -lt "${cutoff}" ]
 }
 
 # step runs a delete_* function and keeps the sweep going when it fails.
@@ -48,65 +54,95 @@ step() {
   fi
 }
 
+# The delete_* functions run inside the condition of step, where errexit
+# is off, so each command ends the function on its own failure.
+
 delete_role() {
-  local role=$1 p
-  for p in $(aws iam list-role-policies --role-name "${role}" --query 'PolicyNames[]' --output text); do
-    aws iam delete-role-policy --role-name "${role}" --policy-name "${p}"
+  local role=$1 names p
+  names=$(aws iam list-role-policies --role-name "${role}" --query 'PolicyNames[]' --output text) || return 1
+  for p in ${names}; do
+    aws iam delete-role-policy --role-name "${role}" --policy-name "${p}" || return 1
   done
-  for p in $(aws iam list-attached-role-policies --role-name "${role}" --query 'AttachedPolicies[].PolicyArn' --output text); do
-    aws iam detach-role-policy --role-name "${role}" --policy-arn "${p}"
+  names=$(aws iam list-attached-role-policies --role-name "${role}" --query 'AttachedPolicies[].PolicyArn' --output text) || return 1
+  for p in ${names}; do
+    aws iam detach-role-policy --role-name "${role}" --policy-arn "${p}" || return 1
   done
   aws iam delete-role --role-name "${role}"
 }
 
 delete_policy() {
-  local arn=$1 v
-  for v in $(aws iam list-policy-versions --policy-arn "${arn}" --query 'Versions[?!IsDefaultVersion].VersionId' --output text); do
-    aws iam delete-policy-version --policy-arn "${arn}" --version-id "${v}"
+  local arn=$1 versions v
+  versions=$(aws iam list-policy-versions --policy-arn "${arn}" --query 'Versions[?!IsDefaultVersion].VersionId' --output text) || return 1
+  for v in ${versions}; do
+    aws iam delete-policy-version --policy-arn "${arn}" --version-id "${v}" || return 1
   done
   aws iam delete-policy --policy-arn "${arn}"
 }
 
 delete_bucket() {
-  local bucket=$1 objects
+  local bucket=$1 objects result
   while true; do
     objects=$(aws s3api list-object-versions --bucket "${bucket}" --max-items 500 \
       --query '{Objects: [Versions[].{Key: Key, VersionId: VersionId}, DeleteMarkers[].{Key: Key, VersionId: VersionId}][] | [?Key != null]}' \
-      --output json)
+      --output json) || return 1
     [ "$(jq '.Objects | length' <<<"${objects}")" -gt 0 ] || break
-    aws s3api delete-objects --bucket "${bucket}" --delete "${objects}" >/dev/null
+    result=$(aws s3api delete-objects --bucket "${bucket}" --delete "${objects}" --output json) || return 1
+    # A partial failure exits 0 and lists the objects in Errors.
+    if [ "$(jq '.Errors // [] | length' <<<"${result}")" -gt 0 ]; then
+      jq -r '.Errors[] | "\(.Key): \(.Code) \(.Message)"' <<<"${result}" >&2
+      return 1
+    fi
   done
   aws s3api delete-bucket --bucket "${bucket}"
 }
 
 delete_key() {
-  local key=$1 alias
-  for alias in $(aws kms list-aliases --key-id "${key}" --query 'Aliases[].AliasName' --output text); do
-    aws kms delete-alias --alias-name "${alias}"
+  local key=$1 aliases alias
+  aliases=$(aws kms list-aliases --key-id "${key}" --query 'Aliases[].AliasName' --output text) || return 1
+  for alias in ${aliases}; do
+    aws kms delete-alias --alias-name "${alias}" || return 1
   done
   aws kms schedule-key-deletion --key-id "${key}" --pending-window-in-days 7 >/dev/null
 }
 
 # Roles before policies, so that the policies are detached.
+if ! roles=$(aws iam list-roles --query "Roles[?starts_with(RoleName, 'cpo-ci-')].[RoleName, CreateDate]" --output text); then
+  echo "failed to list: roles" >&2
+  failed=1
+fi
 while read -r role created; do
   [ -n "${role}" ] || continue
-  tag=$(aws iam list-role-tags --role-name "${role}" --query "Tags[?Key=='cpo-ci-run'].Value | [0]" --output text)
+  if ! tag=$(aws iam list-role-tags --role-name "${role}" --query "Tags[?Key=='cpo-ci-run'].Value | [0]" --output text); then
+    failed=1
+    continue
+  fi
   if matches "${tag}" "${created}"; then
     echo "role ${role} (${tag})"
     step delete_role "${role}"
   fi
-done < <(aws iam list-roles --query "Roles[?starts_with(RoleName, 'cpo-ci-')].[RoleName, CreateDate]" --output text)
+done <<<"${roles}"
 
+if ! policies=$(aws iam list-policies --scope Local --query "Policies[?starts_with(PolicyName, 'cpo-ci-')].[Arn, CreateDate]" --output text); then
+  echo "failed to list: policies" >&2
+  failed=1
+fi
 while read -r arn created; do
   [ -n "${arn}" ] || continue
-  tag=$(aws iam list-policy-tags --policy-arn "${arn}" --query "Tags[?Key=='cpo-ci-run'].Value | [0]" --output text)
+  if ! tag=$(aws iam list-policy-tags --policy-arn "${arn}" --query "Tags[?Key=='cpo-ci-run'].Value | [0]" --output text); then
+    failed=1
+    continue
+  fi
   if matches "${tag}" "${created}"; then
     echo "policy ${arn} (${tag})"
     step delete_policy "${arn}"
   fi
-done < <(aws iam list-policies --scope Local --query "Policies[?starts_with(PolicyName, 'cpo-ci-')].[Arn, CreateDate]" --output text)
+done <<<"${policies}"
 
-for arn in $(aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text); do
+if ! providers=$(aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text); then
+  echo "failed to list: providers" >&2
+  failed=1
+fi
+for arn in ${providers}; do
   # The boundary allows reads only of the providers of the issuer bucket.
   provider=$(aws iam get-open-id-connect-provider --open-id-connect-provider-arn "${arn}" \
     --query "[CreateDate, Tags[?Key=='cpo-ci-run'].Value | [0]]" --output text 2>/dev/null) || continue
@@ -117,22 +153,39 @@ for arn in $(aws iam list-open-id-connect-providers --query 'OpenIDConnectProvid
   fi
 done
 
+if ! buckets=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'cpo-ci-')].[Name, CreationDate]" --output text); then
+  echo "failed to list: buckets" >&2
+  failed=1
+fi
 while read -r bucket created; do
   [ -n "${bucket}" ] || continue
+  # A bucket without tags answers NoSuchTagSet.
   tag=$(aws s3api get-bucket-tagging --bucket "${bucket}" \
-    --query "TagSet[?Key=='cpo-ci-run'].Value | [0]" --output text 2>/dev/null) || continue
-  if matches "${tag}" "${created}"; then
-    echo "bucket ${bucket} (${tag})"
+    --query "TagSet[?Key=='cpo-ci-run'].Value | [0]" --output text 2>/dev/null) || tag=""
+  untagged=false
+  if [ -z "${tag}" ] || [ "${tag}" = None ]; then
+    untagged=true
+  fi
+  # The boundary cannot keep a run from replacing the tags of a bucket.
+  if matches "${tag}" "${created}" || { ${untagged} && older "${created}"; }; then
+    echo "bucket ${bucket} (${tag:-no tag})"
     step delete_bucket "${bucket}"
   fi
-done < <(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'cpo-ci-')].[Name, CreationDate]" --output text)
+done <<<"${buckets}"
 
-for key in $(aws kms list-keys --query 'Keys[].KeyId' --output text); do
+if ! keys=$(aws kms list-keys --query 'Keys[].KeyId' --output text); then
+  echo "failed to list: keys" >&2
+  failed=1
+fi
+for key in ${keys}; do
   # The boundary allows reads only of tagged keys; others answer AccessDenied.
   tag=$(aws kms list-resource-tags --key-id "${key}" \
     --query "Tags[?TagKey=='cpo-ci-run'].TagValue | [0]" --output text 2>/dev/null) || continue
-  read -r state created < <(aws kms describe-key --key-id "${key}" \
-    --query 'KeyMetadata.[KeyState, CreationDate]' --output text)
+  if ! metadata=$(aws kms describe-key --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text); then
+    failed=1
+    continue
+  fi
+  read -r state created <<<"${metadata}"
   [ "${state}" != PendingDeletion ] || continue
   if matches "${tag}" "${created}"; then
     echo "KMS key ${key} (${tag})"

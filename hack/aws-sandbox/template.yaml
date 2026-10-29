@@ -92,31 +92,35 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Sid: Identity
-            Effect: Allow
+          - Effect: Allow
             Action: [sts:GetCallerIdentity]
             Resource: "*"
 
           # Roles. A role is created only with the boundary and the run tag;
           # a policy goes only on a role that has the boundary.
-          - Sid: CreateRunRoles
-            Effect: Allow
-            Action: [iam:CreateRole, iam:PutRolePermissionsBoundary]
+          - Effect: Allow
+            Action: [iam:CreateRole]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
             Condition:
               StringEquals:
                 iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
               "Null":
                 aws:RequestTag/cpo-ci-run: "false"
-          - Sid: PolicyOnBoundedRunRoles
-            Effect: Allow
+          - Effect: Allow
+            Action: [iam:PutRolePermissionsBoundary]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
+              "Null":
+                aws:ResourceTag/cpo-ci-run: "false"
+          - Effect: Allow
             Action: [iam:PutRolePolicy, iam:DeleteRolePolicy, iam:DetachRolePolicy]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
             Condition:
               StringEquals:
                 iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
-          - Sid: AttachOnlyRunPolicies
-            Effect: Allow
+          - Effect: Allow
             Action: [iam:AttachRolePolicy]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
             Condition:
@@ -124,8 +128,7 @@ Resources:
                 iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
               ArnLike:
                 iam:PolicyARN: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-ci-*
-          - Sid: ChangeTaggedRunRoles
-            Effect: Allow
+          - Effect: Allow
             Action:
               - iam:DeleteRole
               - iam:TagRole
@@ -139,8 +142,7 @@ Resources:
                 aws:ResourceTag/cpo-ci-run: "false"
           # Reads carry no tag condition: a read of a role that does not exist
           # must answer NoSuchEntity, not AccessDenied.
-          - Sid: ReadRunRoles
-            Effect: Allow
+          - Effect: Allow
             Action:
               - iam:GetRole
               - iam:GetRolePolicy
@@ -148,21 +150,18 @@ Resources:
               - iam:ListAttachedRolePolicies
               - iam:ListRoleTags
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
-          - Sid: AssumeRunRoles
-            Effect: Allow
+          - Effect: Allow
             Action: [sts:AssumeRole, sts:TagSession]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
 
           # Managed policies of a run, for plugins that attach them.
-          - Sid: CreateRunPolicies
-            Effect: Allow
+          - Effect: Allow
             Action: [iam:CreatePolicy]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-ci-*
             Condition:
               "Null":
                 aws:RequestTag/cpo-ci-run: "false"
-          - Sid: ChangeTaggedRunPolicies
-            Effect: Allow
+          - Effect: Allow
             Action:
               - iam:DeletePolicy
               - iam:CreatePolicyVersion
@@ -173,8 +172,7 @@ Resources:
             Condition:
               "Null":
                 aws:ResourceTag/cpo-ci-run: "false"
-          - Sid: ReadPolicies
-            Effect: Allow
+          - Effect: Allow
             Action: [iam:GetPolicy, iam:GetPolicyVersion, iam:ListPolicyVersions, iam:ListPolicyTags]
             Resource:
               - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-ci-*
@@ -182,26 +180,22 @@ Resources:
 
           # The OIDC provider of the kind cluster of a run. Its issuer is a
           # prefix of the issuer bucket.
-          - Sid: CreateRunOidcProviders
-            Effect: Allow
+          - Effect: Allow
             Action: [iam:CreateOpenIDConnectProvider, iam:TagOpenIDConnectProvider]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${IssuerBucket.RegionalDomainName}/*
             Condition:
               "Null":
                 aws:RequestTag/cpo-ci-run: "false"
-          - Sid: DeleteTaggedRunOidcProviders
-            Effect: Allow
+          - Effect: Allow
             Action: [iam:DeleteOpenIDConnectProvider]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${IssuerBucket.RegionalDomainName}/*
             Condition:
               "Null":
                 aws:ResourceTag/cpo-ci-run: "false"
-          - Sid: ReadOidcProviders
-            Effect: Allow
+          - Effect: Allow
             Action: [iam:GetOpenIDConnectProvider, iam:ListOpenIDConnectProviderTags]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${IssuerBucket.RegionalDomainName}/*
-          - Sid: ListForTheSweep
-            Effect: Allow
+          - Effect: Allow
             Action:
               - iam:ListRoles
               - iam:ListPolicies
@@ -212,22 +206,19 @@ Resources:
             Resource: "*"
 
           # Only the two documents of an issuer, the only public objects.
-          - Sid: WriteIssuers
-            Effect: Allow
+          - Effect: Allow
             Action: [s3:PutObject, s3:GetObject, s3:DeleteObject]
             Resource:
               - !Sub ${IssuerBucket.Arn}/*/.well-known/openid-configuration
               - !Sub ${IssuerBucket.Arn}/*/openid/v1/jwks
-          - Sid: ListIssuers
-            Effect: Allow
+          - Effect: Allow
             Action: [s3:ListBucket]
             Resource: !GetAtt IssuerBucket.Arn
 
           # Buckets of a run. S3 has no tag condition on CreateBucket, so the
           # name bounds them; the sweep reads the bucket tag. A new bucket
           # blocks public access, and DenyPublicRunBuckets keeps it so.
-          - Sid: RunBuckets
-            Effect: Allow
+          - Effect: Allow
             Action: s3:*
             Resource:
               - arn:aws:s3:::cpo-ci-*
@@ -235,8 +226,7 @@ Resources:
 
           # KMS keys of a run: AWS-owned key material only (a custom key store
           # costs per hour), one region, run tag on create.
-          - Sid: CreateRunKeys
-            Effect: Allow
+          - Effect: Allow
             Action: [kms:CreateKey]
             Resource: "*"
             Condition:
@@ -246,54 +236,26 @@ Resources:
                 kms:KeyOrigin: AWS_KMS
               Bool:
                 kms:MultiRegion: "false"
-          - Sid: UseTaggedRunKeys
-            Effect: Allow
-            Action:
-              - kms:CancelKeyDeletion
-              - kms:CreateGrant
-              - kms:Decrypt
-              - kms:DescribeKey
-              - kms:DisableKey
-              - kms:EnableKey
-              - kms:EnableKeyRotation
-              - kms:Encrypt
-              - kms:GenerateDataKey
-              - kms:GenerateDataKeyWithoutPlaintext
-              - kms:GetKeyPolicy
-              - kms:GetKeyRotationStatus
-              - kms:ListGrants
-              - kms:ListResourceTags
-              - kms:PutKeyPolicy
-              - kms:ReEncryptFrom
-              - kms:ReEncryptTo
-              - kms:RetireGrant
-              - kms:RevokeGrant
-              - kms:TagResource
-              - kms:UntagResource
-              - kms:UpdateKeyDescription
-            Resource: !Sub arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*
+          - Effect: Allow
+            Action: kms:*
+            Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
             Condition:
               "Null":
                 aws:ResourceTag/cpo-ci-run: "false"
-          - Sid: DeleteTaggedRunKeysSoon
-            Effect: Allow
-            Action: [kms:ScheduleKeyDeletion]
-            Resource: !Sub arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*
+          - Effect: Deny
+            Action: kms:ScheduleKeyDeletion
+            Resource: "*"
             Condition:
-              "Null":
-                aws:ResourceTag/cpo-ci-run: "false"
-              NumericEquals:
+              NumericNotEquals:
                 kms:ScheduleKeyDeletionPendingWindowInDays: 7
-          - Sid: RunKeyAliases
-            Effect: Allow
+          - Effect: Allow
             Action: [kms:CreateAlias, kms:DeleteAlias, kms:UpdateAlias]
             Resource:
-              - !Sub arn:${AWS::Partition}:kms:*:${AWS::AccountId}:alias/cpo-ci-*
-              - !Sub arn:${AWS::Partition}:kms:*:${AWS::AccountId}:key/*
+              - !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/cpo-ci-*
+              - !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
 
           # Explicit denies, so that no later allow can open these.
-          - Sid: DenyBoundaryEscape
-            Effect: Deny
+          - Effect: Deny
             Action:
               - iam:DeleteRolePermissionsBoundary
               - iam:CreateUser
@@ -301,8 +263,7 @@ Resources:
               - iam:CreateLoginProfile
               - iam:UpdateAccessKey
             Resource: "*"
-          - Sid: DenyChangeOfTheSandbox
-            Effect: Deny
+          - Effect: Deny
             NotAction:
               - iam:GetPolicy
               - iam:GetPolicyVersion
@@ -317,8 +278,21 @@ Resources:
               - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-sandbox-*
               - !GetAtt IssuerBucket.Arn
               - !Sub ${IssuerBucket.Arn}/*
-          - Sid: DenyPublicRunBuckets
-            Effect: Deny
+          # The sweep looks in the stack region only.
+          - Effect: Deny
+            NotAction: ["iam:*", "sts:*"]
+            Resource: "*"
+            Condition:
+              StringNotEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+          # The sweep finds a resource by this tag.
+          - Effect: Deny
+            Action: [iam:UntagRole, iam:UntagPolicy, kms:UntagResource]
+            Resource: "*"
+            Condition:
+              ForAnyValue:StringEqualsIgnoreCase:
+                aws:TagKeys: [cpo-ci-run]
+          - Effect: Deny
             Action:
               - s3:PutBucketAcl
               - s3:PutObjectAcl
@@ -411,15 +385,13 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Sid: PublicIssuerDocuments
-            Effect: Allow
+          - Effect: Allow
             Principal: "*"
             Action: s3:GetObject
             Resource:
               - !Sub ${IssuerBucket.Arn}/*/.well-known/openid-configuration
               - !Sub ${IssuerBucket.Arn}/*/openid/v1/jwks
-          - Sid: HttpsOnly
-            Effect: Deny
+          - Effect: Deny
             Principal: "*"
             Action: s3:*
             Resource:
