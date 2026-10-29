@@ -106,6 +106,22 @@ Resources:
                 iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-sandbox-boundary
               "Null":
                 aws:RequestTag/cpo-ci-run: "false"
+          # Tag on create: CreateRole, CreatePolicy, and CreateKey with tags
+          # also need the tag action, before the resource has a tag.
+          - Effect: Allow
+            Action: [iam:TagRole, iam:TagPolicy]
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/cpo-ci-*
+            Condition:
+              "Null":
+                aws:RequestTag/cpo-ci-run: "false"
+          - Effect: Allow
+            Action: [kms:TagResource]
+            Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+            Condition:
+              "Null":
+                aws:RequestTag/cpo-ci-run: "false"
           - Effect: Allow
             Action: [iam:PutRolePermissionsBoundary]
             Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cpo-ci-*

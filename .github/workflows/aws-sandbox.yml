@@ -13,8 +13,9 @@ on:
     - cron: "23 * * * *"
   workflow_dispatch:
 
+# A run that waits for an approval must not hold back the hourly sweep.
 concurrency:
-  group: aws-sandbox-sweep
+  group: aws-sandbox-sweep-${{ github.actor_id == vars.AWS_SANDBOX_ACTOR_ID && 'trusted' || 'review' }}
   cancel-in-progress: false
 
 permissions:
