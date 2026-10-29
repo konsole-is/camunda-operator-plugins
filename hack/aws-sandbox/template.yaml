@@ -12,23 +12,24 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label: {default: GitHub}
-        Parameters: [GitHubOwner, GitHubRepository, GitHubEnvironment, GitHubOidcProviderArn]
+        Parameters: [GitHubSubject, GitHubTrustedActorId, GitHubOidcProviderArn]
       - Label: {default: Cost alert}
         Parameters: [BudgetEnabled, BudgetLimitUsd, AlertEmail, SecondAlertEmail]
 
 Parameters:
-  GitHubOwner:
+  GitHubSubject:
     Type: String
-    Default: konsole-is
-    Description: The owner of the repository whose workflows get the CI role.
-  GitHubRepository:
+    Default: repo:konsole-is@200405113/camunda-operator-plugins@1411796673
+    Description: >-
+      The repository part of the OIDC subject of the repository whose workflows
+      get the CI role: sub_claim_prefix of its OIDC subject customization.
+  GitHubTrustedActorId:
     Type: String
-    Default: camunda-operator-plugins
-    Description: The repository whose workflows get the CI role.
-  GitHubEnvironment:
-    Type: String
-    Default: aws-sandbox
-    Description: The GitHub environment that holds the variables of the AWS jobs.
+    Default: "54936225"
+    AllowedPattern: "[0-9]+"
+    Description: >-
+      The GitHub user ID whose runs get the CI role in the environment
+      aws-sandbox, without an approval. Every other run uses aws-sandbox-review.
   GitHubOidcProviderArn:
     Type: String
     Default: ""
@@ -210,18 +211,21 @@ Resources:
               - s3:ListAllMyBuckets
             Resource: "*"
 
-          # The issuer documents of the runs.
+          # Only the two documents of an issuer, the only public objects.
           - Sid: WriteIssuers
             Effect: Allow
             Action: [s3:PutObject, s3:GetObject, s3:DeleteObject]
-            Resource: !Sub ${IssuerBucket.Arn}/*
+            Resource:
+              - !Sub ${IssuerBucket.Arn}/*/.well-known/openid-configuration
+              - !Sub ${IssuerBucket.Arn}/*/openid/v1/jwks
           - Sid: ListIssuers
             Effect: Allow
             Action: [s3:ListBucket]
             Resource: !GetAtt IssuerBucket.Arn
 
           # Buckets of a run. S3 has no tag condition on CreateBucket, so the
-          # name bounds them; the sweep reads the bucket tag.
+          # name bounds them; the sweep reads the bucket tag. A new bucket
+          # blocks public access, and DenyPublicRunBuckets keeps it so.
           - Sid: RunBuckets
             Effect: Allow
             Action: s3:*
@@ -315,7 +319,12 @@ Resources:
               - !Sub ${IssuerBucket.Arn}/*
           - Sid: DenyPublicRunBuckets
             Effect: Deny
-            Action: [s3:PutBucketAcl, s3:PutObjectAcl]
+            Action:
+              - s3:PutBucketAcl
+              - s3:PutObjectAcl
+              - s3:PutBucketOwnershipControls
+              # Also the permission of DeletePublicAccessBlock.
+              - s3:PutBucketPublicAccessBlock
             Resource:
               - arn:aws:s3:::cpo-ci-*
               - arn:aws:s3:::cpo-ci-*/*
@@ -326,12 +335,15 @@ Resources:
       com.aws.cloudformation.Context:
         why: The role of the AWS jobs of the plugins repository.
         must: >-
-          Trust only tokens of the one repository: main, its pull requests, and
-          its environment. GitHub gives a pull request from a fork no token.
+          Trust only tokens of the one repository, in one of its two
+          environments. In aws-sandbox the actor must be the trusted user;
+          aws-sandbox-review needs an approval in GitHub. The subject of the
+          repository includes the actor ID (OIDC subject customization). GitHub
+          gives a pull request from a fork no token.
     Properties:
       RoleName: cpo-sandbox-ci
       Description: GitHub Actions of the plugins repository. Bounded to cpo-ci-* resources.
-      MaxSessionDuration: 7200
+      MaxSessionDuration: 3600
       PermissionsBoundary: !Ref Boundary
       ManagedPolicyArns: [!Ref Boundary]
       AssumeRolePolicyDocument:
@@ -347,10 +359,19 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub:
-                  - !Sub repo:${GitHubOwner}/${GitHubRepository}:ref:refs/heads/main
-                  - !Sub repo:${GitHubOwner}/${GitHubRepository}:pull_request
-                  - !Sub repo:${GitHubOwner}/${GitHubRepository}:environment:${GitHubEnvironment}
+                token.actions.githubusercontent.com:sub: !Sub ${GitHubSubject}:environment:aws-sandbox:actor_id:${GitHubTrustedActorId}
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub ${GitHubSubject}:environment:aws-sandbox-review:actor_id:*
 
   IssuerBucket:
     Type: AWS::S3::Bucket

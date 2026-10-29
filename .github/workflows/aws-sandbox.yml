@@ -30,12 +30,22 @@ jobs:
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    environment: aws-sandbox
+    # Runs of the trusted user need no approval. Each other run waits for an
+    # approval in aws-sandbox-review. The CI role checks the actor too.
+    environment: ${{ github.actor_id == vars.AWS_SANDBOX_ACTOR_ID && 'aws-sandbox' || 'aws-sandbox-review' }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
     steps:
       - name: Clone the code
         uses: actions/checkout@v7
+
+      - name: Show the OIDC subject
+        run: |
+          token=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+          payload=$(cut -d. -f2 <<<"${token}" | tr '_-' '/+')
+          while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="${payload}="; done
+          base64 -d <<<"${payload}" | jq -r .sub
 
       - name: Get the credentials of the CI role
         uses: aws-actions/configure-aws-credentials@v6
