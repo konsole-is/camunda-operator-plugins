@@ -127,10 +127,13 @@ lint-config: golangci-lint golangci-lint-schema ## Verify the golangci-lint conf
 	"$(GOLANGCI_LINT)" config verify --schema "$(GOLANGCI_LINT_SCHEMA)"
 
 .PHONY: lint-terraform
-lint-terraform: ## Check the format of the Terraform of hack/aws-sandbox and validate it, without its backend.
-	terraform -chdir=hack/aws-sandbox/terraform fmt -check -diff
-	terraform -chdir=hack/aws-sandbox/terraform init -backend=false -input=false
-	terraform -chdir=hack/aws-sandbox/terraform validate
+lint-terraform: ## Check the format of each Terraform configuration under terraform/ and validate it, without its backend.
+	@set -e; for dir in terraform/*/; do \
+		echo "$${dir}"; \
+		terraform -chdir="$${dir}" fmt -check -diff; \
+		terraform -chdir="$${dir}" init -backend=false -input=false >/dev/null; \
+		terraform -chdir="$${dir}" validate; \
+	done
 
 .PHONY: lint-workflows
 lint-workflows: ## Check the GitHub workflows with actionlint.

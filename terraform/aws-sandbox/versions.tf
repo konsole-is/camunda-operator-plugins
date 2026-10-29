@@ -27,7 +27,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      managed-by = "hack/aws-sandbox/terraform"
+      managed-by = "terraform/aws-sandbox"
     }
   }
 }
