@@ -94,6 +94,7 @@ type Plugin struct {
 	mode       awskit.Mode
 	provider   awskit.OIDCProvider
 	eksCluster string
+	region     string
 	prefix     string
 	boundary   string
 	extraTags  awskit.ExtraTags
@@ -125,7 +126,7 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 	case RegistrationRole:
 		return p.deleteRole(ctx, req)
 	case RegistrationExistingRole:
-		return p.deleteAssociations(ctx, req, existingRoleARN(req))
+		return p.deleteExistingAssociations(ctx, req)
 	default:
 		return fmt.Errorf("the plugin does not serve the registration %q", r)
 	}
@@ -142,7 +143,7 @@ func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[s
 		}
 		return p.deleteAssociations(ctx, req, arn)
 	case RegistrationExistingRole:
-		return p.deleteAssociations(ctx, req, existingRoleARN(req))
+		return p.deleteExistingAssociations(ctx, req)
 	default:
 		return fmt.Errorf("the plugin does not serve the registration %q", r)
 	}

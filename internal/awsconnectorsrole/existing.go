@@ -18,6 +18,7 @@ package awsconnectorsrole
 
 import (
 	"context"
+	"slices"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
@@ -62,11 +63,18 @@ func (p *Plugin) reconcileExisting(
 	}, nil
 }
 
-// existingRoleARN is the role of a RegistrationExistingRole request: roleArn,
-// or the principal output when the parameters name none.
-func existingRoleARN(req pluginkit.Request[Params, map[string]string]) string {
-	if req.Parameters.RoleARN != "" {
-		return req.Parameters.RoleARN
+// deleteExistingAssociations deletes the associations of the claim of req
+// to roleArn and to the role of the principal output. The two differ when a
+// move of the association to a new roleArn failed.
+func (p *Plugin) deleteExistingAssociations(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+) error {
+	arns := []string{req.Parameters.RoleARN, req.Object.Status.Outputs[awskit.OutputPrincipal]}
+	for _, arn := range slices.Compact(arns) {
+		if err := p.deleteAssociations(ctx, req, arn); err != nil {
+			return err
+		}
 	}
-	return req.Object.Status.Outputs[awskit.OutputPrincipal]
+	return nil
 }
