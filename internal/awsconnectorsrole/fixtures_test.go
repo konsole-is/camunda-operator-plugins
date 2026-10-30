@@ -52,6 +52,7 @@ const (
 	providerARN     = "arn:aws:iam::111122223333:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/ABC"
 	issuer          = "oidc.eks.eu-west-1.amazonaws.com/id/ABC"
 	eksCluster      = "eks-1"
+	region          = "eu-west-1"
 	policyA         = "arn:aws:iam::111122223333:policy/connectors-a"
 	policyB         = "arn:aws:iam::111122223333:policy/connectors-b"
 	policyC         = "arn:aws:iam::111122223333:policy/connectors-c"

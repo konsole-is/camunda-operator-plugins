@@ -41,6 +41,7 @@ func validOptions() Options {
 		PermissionsBoundaryARN: "arn:aws:iam::111122223333:policy/b",
 		OIDCProviderARN:        "arn:aws:iam::111122223333:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/ABC",
 		EKSClusterName:         "eks-1",
+		Region:                 "eu-west-1",
 		Clients:                awskit.Clients{IAM: awsfake.NewIAM(), EKS: awsfake.NewEKS(), STS: awsfake.NewSTS()},
 	}
 }
@@ -58,6 +59,10 @@ func TestNewPluginRefuses(t *testing.T) {
 		"an unknown mode":              {func(o *Options) { o.Mode = "kiam" }, "mode"},
 		"IRSA without a provider":      {func(o *Options) { o.OIDCProviderARN = "" }, "OIDC provider"},
 		"Pod Identity without cluster": {func(o *Options) { o.Mode = awskit.ModePodIdentity; o.EKSClusterName = "" }, "EKS cluster name"},
+		"Pod Identity without region": {func(o *Options) {
+			o.Mode = awskit.ModePodIdentity
+			o.Region = ""
+		}, "region"},
 		"Pod Identity without EKS": {func(o *Options) {
 			o.Mode = awskit.ModePodIdentity
 			o.Clients.EKS = nil
@@ -99,4 +104,21 @@ func TestNewPluginAcceptsValidOptions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "camunda-connectors", p.prefix)
 	assert.Equal(t, "oidc.eks.eu-west-1.amazonaws.com/id/ABC", p.provider.Issuer)
+}
+
+// Two regions of one account can each have an EKS cluster of one name.
+func TestRoleNameDiffersByRegionWithPodIdentity(t *testing.T) {
+	opts := validOptions()
+	opts.Mode = awskit.ModePodIdentity
+	west, err := newPlugin(opts)
+	require.NoError(t, err)
+	opts.Region = "eu-central-1"
+	central, err := newPlugin(opts)
+	require.NoError(t, err)
+	request := &pluginsv1alpha1.PluginRequest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "orders-connectors-permissions"},
+		Spec:       pluginsv1alpha1.PluginRequestSpec{ClaimRef: pluginsv1alpha1.ClaimRef{Name: "orders"}},
+	}
+
+	assert.NotEqual(t, west.roleName(request), central.roleName(request))
 }

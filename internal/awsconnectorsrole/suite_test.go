@@ -158,7 +158,7 @@ func newConnectors(
 		eks:            awsfake.NewEKS(),
 	}
 	if mode == awskit.ModePodIdentity {
-		h.scope = eksCluster
+		h.scope = region + "/" + eksCluster
 	}
 
 	opts := awsconnectorsrole.Options{
@@ -170,6 +170,7 @@ func newConnectors(
 		ExtraTags:          awskit.ExtraTags{"cost-center": "camunda"},
 		OIDCProviderARN:    providerARN,
 		EKSClusterName:     eksCluster,
+		Region:             region,
 		Clients:            awskit.Clients{IAM: h.iam, EKS: h.eks, STS: awsfake.NewSTS()},
 	}
 	if registration == awsconnectorsrole.RegistrationRole {

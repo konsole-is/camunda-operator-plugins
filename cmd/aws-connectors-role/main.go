@@ -121,6 +121,7 @@ func main() {
 		log.Error(err, "Could not load the AWS config")
 		os.Exit(1)
 	}
+	opts.Region = cfg.Region
 	opts.Clients = awskit.NewClients(cfg)
 
 	mgr, err := awsconnectorsrole.NewManager(ctrl.GetConfigOrDie(), opts)

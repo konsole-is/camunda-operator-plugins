@@ -75,6 +75,8 @@ type Options struct {
 	// EKSClusterName is the EKS cluster of the associations. ModePodIdentity
 	// needs it.
 	EKSClusterName string
+	// Region is the AWS region of the EKS cluster. ModePodIdentity needs it.
+	Region string
 	// Clients are the AWS clients. NewManager needs IAM and STS, and EKS with
 	// ModePodIdentity.
 	Clients awskit.Clients
@@ -83,8 +85,8 @@ type Options struct {
 // NewManager returns a manager for cfg that publishes and serves the
 // registrations of opts. It refuses a registration that the plugin does not
 // know, an unknown mode, ModeIRSA without a valid OIDC provider ARN,
-// ModePodIdentity without an EKS cluster name or an EKS client, and a
-// missing IAM or STS client. When opts serves RegistrationRole, it also
+// ModePodIdentity without an EKS cluster name, a region, or an EKS client,
+// and a missing IAM or STS client. When opts serves RegistrationRole, it also
 // refuses no permissions boundary, and a role name prefix that IAM refuses
 // or that is the prefix of aws-identity. /healthz and /readyz answer while
 // it runs.
@@ -176,10 +178,16 @@ func newPlugin(opts Options) (*Plugin, error) {
 		if opts.EKSClusterName == "" {
 			return nil, fmt.Errorf("the EKS cluster name is empty: mode %s needs it", mode)
 		}
+		// IAM role names are global in the account, and two regions can each
+		// have an EKS cluster of one name.
+		if opts.Region == "" {
+			return nil, fmt.Errorf("the AWS region is empty: mode %s needs it", mode)
+		}
 		if opts.Clients.EKS == nil {
 			return nil, fmt.Errorf("the EKS client is missing: mode %s needs it", mode)
 		}
 		p.eksCluster = opts.EKSClusterName
+		p.region = opts.Region
 	}
 
 	if opts.Clients.IAM == nil || opts.Clients.STS == nil {
