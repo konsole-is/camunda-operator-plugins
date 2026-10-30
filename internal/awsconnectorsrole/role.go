@@ -68,18 +68,17 @@ func (p *Plugin) reconcileRole(
 		return pluginkit.Result{}, err
 	}
 
-	resources := []pluginsv1alpha1.ResourceRef{{
+	associations, err := p.ensureAssociations(ctx, req, sas, role.ARN)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+	resources := append([]pluginsv1alpha1.ResourceRef{{
 		Kind:     kindIAMRole,
 		Name:     role.Name,
 		ID:       role.ARN,
 		Role:     "AWS identity of the Connectors of the cluster " + request.Spec.Target.Name,
 		OnOrphan: pluginsv1alpha1.OnOrphanKept,
-	}}
-	associations, err := p.ensureAssociations(ctx, req, sas, role.ARN)
-	if err != nil {
-		return pluginkit.Result{}, err
-	}
-	resources = append(resources, associations...)
+	}}, associations...)
 
 	consoleURL, err := awskit.RoleConsoleURL(role.ARN)
 	if err != nil {

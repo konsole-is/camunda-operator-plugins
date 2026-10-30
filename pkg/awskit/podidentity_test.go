@@ -239,7 +239,7 @@ func TestEnsureAssociationsKeepsTheAssociationOfAnotherClaimOfTheRole(t *testing
 	change = ensure(t, f, roleA, "orders-connectors")
 
 	assert.Equal(t, awskit.AssociationChange{}, change)
-	var sas []string
+	sas := make([]string, 0, len(f.Associations()))
 	for _, a := range f.Associations() {
 		sas = append(sas, a.ServiceAccount)
 	}
