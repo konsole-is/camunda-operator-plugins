@@ -137,6 +137,16 @@ func (f *KMS) SetState(region, keyID string, state types.KeyState) {
 	}
 }
 
+// SetRotation turns the automatic rotation of the key keyID in region on or
+// off, as a change outside the plugin does.
+func (f *KMS) SetRotation(region, keyID string, on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if k, ok := f.keys[region+"/"+keyID]; ok {
+		k.Rotation = on
+	}
+}
+
 // FailNext makes the next call of operation, such as "CreateAlias", in any
 // region, return err.
 func (f *KMS) FailNext(operation string, err error) {
