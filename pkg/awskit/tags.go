@@ -21,6 +21,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // The tags that tie an AWS object to the request that it serves.
@@ -72,9 +73,9 @@ func (t *ExtraTags) Set(s string) error {
 			return fmt.Errorf("extra tag %q: want key=value", item)
 		case key == "":
 			return fmt.Errorf("extra tag %q: the key is empty", item)
-		case len(key) > 128:
+		case utf8.RuneCountInString(key) > 128:
 			return fmt.Errorf("extra tag %q: the key has more than 128 characters", item)
-		case len(value) > 256:
+		case utf8.RuneCountInString(value) > 256:
 			return fmt.Errorf("extra tag %q: the value has more than 256 characters", item)
 		case len(key) >= 4 && strings.EqualFold(key[:4], "aws:"):
 			return fmt.Errorf("extra tag %q: the key prefix aws: is reserved by AWS", item)

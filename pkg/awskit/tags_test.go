@@ -70,11 +70,16 @@ func TestExtraTagsIgnoreAnEmptyList(t *testing.T) {
 }
 
 func TestExtraTagsAcceptTheLongestKeyAndValue(t *testing.T) {
-	var tags ExtraTags
+	for _, char := range []string{"k", "é"} {
+		t.Run(char, func(t *testing.T) {
+			key, value := strings.Repeat(char, 128), strings.Repeat(char, 256)
+			var tags ExtraTags
 
-	require.NoError(t, tags.Set(strings.Repeat("k", 128)+"="+strings.Repeat("v", 256)))
+			require.NoError(t, tags.Set(key+"="+value))
 
-	assert.Equal(t, ExtraTags{strings.Repeat("k", 128): strings.Repeat("v", 256)}, tags)
+			assert.Equal(t, ExtraTags{key: value}, tags)
+		})
+	}
 }
 
 func TestExtraTagsRefuseABadItem(t *testing.T) {
@@ -94,6 +99,8 @@ func TestExtraTagsRefuseABadItem(t *testing.T) {
 		{name: "key twice in one list", in: "a=1,a=2", names: "a"},
 		{name: "long key", in: strings.Repeat("k", 129) + "=v", names: "128"},
 		{name: "long value", in: "k=" + strings.Repeat("v", 257), names: "256"},
+		{name: "long key of two-byte characters", in: strings.Repeat("é", 129) + "=v", names: "128"},
+		{name: "long value of two-byte characters", in: "k=" + strings.Repeat("é", 257), names: "256"},
 	}
 
 	for _, tt := range tests {
