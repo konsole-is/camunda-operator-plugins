@@ -373,8 +373,8 @@ func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[s
 	return p.deleteAssociations(ctx, req, p.roleName(req.Object))
 }
 
-// deleteAssociations deletes the associations of the role roleName in the
-// namespace of req, with Pod Identity. It also deletes them when the role is
+// deleteAssociations deletes the associations of the role roleName that
+// carry the tags of the claim of req, with Pod Identity. It also deletes them when the role is
 // gone, if req has a principal output.
 func (p *Plugin) deleteAssociations(
 	ctx context.Context,
@@ -397,7 +397,15 @@ func (p *Plugin) deleteAssociations(
 		return nil
 	}
 
-	deleted, err := awskit.DeleteAssociations(ctx, p.clients.EKS, p.eksCluster, req.Object.Namespace, arn)
+	request := req.Object
+	deleted, err := awskit.DeleteAssociations(
+		ctx,
+		p.clients.EKS,
+		p.eksCluster,
+		request.Namespace,
+		arn,
+		awskit.RequestTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name),
+	)
 	for _, sa := range deleted {
 		req.Event(
 			corev1.EventTypeNormal,

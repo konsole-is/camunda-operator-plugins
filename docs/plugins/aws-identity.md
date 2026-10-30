@@ -18,7 +18,7 @@ For each request, the plugin creates one IAM role:
 - With IRSA, the trust policy names the OIDC provider of the EKS cluster, with one `sub` value for each ServiceAccount.
 - With Pod Identity, the trust policy names `pods.eks.amazonaws.com` with `sts:AssumeRole` and `sts:TagSession`. The plugin creates one Pod Identity association for each ServiceAccount, with the same tags.
 
-When a ServiceAccount leaves the request, the plugin removes it from the trust policy, and with Pod Identity it deletes its association.
+When a ServiceAccount leaves the request, the plugin removes it from the trust policy, and with Pod Identity it deletes its association. The plugin deletes only an association that carries the tags of the claim. It keeps an association that someone made by hand for the role.
 
 The plugin also writes:
 

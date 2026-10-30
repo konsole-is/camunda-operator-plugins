@@ -144,6 +144,18 @@ func expectGrant(grant *pluginsv1alpha1.Grant, conditionType string, status meta
 	}, timeout).Should(Succeed())
 }
 
+// associationsIn returns the ServiceAccounts of the associations of h in
+// namespace.
+func associationsIn(h *hub, namespace string) []string {
+	var sas []string
+	for _, a := range h.eks.Associations() {
+		if a.Namespace == namespace {
+			sas = append(sas, a.ServiceAccount)
+		}
+	}
+	return sas
+}
+
 // statementOfSize returns an allowed statement of n characters.
 func statementOfSize(n int) string {
 	head := `{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::`
@@ -567,6 +579,25 @@ var _ = Describe("the AWS identity hub", func() {
 
 		Eventually(func(g Gomega) {
 			g.Expect(roleOf(g, podIdentity, s.namespace).InlinePolicies).To(BeEmpty())
+		}, timeout).Should(Succeed())
+	})
+
+	It("deletes the association of a ServiceAccount that leaves the request", func() {
+		ns := newNamespace()
+		request := hubRequest(podIdentity.registration, ns, "orders-es-es")
+		readyRequest(request)
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(podIdentity, ns)).To(ConsistOf("orders-camunda", "orders-es-es"))
+		}, timeout).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			got := read(g, request.DeepCopy())
+			got.Spec.Target.AdditionalServiceAccounts = nil
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(podIdentity, ns)).To(ConsistOf("orders-camunda"))
 		}, timeout).Should(Succeed())
 	})
 
