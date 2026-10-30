@@ -66,12 +66,6 @@ func (t *ExtraTags) Set(s string) error {
 		next = ExtraTags{}
 	}
 
-	// IAM users and roles do not allow two tag keys that differ only in case.
-	keys := map[string]bool{}
-	for key := range next {
-		keys[strings.ToLower(key)] = true
-	}
-
 	for item := range strings.SplitSeq(s, ",") {
 		item = strings.TrimSpace(item)
 		if item == "" {
@@ -79,7 +73,6 @@ func (t *ExtraTags) Set(s string) error {
 		}
 
 		key, value, ok := strings.Cut(item, "=")
-		lower := strings.ToLower(key)
 		switch {
 		case !ok:
 			return fmt.Errorf("extra tag %q: want key=value", item)
@@ -93,15 +86,17 @@ func (t *ExtraTags) Set(s string) error {
 			return fmt.Errorf("extra tag %q: the value has more than 256 characters", item)
 		case !tagChars.MatchString(key) || !tagChars.MatchString(value):
 			return fmt.Errorf("extra tag %q: AWS allows only letters, digits, spaces, and _.:/=+-@", item)
-		case strings.HasPrefix(lower, "aws:"):
+		case hasPrefixFold(key, "aws:"):
 			return fmt.Errorf("extra tag %q: the key prefix aws: is reserved by AWS", item)
-		case strings.HasPrefix(lower, "camunda.io/"):
+		case hasPrefixFold(key, "camunda.io/"):
 			return fmt.Errorf("extra tag %q: the plugin owns the keys of camunda.io/", item)
-		case keys[lower]:
+		// IAM users and roles do not allow two tag keys that differ only in case.
+		case slices.ContainsFunc(slices.Collect(maps.Keys(next)), func(set string) bool {
+			return strings.EqualFold(set, key)
+		}):
 			return fmt.Errorf("extra tag %q: the key %q is already set", item, key)
 		}
 
-		keys[lower] = true
 		next[key] = value
 	}
 
@@ -111,6 +106,11 @@ func (t *ExtraTags) Set(s string) error {
 
 	*t = next
 	return nil
+}
+
+func hasPrefixFold(s, prefix string) bool {
+	runes, n := []rune(s), utf8.RuneCountInString(prefix)
+	return len(runes) >= n && strings.EqualFold(string(runes[:n]), prefix)
 }
 
 // String returns the tags as key=value items, sorted by key and joined by
