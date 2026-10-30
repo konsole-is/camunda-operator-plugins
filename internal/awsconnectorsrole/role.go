@@ -17,6 +17,7 @@ limitations under the License.
 package awsconnectorsrole
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -33,9 +34,9 @@ import (
 
 // reconcileRole keeps the role of the claim of req, trusted by the
 // Connectors ServiceAccount only, with the inline policy and the managed
-// policies of the parameters. It is Pending, with no AWS call, when the
-// request names no ServiceAccount or when the inline policy is over the size
-// limit.
+// policies of the parameters. It is Pending when the request names no
+// ServiceAccount, and Pending with no AWS call when the inline policy is over
+// the size limit.
 func (p *Plugin) reconcileRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -43,7 +44,7 @@ func (p *Plugin) reconcileRole(
 	request := req.Object
 	sas := trustedServiceAccounts(request.Spec.Target)
 	if len(sas) == 0 {
-		return pluginkit.Result{Pending: missingServiceAccount()}, nil
+		return p.reconcileRoleWithoutServiceAccount(ctx, req)
 	}
 
 	doc, size, err := inlinePolicyDocument(req.Parameters.InlinePolicy)
@@ -91,6 +92,30 @@ func (p *Plugin) reconcileRole(
 		Links:     []pluginsv1alpha1.Link{{Name: "IAM role", URL: consoleURL}},
 		Resources: resources,
 	}, nil
+}
+
+// reconcileRoleWithoutServiceAccount makes the role of the claim of req, when
+// it exists, trust nobody, and deletes the associations of the claim to it.
+// It creates no role.
+func (p *Plugin) reconcileRoleWithoutServiceAccount(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+) (pluginkit.Result, error) {
+	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+
+	if arn != "" {
+		if _, err := p.ensureRole(ctx, req, nil); err != nil {
+			return pluginkit.Result{}, err
+		}
+	}
+
+	if err := p.deleteOwnedAssociations(ctx, req); err != nil {
+		return pluginkit.Result{}, err
+	}
+	return pluginkit.Result{Pending: missingServiceAccount()}, nil
 }
 
 func missingServiceAccount() *pluginkit.Waiting {
@@ -298,10 +323,18 @@ func (p *Plugin) deleteOwnedAssociations(
 // role is gone, it returns the principal output, because the associations of
 // a role that someone deleted by hand stay, or "" when there is none.
 func (p *Plugin) ownedRoleARN(ctx context.Context, req pluginkit.Request[Params, map[string]string]) (string, error) {
-	name := p.roleName(req.Object)
+	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
+	if err != nil {
+		return "", err
+	}
+	return cmp.Or(arn, req.Object.Status.Outputs[awskit.OutputPrincipal]), nil
+}
+
+// liveRoleARN returns the ARN of the role name, or "" when it does not exist.
+func (p *Plugin) liveRoleARN(ctx context.Context, name string) (string, error) {
 	out, err := p.clients.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
 	if awskit.IsNotFound(err) {
-		return req.Object.Status.Outputs[awskit.OutputPrincipal], nil
+		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("reading the IAM role %s: %w", name, err)

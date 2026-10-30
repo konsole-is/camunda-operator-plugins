@@ -120,6 +120,39 @@ var _ = Describe("the aws-connectors-existing-role registration", func() {
 		Expect(associationsIn(existingPodIdentity, ns)).To(BeEmpty())
 	})
 
+	It("deletes the association of a request that names no ServiceAccount any more", func() {
+		ns := newNamespace(existingPodIdentity)
+		req := connectorsRequest(existingPodIdentity, ns, existingParams(existingRoleARN))
+		Expect(existingPodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(existingPodIdentity, req)
+
+		update(
+			existingPodIdentity,
+			req,
+			func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" },
+		)
+
+		waitReason(existingPodIdentity, req, v1.ConditionReady, "MissingServiceAccount")
+		Expect(associationsIn(existingPodIdentity, ns)).To(BeEmpty())
+	})
+
+	It("deletes the association of the former ServiceAccount when roleArn changes too", func() {
+		const other = "arn:aws:iam::111122223333:role/connectors-4"
+		ns := newNamespace(existingPodIdentity)
+		req := connectorsRequest(existingPodIdentity, ns, existingParams(existingRoleARN))
+		Expect(existingPodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(existingPodIdentity, req)
+
+		update(existingPodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(existingParams(other))
+			r.Spec.Target.ServiceAccountName = "orders-connectors-2"
+		})
+
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf("orders-connectors-2=" + other))
+		}, timeout).Should(Succeed())
+	})
+
 	It("keeps the association of another claim that uses the same role", func() {
 		ns := newNamespace(existingPodIdentity)
 		orders := connectorsRequest(existingPodIdentity, ns, existingParams(existingRoleARN))

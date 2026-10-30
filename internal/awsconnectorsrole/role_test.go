@@ -169,7 +169,7 @@ var _ = Describe("the aws-connectors-role registration", func() {
 		Expect(rolesOf(role, ns)).To(BeEmpty())
 	})
 
-	It("waits without an AWS call when the request names no ServiceAccount", func() {
+	It("waits and creates no role when the request names no ServiceAccount", func() {
 		ns := newNamespace(role)
 		req := connectorsRequest(role, ns, `{}`)
 		req.Spec.Target.ServiceAccountName = ""
@@ -178,6 +178,33 @@ var _ = Describe("the aws-connectors-role registration", func() {
 		waitReason(role, req, v1.ConditionReady, "MissingServiceAccount")
 		_, ok := role.iam.Role(role.roleName(ns))
 		Expect(ok).To(BeFalse())
+	})
+
+	It("revokes the trust of a request that names no ServiceAccount any more", func() {
+		ns := newNamespace(role)
+		req := connectorsRequest(role, ns, managedParams(policyA))
+		Expect(role.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(role, req)
+
+		update(role, req, func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+
+		waitReason(role, req, v1.ConditionReady, "MissingServiceAccount")
+		iamRole, _ := role.iam.Role(role.roleName(ns))
+		Expect(iamRole.TrustPolicy).To(ContainSubstring(`"Effect":"Deny"`))
+		Expect(iamRole.TrustPolicy).NotTo(ContainSubstring("orders-connectors"))
+	})
+
+	It("deletes the association of a request that names no ServiceAccount any more", func() {
+		ns := newNamespace(rolePodIdentity)
+		req := connectorsRequest(rolePodIdentity, ns, `{}`)
+		Expect(rolePodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(rolePodIdentity, req)
+		Expect(associationsIn(rolePodIdentity, ns)).To(HaveLen(1))
+
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+
+		waitReason(rolePodIdentity, req, v1.ConditionReady, "MissingServiceAccount")
+		Expect(associationsIn(rolePodIdentity, ns)).To(BeEmpty())
 	})
 
 	It("creates one association for the Connectors ServiceAccount in Pod Identity mode", func() {
