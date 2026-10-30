@@ -109,6 +109,8 @@ func TestExtraTagsRefuseABadItem(t *testing.T) {
 		{name: "key twice in one list", in: "a=1,a=2", names: "a"},
 		{name: "long key", in: strings.Repeat("k", 129) + "=v", names: "128"},
 		{name: "long value", in: "k=" + strings.Repeat("v", 257), names: "256"},
+		{name: "space before the equals", in: "k =v", names: "k =v"},
+		{name: "space after the equals", in: "k= v", names: "k= v"},
 		{name: "mark in the key", in: "team!=x", names: "team!"},
 		{name: "mark in the value", in: "k=payments!", names: "payments!"},
 		{name: "long key of two-byte characters", in: strings.Repeat("é", 129) + "=v", names: "128"},

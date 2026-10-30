@@ -54,11 +54,12 @@ func RequestTags(namespace, claim, request string) map[string]string {
 
 // Set adds a comma-separated list of key=value items. The key ends at the
 // first "=". Empty items are skipped. Set refuses an item without "=", an
-// empty key, a key of more than 128 or a value of more than 256 characters,
-// a character that AWS does not allow in a tag, a key that starts with "aws:"
-// or "camunda.io/" in any case, a key that is already set in any case, and
-// more than MaxExtraTags tags in all. The error names the item, or the whole
-// input when there are too many tags. A refused Set changes nothing.
+// empty key, a space next to the "=", a key of more than 128 or a value of
+// more than 256 characters, a character that AWS does not allow in a tag, a
+// key that starts with "aws:" or "camunda.io/" in any case, a key that is
+// already set in any case, and more than MaxExtraTags tags in all. The error
+// names the item, or the whole input when there are too many tags. A refused
+// Set changes nothing.
 func (t *ExtraTags) Set(s string) error {
 	next := maps.Clone(*t)
 	if next == nil {
@@ -84,6 +85,8 @@ func (t *ExtraTags) Set(s string) error {
 			return fmt.Errorf("extra tag %q: want key=value", item)
 		case key == "":
 			return fmt.Errorf("extra tag %q: the key is empty", item)
+		case key != strings.TrimSpace(key) || value != strings.TrimSpace(value):
+			return fmt.Errorf("extra tag %q: a space next to the =", item)
 		case utf8.RuneCountInString(key) > 128:
 			return fmt.Errorf("extra tag %q: the key has more than 128 characters", item)
 		case utf8.RuneCountInString(value) > 256:
