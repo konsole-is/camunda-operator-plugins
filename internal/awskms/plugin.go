@@ -137,7 +137,12 @@ func (p *Plugin) Reconcile(
 }
 
 func refOf(request *pluginsv1alpha1.PluginRequest) keyRef {
-	return keyRef{Namespace: request.Namespace, Claim: request.Spec.ClaimRef.Name, Request: request.Name}
+	return keyRef{
+		Namespace: request.Namespace,
+		Claim:     request.Spec.ClaimRef.Name,
+		Request:   request.Name,
+		UID:       string(request.UID),
+	}
 }
 
 // record records one event for each action, and returns the corrections
@@ -300,7 +305,7 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 }
 
 // Orphan keeps the key of the request enabled with its alias, and removes the
-// request tags from it and from its replicas.
+// request tags and the UID tag from it and from its replicas.
 func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	actions, err := p.keys.release(ctx, refOf(req.Object))
 	record(req, actions)

@@ -36,7 +36,7 @@ const (
 	replica = "eu-central-1"
 )
 
-var ref = keyRef{Namespace: "team-a", Claim: "orders", Request: "orders-encryption-key"}
+var ref = keyRef{Namespace: "team-a", Claim: "orders", Request: "orders-encryption-key", UID: "uid-a"}
 
 func newKeys(fake *awsfake.KMS, edit ...func(*Settings)) keys {
 	s := Settings{
@@ -98,6 +98,7 @@ func TestEnsureCreatesARotatingKeyWithItsAlias(t *testing.T) {
 		awskit.TagNamespace: "team-a",
 		awskit.TagClaim:     "orders",
 		awskit.TagRequest:   "orders-encryption-key",
+		tagRequestUID:       "uid-a",
 		"cpo-ci-run":        "cpo-ci-test",
 	}, key.Tags)
 	target, _ := fake.AliasTarget(home, wantAlias)
@@ -293,7 +294,7 @@ func TestEnsureRefusesTheAliasOfAnotherRequest(t *testing.T) {
 	fake := awsfake.NewKMS()
 	k := newKeys(fake)
 	other := ref
-	other.Request = "orders-other"
+	other.Request, other.UID = "orders-other", "uid-other"
 	created, _, err := k.ensure(context.Background(), other, nil)
 	require.NoError(t, err)
 	before := mustKey(t, fake, home, created.ID)
@@ -305,9 +306,56 @@ func TestEnsureRefusesTheAliasOfAnotherRequest(t *testing.T) {
 	assert.Equal(t, aliasInUseError{
 		Alias:  wantAlias,
 		KeyARN: created.ARN,
-		Owner:  "the request team-a/orders-other",
+		Owner:  "the request team-a/orders-other with the UID uid-other",
 	}, inUse)
 	assert.Equal(t, before, mustKey(t, fake, home, created.ID))
+}
+
+// otherCluster creates the key of ref with another UID, as a request of the
+// same namespace and name in another Kubernetes cluster does.
+func otherCluster(t *testing.T, k keys) keyStatus {
+	t.Helper()
+	other := ref
+	other.UID = "uid-of-another-cluster"
+	created, _, err := k.ensure(context.Background(), other, []string{replica})
+	require.NoError(t, err)
+	return created
+}
+
+func TestEnsureRefusesAKeyOfTheSameRequestNameInAnotherCluster(t *testing.T) {
+	fake := awsfake.NewKMS()
+	k := newKeys(fake)
+	created := otherCluster(t, k)
+	before := mustKey(t, fake, home, created.ID)
+
+	_, actions, err := k.ensure(context.Background(), ref, []string{replica})
+
+	var inUse aliasInUseError
+	require.ErrorAs(t, err, &inUse)
+	assert.Equal(t, "the request team-a/orders-encryption-key with the UID uid-of-another-cluster", inUse.Owner)
+	assert.Empty(t, actions)
+	assert.Equal(t, before, mustKey(t, fake, home, created.ID))
+	assert.Len(t, fake.Keys(), 2, "the primary and the replica of the other cluster, and no key of ref")
+}
+
+func TestScheduleDeletionAndReleaseLeaveAKeyOfTheSameRequestNameInAnotherCluster(t *testing.T) {
+	fake := awsfake.NewKMS()
+	k := newKeys(fake)
+	created := otherCluster(t, k)
+	before := fake.Keys()
+
+	deleted, err := k.scheduleDeletion(context.Background(), ref, 7)
+	require.NoError(t, err)
+	released, err := k.release(context.Background(), ref)
+	require.NoError(t, err)
+
+	assert.Empty(t, deleted)
+	assert.Empty(t, released)
+	assert.Equal(t, before, fake.Keys(), "no state and no tag of the other key changed")
+	target, _ := fake.AliasTarget(home, wantAlias)
+	assert.Equal(t, created.ID, target)
+	assert.NotContains(t, fake.Calls(), "ScheduleKeyDeletion")
+	assert.NotContains(t, fake.Calls(), "UntagResource")
 }
 
 func TestEnsureRefusesTheAliasOfAnOrphanedKey(t *testing.T) {
@@ -451,7 +499,7 @@ func TestScheduleDeletionLeavesTheKeyOfAnotherRequest(t *testing.T) {
 	fake := awsfake.NewKMS()
 	k := newKeys(fake)
 	other := ref
-	other.Request = "orders-other"
+	other.Request, other.UID = "orders-other", "uid-other"
 	created, _, err := k.ensure(context.Background(), other, nil)
 	require.NoError(t, err)
 

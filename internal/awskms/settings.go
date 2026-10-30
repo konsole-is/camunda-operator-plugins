@@ -48,14 +48,20 @@ type Settings struct {
 }
 
 // Validate returns an error that names the first field that is not valid: an
-// empty region, partition, or account, an alias prefix that
-// awskit.CheckAliasPrefix refuses, or a principal that is not an IAM ARN.
+// empty region, partition, or account, more than awskit.MaxExtraTags-1 extra
+// tags, an alias prefix that awskit.CheckAliasPrefix refuses, or a principal
+// that is not an IAM ARN.
 func (s Settings) Validate() error {
 	switch {
 	case s.Region == "":
 		return errors.New("region: empty")
 	case s.Partition == "" || s.Account == "":
 		return errors.New("account: the partition or the account is empty")
+	}
+
+	// A key also carries the tag camunda.io/request-uid.
+	if len(s.ExtraTags) > awskit.MaxExtraTags-1 {
+		return fmt.Errorf("extra tags: at most %d on a KMS key", awskit.MaxExtraTags-1)
 	}
 
 	if err := awskit.CheckAliasPrefix(s.AliasPrefix); err != nil {

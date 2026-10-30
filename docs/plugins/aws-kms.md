@@ -13,13 +13,13 @@ For each request, the plugin creates one symmetric encryption key (`SYMMETRIC_DE
 
 - Automatic rotation is on.
 - The alias is `alias/<aliasPrefix>/<namespace>/<claim>`. Each character of the namespace or the claim other than a letter, a digit, `_`, or `-` becomes `_`. An alias longer than the 256 characters of KMS is cut, and ends with `-` and 8 hex digits of a hash.
-- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tags of the chart value `extraTags` go on the key too.
+- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the PluginRequest. The tags of the chart value `extraTags` go on the key too.
 - The description is `Camunda cluster <namespace>/<claim>`.
 - The key policy is the default key policy of KMS, unless the chart sets `keyAdministratorArns` or `csiDriverRoleArn` (see [Key policy](#key-policy)).
 
 With `aws-kms-key-multi-region`, the key is a multi-Region primary key. The plugin creates one replica in each region of `replicaRegions`, with the same tags, the same description, and the same key policy. KMS rotates the replicas with the primary key.
 
-The plugin finds the key of a request by its alias. A request whose status write was lost does not get a second key.
+The plugin finds the key of a request by its alias. A request whose status write was lost does not get a second key. A key is bound to the PluginRequest that created it, by its tag `camunda.io/request-uid`. The plugin never uses, changes, or deletes a key with another UID or with no UID: the request reports `KeyAliasInUse`. This holds also for a request of the same namespace and name in another Kubernetes cluster that uses the same AWS account, region, and alias prefix. Give such clusters two alias prefixes when both need a key.
 
 The plugin also writes:
 
@@ -107,8 +107,8 @@ When you change a policy value, the plugin writes the new key policy on each key
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `region` | `""` | The AWS region of the keys. Empty takes the region of the pod, such as `AWS_REGION`. The controller does not start without a region. |
-| `aliasPrefix` | `camunda` | The prefix of each alias, after `alias/`. 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `/`, `_`, and `-`, not `aws`, not starting with `aws/` or `alias/`, and not starting or ending with `/`. The registrations show it as a limit. Give each Kubernetes cluster that uses the same AWS account and region a prefix of its own: the plugin finds a key by its alias, so two clusters with one prefix share the keys of their claims of the same namespace and name. |
-| `extraTags` | `{}` | Tags for each key and each replica, such as a cost center. A key must not start with `aws:` or `camunda.io/`. A value must not hold a comma. |
+| `aliasPrefix` | `camunda` | The prefix of each alias, after `alias/`. 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `/`, `_`, and `-`, not `aws`, not starting with `aws/` or `alias/`, and not starting or ending with `/`. The registrations show it as a limit. |
+| `extraTags` | `{}` | Tags for each key and each replica, such as a cost center. At most 46, because a key also carries four `camunda.io/` tags. A key must not start with `aws:` or `camunda.io/`. A value must not hold a comma. |
 | `keyAdministratorArns` | `[]` | The IAM principals that administer each key. See [Key policy](#key-policy). |
 | `csiDriverRoleArn` | `""` | The IAM role of the EBS CSI driver. See [Key policy](#key-policy). |
 | `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |
@@ -175,11 +175,11 @@ The registrations offer the deletion policies `Delete` and `Orphan`.
 | Policy | What happens |
 | --- | --- |
 | `Delete` | Schedules the deletion of each replica and of the key after `pendingWindowDays`, and deletes the alias at once. A new claim of the same name gets a new key. |
-| `Orphan` | Keeps the key and each replica enabled, and keeps the alias. Removes the three `camunda.io/` tags, and keeps the tags of `extraTags`. |
+| `Orphan` | Keeps the key and each replica enabled, and keeps the alias. Removes the four `camunda.io/` tags, and keeps the tags of `extraTags`. |
 
 **A deleted key makes every volume and every object that it encrypted unreadable, for good.** From the start of the window, KMS refuses every use of the key, so the data is unreadable at once. At the end of the window, KMS deletes the key. During the window, you can cancel the deletion in the KMS console, then enable the key again. A key that is pending deletion has no alias. Find it by its tags `camunda.io/namespace` and `camunda.io/claim`, or by its description `Camunda cluster <namespace>/<claim>`. KMS deletes a multi-Region primary key only after its replicas.
 
-Find an orphaned key by its alias. While the kept key has the alias, a new claim of the same name in the same namespace reports `KeyAliasInUse` and gets no key. Delete the alias to let the new claim create one. To keep a name on the kept key, first give it an alias of another name.
+Find an orphaned key by its alias. A re-created request, after an `Orphan` deletion or after a restore of the namespace from a backup, has a new UID, so it does not take the old key over. While the old key has the alias, the request reports `KeyAliasInUse` and gets no key. Delete the alias to let the request create a new key. To keep a name on the old key, first give it an alias of another name. To give the old key to the new request, tag the old key and each of its replicas with `camunda.io/request-uid` set to the UID of the new PluginRequest.
 
 When the controller stops between the create of a key and the create of its alias, a key with the request tags and no alias stays. When the alias fails, the plugin schedules the deletion of that key after 7 days.
 
@@ -188,7 +188,7 @@ When the controller stops between the create of a key and the create of its alia
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not match the schema of the registration, or `replicaRegions` holds the region of the plugin. The message says which. Correct the parameters of the claim or the `parameterValues` of the registration. |
-| `KeyAliasInUse` | `OutputsReady` and `Ready` of the request | The alias of the claim names a key of another request, or a key that an `Orphan` deletion kept. The message names the alias, the key, and its request. Delete the alias. To keep a name on the kept key, first give it an alias of another name. |
+| `KeyAliasInUse` | `OutputsReady` and `Ready` of the request | The alias of the claim names a key with another `camunda.io/request-uid`, or with none: a key of another request, of a request of the same name in another Kubernetes cluster, or a key that an `Orphan` deletion kept. The message names the alias, the key, and its request with its UID. See [Deletion](#deletion) for how to free the alias or give the key to the request. |
 | `KeyPendingDeletion` | `Ready` of the request | Someone scheduled the deletion of the key outside the plugin. The outputs stay. Cancel the deletion in the KMS console and enable the key, or delete the claim. |
 | `KeyNotEnabled` | `Ready` of the request | The key is in another state than `Enabled`, for example `Disabled`. The message names the state. Enable the key in the KMS console. |
 | `ReplicasPending` | `Ready` of the request | KMS is still creating a replica. The plugin checks again after 5 seconds. KMS usually needs less than a minute. When it stays, the summary shows the state of each replica: check the replica in the KMS console of its region. |

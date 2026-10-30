@@ -63,9 +63,14 @@ type keys struct {
 	kms      func(region string) awskit.KMS
 }
 
+// tagRequestUID binds a key to the PluginRequest that created it. Request
+// names do not name the Kubernetes cluster, so two clusters in one account
+// and region can have a request of the same namespace and name.
+const tagRequestUID = "camunda.io/request-uid"
+
 // keyRef names the key of one request.
 type keyRef struct {
-	Namespace, Claim, Request string
+	Namespace, Claim, Request, UID string
 }
 
 // action is one external action on a key, for one event on the request.
@@ -154,7 +159,7 @@ func (k keys) ensure(ctx context.Context, ref keyRef, replicaRegions []string) (
 	if err != nil {
 		return keyStatus{}, nil, err
 	}
-	want := desiredKey{tags: keyTags(k.settings, ref.Namespace, ref.Claim, ref.Request), policy: policy}
+	want := desiredKey{tags: keyTags(k.settings, ref), policy: policy}
 
 	home := k.kms(k.settings.Region)
 	alias := aliasName(k.settings.AliasPrefix, ref.Namespace, ref.Claim)
@@ -318,7 +323,8 @@ func listTags(ctx context.Context, c awskit.KMS, keyID string) (map[string]strin
 
 // owns reports whether a key with tags belongs to the request of ref.
 func owns(tags map[string]string, ref keyRef) bool {
-	return tags[awskit.TagNamespace] == ref.Namespace && tags[awskit.TagRequest] == ref.Request
+	uid, ok := tags[tagRequestUID]
+	return ok && uid == ref.UID
 }
 
 // owner names the request of a key with tags, for a message.
@@ -327,7 +333,11 @@ func owner(tags map[string]string) string {
 	if !ok {
 		return "no request"
 	}
-	return "the request " + tags[awskit.TagNamespace] + "/" + request
+	owner := "the request " + tags[awskit.TagNamespace] + "/" + request
+	if uid, ok := tags[tagRequestUID]; ok {
+		owner += " with the UID " + uid
+	}
+	return owner
 }
 
 // repair tags the key keyARN again when a tag of want is missing from
@@ -612,8 +622,8 @@ func pendingDeletion(state types.KeyState) bool {
 	return state == types.KeyStatePendingDeletion || state == types.KeyStatePendingReplicaDeletion
 }
 
-// release removes the request tags from the key of ref and from each of its
-// replicas. The key stays enabled and keeps its alias and its extra tags, so
+// release removes the request tags and the UID tag from the key of ref and
+// from each of its replicas. The key stays enabled and keeps its alias and its extra tags, so
 // a new request of the same claim gets aliasInUseError and never takes the
 // key over. It does nothing when the alias is gone or names a key of another
 // request.
@@ -639,7 +649,7 @@ func (k keys) release(ctx context.Context, ref keyRef) ([]action, error) {
 	for _, u := range untag {
 		_, err := k.kms(u.Region).UntagResource(ctx, &kms.UntagResourceInput{
 			KeyId:   aws.String(u.ARN),
-			TagKeys: []string{awskit.TagNamespace, awskit.TagClaim, awskit.TagRequest},
+			TagKeys: []string{awskit.TagNamespace, awskit.TagClaim, awskit.TagRequest, tagRequestUID},
 		})
 		if err != nil && !awskit.IsNotFound(err) {
 			return nil, fmt.Errorf("removing the request tags of the KMS key %s: %w", u.ARN, err)

@@ -49,15 +49,16 @@ func TestAliasName(t *testing.T) {
 	assert.NotEqual(t, a, b, "two long claims with the same start get two aliases")
 }
 
-func TestKeyTagsMergeTheExtraTags(t *testing.T) {
+func TestKeyTagsHoldTheUIDAndTheExtraTags(t *testing.T) {
 	s := Settings{ExtraTags: awskit.ExtraTags{"cpo-ci-run": "cpo-ci-manual-1"}}
 
-	tags := keyTags(s, "team-a", "orders", "orders-key")
+	tags := keyTags(s, keyRef{Namespace: "team-a", Claim: "orders", Request: "orders-key", UID: "uid-1"})
 
 	assert.Equal(t, []types.Tag{
 		{TagKey: aws.String(awskit.TagClaim), TagValue: aws.String("orders")},
 		{TagKey: aws.String(awskit.TagNamespace), TagValue: aws.String("team-a")},
 		{TagKey: aws.String(awskit.TagRequest), TagValue: aws.String("orders-key")},
+		{TagKey: aws.String(tagRequestUID), TagValue: aws.String("uid-1")},
 		{TagKey: aws.String("cpo-ci-run"), TagValue: aws.String("cpo-ci-manual-1")},
 	}, tags)
 }

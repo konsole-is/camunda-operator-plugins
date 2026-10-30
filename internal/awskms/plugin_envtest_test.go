@@ -19,6 +19,8 @@ package awskms_test
 import (
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -201,6 +203,40 @@ var _ = Describe("the AWS KMS plugin", func() {
 			g.Expect(key.Tags).NotTo(HaveKey(awskit.TagRequest))
 			g.Expect(key.Tags).To(HaveKeyWithValue("team", "platform"))
 		}, timeout).Should(Succeed())
+	})
+
+	It("leaves a key of the same request name in another cluster alone", func() {
+		ns := newNamespace()
+		request := kmsRequest(singleRegion, ns, "", pluginsv1alpha1.DeletionPolicyDelete)
+		readyRequest(request)
+		var key awsfake.Key
+		Eventually(func(g Gomega) { key = keyOf(g, ns, home) }, timeout).Should(Succeed())
+		// The key now looks like the key of a request of the same namespace
+		// and name in another Kubernetes cluster.
+		_, err := fake.TagResource(ctx, &kms.TagResourceInput{
+			KeyId: aws.String(key.ID),
+			Tags:  []types.Tag{{TagKey: aws.String("camunda.io/request-uid"), TagValue: aws.String("other-cluster")}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		// An update of the request makes the plugin reconcile it again.
+		Eventually(func(g Gomega) {
+			got := read(g, request)
+			got.Annotations = map[string]string{"test/poke": "1"}
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		Eventually(func(g Gomega) {
+			c := conditionOf(read(g, request).Status.Conditions, pluginsv1alpha1.ConditionOutputsReady)
+			g.Expect(c.Reason).To(Equal(awskms.ReasonKeyAliasInUse))
+		}, timeout).Should(Succeed())
+
+		deleteRequest(request)
+
+		kept, _ := fake.Key(home, key.ID)
+		Expect(kept.State).To(Equal(types.KeyStateEnabled))
+		Expect(kept.Tags).To(HaveKeyWithValue(awskit.TagRequest, request.Name))
+		target, _ := fake.AliasTarget(home, aliasOf(ns))
+		Expect(target).To(Equal(key.ID), "the alias stays")
 	})
 
 	It("reports KeyAliasInUse for a new request of an orphaned claim", func() {
