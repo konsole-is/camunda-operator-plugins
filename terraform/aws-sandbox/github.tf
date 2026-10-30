@@ -24,6 +24,8 @@ locals {
     AWS_ROLE_ARN      = aws_iam_role.ci.arn
     AWS_REGION        = var.region
     AWS_ISSUER_BUCKET = aws_s3_bucket.issuer.bucket
+    # The sweep removes the replicas of multi-Region keys there.
+    AWS_KMS_REPLICA_REGION = var.kms_replica_region
   }
 }
 
