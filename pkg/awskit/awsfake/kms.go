@@ -613,9 +613,10 @@ func (r kmsRegion) ReplicateKey(
 }
 
 // ScheduleKeyDeletion schedules the deletion of a key after a window of 7 to
-// 30 days, 30 when the input sets none. A primary key with a replica that is
-// not pending deletion goes to PendingReplicaDeletion. It refuses a key that
-// is pending deletion already.
+// 30 days, 30 when the input sets none. A primary key with a replica goes to
+// PendingReplicaDeletion with no deletion date, because KMS starts its window
+// only after its replicas are deleted, which the fake never does. It refuses
+// a key that is pending deletion already, or in state Creating.
 func (r kmsRegion) ScheduleKeyDeletion(
 	_ context.Context,
 	in *kms.ScheduleKeyDeletionInput,
@@ -639,18 +640,20 @@ func (r kmsRegion) ScheduleKeyDeletion(
 	if days < 7 || days > 30 {
 		return nil, apiError("ValidationException", "PendingWindowInDays must be between 7 and 30.")
 	}
-	if k.State == types.KeyStatePendingDeletion || k.State == types.KeyStatePendingReplicaDeletion {
-		return nil, apiError("KMSInvalidStateException", "%s is pending deletion.", k.ARN)
+	switch k.State {
+	case types.KeyStatePendingDeletion, types.KeyStatePendingReplicaDeletion, types.KeyStateCreating:
+		return nil, apiError("KMSInvalidStateException", "%s is %s.", k.ARN, k.State)
 	}
 
-	k.State = types.KeyStatePendingDeletion
 	if k.MultiRegion && k.Primary == region && slices.ContainsFunc(
 		slices.Collect(maps.Values(r.f.keys)),
-		func(o *Key) bool { return o.ID == k.ID && o != k && o.State != types.KeyStatePendingDeletion },
+		func(o *Key) bool { return o.ID == k.ID && o != k },
 	) {
-		k.State = types.KeyStatePendingReplicaDeletion
+		k.State, k.PendingWindowDays = types.KeyStatePendingReplicaDeletion, days
+	} else {
+		k.State = types.KeyStatePendingDeletion
+		k.schedule(days)
 	}
-	k.schedule(days)
 
 	return &kms.ScheduleKeyDeletionOutput{
 		KeyId:               aws.String(k.ARN),

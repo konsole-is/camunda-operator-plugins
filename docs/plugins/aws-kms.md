@@ -26,7 +26,7 @@ The plugin also writes:
 - One PluginRegistration for each item of the chart value `registrations`.
 - One Lease `<release>` in the release namespace. Only the replica that holds it writes.
 
-The summary of a request shows the key state, the rotation, the alias, and the state of each replica. A replica outside `replicaRegions` shows as a `Warning`. A key that is pending deletion shows the deletion date as an `Error`. The request links to the key in the KMS console.
+The summary of a request shows the key state, the rotation, the alias, and the state of each replica. A replica outside `replicaRegions` shows as a `Warning`. A key that is pending deletion shows as an `Error`, with its deletion date once KMS gives one. A multi-Region primary key gets its date only after its replicas are deleted. The request links to the key in the KMS console.
 
 ## Prerequisites
 
@@ -192,7 +192,7 @@ When the controller stops between the create of a key and the create of its alia
 | `ReplicasPending` | `Ready` of the request | KMS is still creating a replica. The plugin checks again after 5 seconds. KMS usually needs less than a minute. When it stays, the summary shows the state of each replica: check the replica in the KMS console of its region. |
 | `KeyNotMultiRegion` | `Ready` of the request | The request asks for replicas, and its key is a single-Region key, for example after a change of the registration. The outputs stay. Remove `replicaRegions`, or delete the alias to let the plugin create a multi-Region key. |
 | `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, usually `AccessDeniedException` when the controller role lacks a permission above. pluginkit tries again. |
-| `DeleteFailed` | `Ready` of a deleted request | The plugin could not schedule the deletion or remove the tags, or `pendingWindowDays` is outside 7 to 30. The message gives the error. The finalizer stays, and pluginkit tries again. |
+| `DeleteFailed` | `Ready` of a deleted request | The plugin could not schedule the deletion or remove the tags, a replica is still being created, or `pendingWindowDays` is outside 7 to 30. The message gives the error. The finalizer stays, and pluginkit tries again. |
 | `Unhealthy` | `Ready` of the registration | The controller cannot list the aliases of its region with its credentials. The message gives the error. Check the controller role and `kms:ListAliases`. |
 
 When the controller Pod does not get ready, read its log with `kubectl logs deployment/<release> -n <namespace>`. The controller stops when it finds no region, when `aliasPrefix`, `extraTags`, `keyAdministratorArns`, or `csiDriverRoleArn` is not valid, when it cannot read the file of its registrations or call STS, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.

@@ -170,7 +170,7 @@ func result(status keyStatus, request *pluginsv1alpha1.PluginRequest) (pluginkit
 
 	pending := pendingReplica(status.Replicas)
 	switch {
-	case status.State == types.KeyStatePendingDeletion || status.State == types.KeyStatePendingReplicaDeletion:
+	case pendingDeletion(status.State):
 		res.NotReady = &pluginkit.Waiting{
 			Reason:  ReasonKeyPendingDeletion,
 			Message: fmt.Sprintf("The KMS key %s is pending deletion", status.ARN),
@@ -232,10 +232,15 @@ func summary(status keyStatus) []pluginsv1alpha1.SummaryItem {
 		})
 	}
 
-	if status.DeletionDate != nil {
+	if pendingDeletion(status.State) {
+		// KMS gives a primary key its date only after its replicas are gone.
+		value := "Pending. AWS deletes the key after its replicas."
+		if status.DeletionDate != nil {
+			value = "Pending. AWS deletes the key on " + status.DeletionDate.UTC().Format(time.DateOnly) + "."
+		}
 		items = append(items, pluginsv1alpha1.SummaryItem{
 			Label:    "Deletion",
-			Value:    "Pending. AWS deletes the key on " + status.DeletionDate.UTC().Format(time.DateOnly) + ".",
+			Value:    value,
 			Severity: pluginsv1alpha1.SeverityError,
 		})
 	}

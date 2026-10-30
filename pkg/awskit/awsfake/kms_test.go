@@ -177,6 +177,17 @@ func TestKMSHoldsAPrimaryUntilItsReplicasArePending(t *testing.T) {
 	got, _ := f.Key("eu-west-1", aws.ToString(key.KeyId))
 	assert.Equal(t, types.KeyStatePendingReplicaDeletion, got.State)
 	assert.Equal(t, int32(30), got.PendingWindowDays)
+	assert.Nil(t, got.DeletionDate, "the window starts after the replicas are deleted")
+}
+
+func TestKMSRefusesToScheduleAKeyThatIsCreating(t *testing.T) {
+	f := NewKMS()
+	key := createKey(t, f, false)
+	f.SetState("eu-west-1", aws.ToString(key.KeyId), types.KeyStateCreating)
+
+	_, err := f.ScheduleKeyDeletion(context.Background(), &kms.ScheduleKeyDeletionInput{KeyId: key.KeyId})
+
+	assert.Equal(t, "KMSInvalidStateException", awskit.ErrorCode(err))
 }
 
 func TestKMSFailNextFailsOneCall(t *testing.T) {

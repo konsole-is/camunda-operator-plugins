@@ -215,11 +215,11 @@ func (k keys) ensure(ctx context.Context, ref keyRef, replicaRegions []string) (
 	}
 	status.Rotation = true
 
-	if len(replicaRegions) == 0 {
-		return status, actions, nil
+	if len(replicaRegions) > 0 && !status.MultiRegion {
+		return status, actions, notMultiRegionError{KeyARN: status.ARN}
 	}
 	if !status.MultiRegion {
-		return status, actions, notMultiRegionError{KeyARN: status.ARN}
+		return status, actions, nil
 	}
 
 	replicated, err := k.ensureReplicas(ctx, &status, meta, ref, replicaRegions, want)
@@ -268,6 +268,13 @@ func (k keys) create(
 
 	_, err = home.CreateAlias(ctx, &kms.CreateAliasInput{AliasName: aws.String(alias), TargetKeyId: key.KeyId})
 	if err == nil {
+		return key, nil
+	}
+
+	// AWS can commit the alias and lose the answer, and the retry of the SDK
+	// then fails with AlreadyExistsException.
+	if target, describeErr := describeKey(ctx, home, alias); describeErr == nil &&
+		aws.ToString(target.KeyId) == aws.ToString(key.KeyId) {
 		return key, nil
 	}
 
@@ -414,9 +421,9 @@ func ensureRotation(ctx context.Context, c awskit.KMS, keyARN string, created bo
 }
 
 // ensureReplicas creates the replica of the primary key meta in each of
-// regions that it lacks, reads the state of each, and repairs the tags and
-// the policy of each enabled replica that existed before. It sets the
-// replicas of status.
+// regions that it lacks, reads the state of each replica, and repairs the
+// tags and the policy of each enabled replica that existed before. It sets
+// the replicas of status: those in regions, and as extras the others.
 func (k keys) ensureReplicas(
 	ctx context.Context,
 	status *keyStatus,
@@ -459,38 +466,55 @@ func (k keys) ensureReplicas(
 			})
 		}
 
-		c := k.kms(region)
-		replicaMeta, err := describeKey(ctx, c, replica)
-		if err != nil {
-			return actions, fmt.Errorf("reading the replica %s: %w", replica, err)
-		}
-		status.Replicas = append(
-			status.Replicas,
-			replicaStatus{Region: region, ARN: replica, State: replicaMeta.KeyState},
-		)
-
-		if created || replicaMeta.KeyState != types.KeyStateEnabled {
-			continue
-		}
-
-		current, err := listTags(ctx, c, replica)
-		if err != nil {
-			return actions, err
-		}
-		repaired, err := repair(ctx, c, replica, "replica", current, want)
+		r, repaired, err := k.checkReplica(ctx, region, replica, !created, want)
 		actions = append(actions, repaired...)
 		if err != nil {
 			return actions, err
 		}
+		status.Replicas = append(status.Replicas, r)
 	}
 
 	for _, region := range slices.Sorted(maps.Keys(existing)) {
-		if !slices.Contains(regions, region) {
-			status.ExtraReplicas = append(status.ExtraReplicas, replicaStatus{Region: region, ARN: existing[region]})
+		if slices.Contains(regions, region) {
+			continue
 		}
+
+		r, repaired, err := k.checkReplica(ctx, region, existing[region], true, want)
+		actions = append(actions, repaired...)
+		if err != nil {
+			return actions, err
+		}
+		status.ExtraReplicas = append(status.ExtraReplicas, r)
 	}
 
 	return actions, nil
+}
+
+// checkReplica reads the state of the replica replicaARN in region, and with
+// repairDrift repairs its tags and its key policy when it is enabled.
+func (k keys) checkReplica(
+	ctx context.Context,
+	region, replicaARN string,
+	repairDrift bool,
+	want desiredKey,
+) (replicaStatus, []action, error) {
+	c := k.kms(region)
+	meta, err := describeKey(ctx, c, replicaARN)
+	if err != nil {
+		return replicaStatus{}, nil, fmt.Errorf("reading the replica %s: %w", replicaARN, err)
+	}
+	status := replicaStatus{Region: region, ARN: replicaARN, State: meta.KeyState}
+
+	if !repairDrift || meta.KeyState != types.KeyStateEnabled {
+		return status, nil, nil
+	}
+
+	current, err := listTags(ctx, c, replicaARN)
+	if err != nil {
+		return status, nil, err
+	}
+	actions, err := repair(ctx, c, replicaARN, "replica", current, want)
+	return status, actions, err
 }
 
 // scheduleDeletion schedules the deletion of the key of ref and of each of
@@ -564,16 +588,28 @@ func (k keys) ownedKey(
 }
 
 // schedule schedules the deletion of the key keyARN. A key that is gone or
-// pending deletion already is done.
+// pending deletion already is done. A key in another state that KMS cannot
+// schedule is an error.
 func schedule(ctx context.Context, c awskit.KMS, keyARN string, windowDays int32) error {
 	_, err := c.ScheduleKeyDeletion(ctx, &kms.ScheduleKeyDeletionInput{
 		KeyId:               aws.String(keyARN),
 		PendingWindowInDays: aws.Int32(windowDays),
 	})
-	if err != nil && !awskit.IsNotFound(err) && awskit.ErrorCode(err) != "KMSInvalidStateException" {
-		return fmt.Errorf("scheduling the deletion of the KMS key %s: %w", keyARN, err)
+	if err == nil || awskit.IsNotFound(err) {
+		return nil
 	}
-	return nil
+
+	if awskit.ErrorCode(err) == "KMSInvalidStateException" {
+		meta, describeErr := describeKey(ctx, c, keyARN)
+		if describeErr == nil && pendingDeletion(meta.KeyState) {
+			return nil
+		}
+	}
+	return fmt.Errorf("scheduling the deletion of the KMS key %s: %w", keyARN, err)
+}
+
+func pendingDeletion(state types.KeyState) bool {
+	return state == types.KeyStatePendingDeletion || state == types.KeyStatePendingReplicaDeletion
 }
 
 // release removes the request tags from the key of ref and from each of its

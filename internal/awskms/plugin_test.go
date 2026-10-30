@@ -99,6 +99,22 @@ func TestResultShowsThePendingDeletionAsError(t *testing.T) {
 	assert.Equal(t, pluginsv1alpha1.SummaryItem{Label: "Key state", Value: "PendingDeletion"}, res.Summary[0])
 }
 
+func TestResultShowsAPrimaryWaitingForItsReplicasAsError(t *testing.T) {
+	status := enabledKey()
+	status.State = types.KeyStatePendingReplicaDeletion
+
+	res, err := result(status, request())
+
+	require.NoError(t, err)
+	require.NotNil(t, res.NotReady)
+	assert.Equal(t, ReasonKeyPendingDeletion, res.NotReady.Reason)
+	assert.Contains(t, res.Summary, pluginsv1alpha1.SummaryItem{
+		Label:    "Deletion",
+		Value:    "Pending. AWS deletes the key after its replicas.",
+		Severity: pluginsv1alpha1.SeverityError,
+	})
+}
+
 func TestResultReportsAKeyThatIsNotEnabled(t *testing.T) {
 	status := enabledKey()
 	status.State = types.KeyStateDisabled

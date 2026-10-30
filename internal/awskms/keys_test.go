@@ -246,8 +246,34 @@ func TestEnsureKeepsAReplicaOutsideTheParameter(t *testing.T) {
 
 	require.NoError(t, err)
 	extra := mustKey(t, fake, "us-east-1", created.ID)
-	assert.Equal(t, []replicaStatus{{Region: "us-east-1", ARN: extra.ARN}}, status.ExtraReplicas)
+	assert.Equal(
+		t,
+		[]replicaStatus{{Region: "us-east-1", ARN: extra.ARN, State: types.KeyStateEnabled}},
+		status.ExtraReplicas,
+	)
 	assert.Len(t, status.Replicas, 1)
+}
+
+func TestEnsureRepairsAReplicaOutsideTheParameter(t *testing.T) {
+	fake := awsfake.NewKMS()
+	k := newKeys(fake)
+	created, _, err := k.ensure(context.Background(), ref, []string{replica})
+	require.NoError(t, err)
+	_, err = fake.In(replica).UntagResource(context.Background(), &kms.UntagResourceInput{
+		KeyId:   aws.String(created.ID),
+		TagKeys: []string{"cpo-ci-run"},
+	})
+	require.NoError(t, err)
+
+	status, actions, err := k.ensure(context.Background(), ref, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, status.Replicas)
+	require.Len(t, status.ExtraReplicas, 1)
+	assert.Equal(t, replica, status.ExtraReplicas[0].Region)
+	assert.Equal(t, "cpo-ci-test", mustKey(t, fake, replica, created.ID).Tags["cpo-ci-run"])
+	require.Len(t, actions, 1)
+	assert.Equal(t, "replica tags", actions[0].Corrected)
 }
 
 func TestEnsureReportsASingleRegionKeyForReplicas(t *testing.T) {
@@ -313,6 +339,35 @@ func TestEnsureSchedulesTheNewKeyWhenTheAliasFails(t *testing.T) {
 	assert.Equal(t, int32(7), keys[0].PendingWindowDays)
 }
 
+// lostAnswer creates the alias and then fails, as a call does whose answer
+// AWS lost.
+type lostAnswer struct {
+	awskit.KMS
+}
+
+func (l lostAnswer) CreateAlias(
+	ctx context.Context,
+	in *kms.CreateAliasInput,
+	opts ...func(*kms.Options),
+) (*kms.CreateAliasOutput, error) {
+	if _, err := l.KMS.CreateAlias(ctx, in, opts...); err != nil {
+		return nil, err
+	}
+	return nil, errors.New("lost answer")
+}
+
+func TestEnsureKeepsTheKeyWhenTheAnswerOfTheAliasIsLost(t *testing.T) {
+	fake := awsfake.NewKMS()
+	k := newKeys(fake)
+	k.kms = func(region string) awskit.KMS { return lostAnswer{fake.In(region)} }
+
+	status, _, err := k.ensure(context.Background(), ref, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, types.KeyStateEnabled, mustKey(t, fake, home, status.ID).State)
+	assert.NotContains(t, fake.Calls(), "ScheduleKeyDeletion")
+}
+
 func TestEnsureReportsAKeyPendingDeletion(t *testing.T) {
 	fake := awsfake.NewKMS()
 	k := newKeys(fake)
@@ -342,7 +397,7 @@ func TestScheduleDeletionUsesTheWindow(t *testing.T) {
 	r := mustKey(t, fake, replica, created.ID)
 	assert.Equal(t, types.KeyStatePendingDeletion, r.State)
 	assert.Equal(t, int32(7), r.PendingWindowDays)
-	assert.Equal(t, types.KeyStatePendingDeletion, primary.State)
+	assert.Equal(t, types.KeyStatePendingReplicaDeletion, primary.State)
 	assert.Equal(t, int32(7), primary.PendingWindowDays)
 	_, ok := fake.AliasTarget(home, wantAlias)
 	assert.False(t, ok, "the alias is gone")
@@ -361,6 +416,26 @@ func TestScheduleDeletionIsDoneForAKeyAlreadyPending(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := fake.AliasTarget(home, wantAlias)
 	assert.False(t, ok, "the alias is gone")
+}
+
+func TestScheduleDeletionFailsWhileAReplicaIsCreating(t *testing.T) {
+	fake := awsfake.NewKMS()
+	k := newKeys(fake)
+	created, _, err := k.ensure(context.Background(), ref, []string{replica})
+	require.NoError(t, err)
+	fake.SetState(replica, created.ID, types.KeyStateCreating)
+
+	_, err = k.scheduleDeletion(context.Background(), ref, 7)
+
+	require.Error(t, err)
+	_, ok := fake.AliasTarget(home, wantAlias)
+	assert.True(t, ok, "the alias stays until the replica is scheduled")
+	assert.Equal(t, types.KeyStateEnabled, mustKey(t, fake, home, created.ID).State)
+
+	_, err = k.scheduleDeletion(context.Background(), ref, 7)
+
+	require.NoError(t, err, "the retry schedules the replica once it is enabled")
+	assert.Equal(t, types.KeyStatePendingDeletion, mustKey(t, fake, replica, created.ID).State)
 }
 
 func TestScheduleDeletionIsDoneWhenTheAliasIsGone(t *testing.T) {
