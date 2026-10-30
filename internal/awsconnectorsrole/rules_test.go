@@ -126,7 +126,7 @@ func TestSummaryWarnsAbove80Percent(t *testing.T) {
 }
 
 func labels(items []pluginsv1alpha1.SummaryItem) []string {
-	var out []string
+	out := make([]string, 0, len(items))
 	for _, i := range items {
 		out = append(out, i.Label)
 	}
