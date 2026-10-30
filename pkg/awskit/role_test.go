@@ -188,3 +188,89 @@ func TestDeleteInlinePolicyIgnoresAMissingPolicy(t *testing.T) {
 
 	assert.NoError(t, awskit.DeleteInlinePolicy(context.Background(), f, roleSpec().Name, "gone"))
 }
+
+const (
+	policyA = "arn:aws:iam::111122223333:policy/a"
+	policyB = "arn:aws:iam::111122223333:policy/b"
+	policyC = "arn:aws:iam::111122223333:policy/c"
+)
+
+// newRoleWith returns a fake with the role of roleSpec, the policies a, b,
+// and c, and attached on the role.
+func newRoleWith(t *testing.T, attached ...string) *awsfake.IAM {
+	f := awsfake.NewIAM()
+	for _, p := range []string{policyA, policyB, policyC} {
+		f.AddPolicy(p)
+	}
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	require.NoError(t, err)
+	for _, p := range attached {
+		f.AttachPolicy(roleSpec().Name, p)
+	}
+	return f
+}
+
+func TestEnsureAttachedPoliciesAttachesTheMissingAndDetachesTheExtra(t *testing.T) {
+	f := newRoleWith(t, policyA, policyC)
+
+	change, err := awskit.EnsureAttachedPolicies(
+		context.Background(),
+		f,
+		roleSpec().Name,
+		[]string{policyB, policyA, policyB},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, awskit.PolicyChange{Attached: []string{policyB}, Detached: []string{policyC}}, change)
+	role, _ := f.Role(roleSpec().Name)
+	assert.ElementsMatch(t, []string{policyA, policyB}, role.Attached)
+}
+
+func TestEnsureAttachedPoliciesLeavesARoleInSyncAlone(t *testing.T) {
+	f := newRoleWith(t, policyA, policyB)
+	before := len(f.Calls())
+
+	change, err := awskit.EnsureAttachedPolicies(context.Background(), f, roleSpec().Name, []string{policyB, policyA})
+
+	require.NoError(t, err)
+	assert.Zero(t, change)
+	assert.Equal(t, []string{"ListAttachedRolePolicies"}, f.Calls()[before:])
+}
+
+// IAM allows 10 managed policies on a role by default, so a swap at the
+// quota must free a place first.
+func TestEnsureAttachedPoliciesDetachesBeforeItAttaches(t *testing.T) {
+	f := newRoleWith(t, policyA, policyB)
+	before := len(f.Calls())
+
+	_, err := awskit.EnsureAttachedPolicies(context.Background(), f, roleSpec().Name, []string{policyC})
+
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		[]string{"ListAttachedRolePolicies", "DetachRolePolicy", "DetachRolePolicy", "AttachRolePolicy"},
+		f.Calls()[before:],
+	)
+}
+
+func TestEnsureAttachedPoliciesReadsEveryPage(t *testing.T) {
+	f := newRoleWith(t, policyA, policyB, policyC)
+	f.PageSize = 1
+
+	change, err := awskit.EnsureAttachedPolicies(context.Background(), f, roleSpec().Name, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{policyA, policyB, policyC}, change.Detached)
+	role, _ := f.Role(roleSpec().Name)
+	assert.Empty(t, role.Attached)
+}
+
+func TestEnsureAttachedPoliciesKeepsTheAWSErrorCode(t *testing.T) {
+	f := newRoleWith(t)
+	f.FailNext("AttachRolePolicy", &smithy.GenericAPIError{Code: "LimitExceeded"})
+
+	_, err := awskit.EnsureAttachedPolicies(context.Background(), f, roleSpec().Name, []string{policyA})
+
+	assert.True(t, awskit.IsLimitExceeded(err))
+	assert.ErrorContains(t, err, policyA)
+}
