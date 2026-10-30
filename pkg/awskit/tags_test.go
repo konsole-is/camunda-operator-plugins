@@ -106,7 +106,7 @@ func TestExtraTagsRefuseABadItem(t *testing.T) {
 		{name: "camunda.io key upper case", in: "CAMUNDA.IO/claim=x", names: "CAMUNDA.IO/claim"},
 		{name: "key set before", in: "team=other", names: "team"},
 		{name: "key set before in another case", in: "Team=other", names: "Team"},
-		{name: "key twice in one list", in: "a=1,a=2", names: "a"},
+		{name: "key twice in one list", in: "a=1,a=2", names: `"a=2": the key "a" is already set`},
 		{name: "long key", in: strings.Repeat("k", 129) + "=v", names: "128"},
 		{name: "long value", in: "k=" + strings.Repeat("v", 257), names: "256"},
 		{name: "space before the equals", in: "k =v", names: "k =v"},
