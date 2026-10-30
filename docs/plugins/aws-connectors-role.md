@@ -270,7 +270,7 @@ The plugin deletes only an association that carries the tags of the claim. Two c
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not match the schema, `inlinePolicy` has an unknown placeholder, or the filled-in `inlinePolicy` is over 10,240 characters. The message says which. Correct the Environment or the claim. |
-| `MissingServiceAccount` | `OutputsReady` and `Ready` of the request | The request names no `spec.target.serviceAccountName`. The claim controller sets it. Check the claim and the operator version. |
+| `MissingServiceAccount` | `OutputsReady` and `Ready` of the request | The request names no `spec.target.serviceAccountName`. A role that the plugin made for the request then trusts nobody, and with Pod Identity the associations of the claim go. The claim controller sets the ServiceAccount. Check the claim and the operator version. |
 | `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, for example `LimitExceeded` when the role has more managed policies than its quota, or `AccessDenied` when the controller role lacks a permission above. pluginkit tries again. |
 | `DeleteFailed` | `Ready` of a deleted request | The plugin could not delete the role or an association. The message gives the AWS error. The finalizer stays, and pluginkit tries again. |
 | `Unhealthy` | `Ready` of the registration | The controller cannot call STS with its credentials, or it cannot read the permissions boundary. The message gives the error. Check the controller role and `permissionsBoundaryArn`. |
