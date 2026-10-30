@@ -20,6 +20,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -205,10 +207,79 @@ func TestDeleteAssociationsKeepsOtherRoles(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	deleted, err := awskit.DeleteAssociations(context.Background(), f, "eks", "team-a", roleA)
+	deleted, err := awskit.DeleteAssociations(context.Background(), f, "eks", "team-a", roleA, hubTags())
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"orders-camunda", "orders-es-es"}, deleted)
 	require.Len(t, f.Associations(), 1)
 	assert.Equal(t, roleB, f.Associations()[0].RoleARN)
+}
+
+func billingTags() map[string]string {
+	return awskit.RequestTags("team-a", "billing", "billing-connectors")
+}
+
+// Two claims of one namespace can share one role that an admin made.
+func TestEnsureAssociationsKeepsTheAssociationOfAnotherClaimOfTheRole(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-connectors")
+
+	_, change, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"billing-connectors"},
+		roleA,
+		billingTags(),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, change.Deleted)
+
+	change = ensure(t, f, roleA, "orders-connectors")
+
+	assert.Equal(t, awskit.AssociationChange{}, change)
+	var sas []string
+	for _, a := range f.Associations() {
+		sas = append(sas, a.ServiceAccount)
+	}
+	assert.ElementsMatch(t, []string{"orders-connectors", "billing-connectors"}, sas)
+}
+
+func TestEnsureAssociationsKeepsAnAssociationOfItsRoleThatCarriesNoClaimTags(t *testing.T) {
+	f := awsfake.NewEKS()
+	_, err := f.CreatePodIdentityAssociation(context.Background(), &eks.CreatePodIdentityAssociationInput{
+		ClusterName:    aws.String("eks"),
+		Namespace:      aws.String("team-a"),
+		ServiceAccount: aws.String("by-hand"),
+		RoleArn:        aws.String(roleA),
+	})
+	require.NoError(t, err)
+
+	change := ensure(t, f, roleA, "orders-camunda")
+
+	assert.Empty(t, change.Deleted)
+	assert.Len(t, f.Associations(), 2)
+}
+
+func TestDeleteAssociationsDeletesOnlyTheAssociationsOfTheClaim(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-connectors")
+	_, _, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"billing-connectors"},
+		roleA,
+		billingTags(),
+	)
+	require.NoError(t, err)
+
+	deleted, err := awskit.DeleteAssociations(context.Background(), f, "eks", "team-a", roleA, hubTags())
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"orders-connectors"}, deleted)
+	require.Len(t, f.Associations(), 1)
+	assert.Equal(t, "billing-connectors", f.Associations()[0].ServiceAccount)
 }
