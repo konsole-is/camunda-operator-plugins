@@ -44,7 +44,9 @@ type AssociationChange struct {
 // association carries the TagNamespace and TagClaim values of tags, and else
 // refuses with an error that names the ServiceAccount and that role. It
 // deletes each association of roleARN in namespace whose ServiceAccount is
-// not in serviceAccounts.
+// not in serviceAccounts and that carries the TagNamespace and TagClaim
+// values of tags, so the associations of another claim of the same role
+// stay.
 func EnsureAssociations(
 	ctx context.Context,
 	c EKS,
@@ -60,7 +62,7 @@ func EnsureAssociations(
 	}
 
 	for _, a := range live {
-		if a.RoleARN != roleARN || slices.Contains(serviceAccounts, a.ServiceAccount) {
+		if a.RoleARN != roleARN || !a.ownedBy(tags) || slices.Contains(serviceAccounts, a.ServiceAccount) {
 			continue
 		}
 		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {
@@ -91,7 +93,7 @@ func EnsureAssociations(
 			change.Created = append(change.Created, sa)
 		case live[i].RoleARN == roleARN:
 			result = append(result, live[i].Association)
-		case live[i].tags[TagNamespace] == tags[TagNamespace] && live[i].tags[TagClaim] == tags[TagClaim]:
+		case live[i].ownedBy(tags):
 			_, err := c.UpdatePodIdentityAssociation(ctx, &eks.UpdatePodIdentityAssociationInput{
 				ClusterName:   aws.String(cluster),
 				AssociationId: aws.String(live[i].ID),
@@ -119,8 +121,14 @@ func EnsureAssociations(
 }
 
 // DeleteAssociations deletes each association of roleARN in namespace of the
-// EKS cluster and returns their ServiceAccounts, sorted.
-func DeleteAssociations(ctx context.Context, c EKS, cluster, namespace, roleARN string) ([]string, error) {
+// EKS cluster that carries the TagNamespace and TagClaim values of tags, and
+// returns their ServiceAccounts, sorted.
+func DeleteAssociations(
+	ctx context.Context,
+	c EKS,
+	cluster, namespace, roleARN string,
+	tags map[string]string,
+) ([]string, error) {
 	live, err := associations(ctx, c, cluster, namespace)
 	if err != nil {
 		return nil, err
@@ -128,7 +136,7 @@ func DeleteAssociations(ctx context.Context, c EKS, cluster, namespace, roleARN 
 
 	var deleted []string
 	for _, a := range live {
-		if a.RoleARN != roleARN {
+		if a.RoleARN != roleARN || !a.ownedBy(tags) {
 			continue
 		}
 		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {
@@ -144,6 +152,12 @@ func DeleteAssociations(ctx context.Context, c EKS, cluster, namespace, roleARN 
 type liveAssociation struct {
 	Association
 	tags map[string]string
+}
+
+// ownedBy reports whether the association carries the TagNamespace and
+// TagClaim values of tags.
+func (a liveAssociation) ownedBy(tags map[string]string) bool {
+	return a.tags[TagNamespace] == tags[TagNamespace] && a.tags[TagClaim] == tags[TagClaim]
 }
 
 // associations returns each association in namespace of the cluster, from

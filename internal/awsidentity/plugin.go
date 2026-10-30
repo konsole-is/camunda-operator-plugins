@@ -18,7 +18,6 @@ package awsidentity
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -134,18 +133,13 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{}, err
 	}
 
-	outputs, err := p.outputs(role)
-	if err != nil {
-		return pluginkit.Result{}, err
-	}
-
 	consoleURL, err := awskit.RoleConsoleURL(role.ARN)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
 
 	res := pluginkit.Result{
-		Outputs:   outputs,
+		Outputs:   awskit.IdentityOutputs(p.mode, role.ARN),
 		Summary:   summary(role, p.boundary, counts.applied, counts.total, counts.size),
 		Links:     []pluginsv1alpha1.Link{{Name: "IAM role", URL: consoleURL}},
 		Resources: resources,
@@ -326,21 +320,6 @@ func (p *Plugin) ensureAssociations(
 	return associations, err
 }
 
-// outputs returns the outputs of a request served by role.
-func (p *Plugin) outputs(role awskit.Role) (map[string]string, error) {
-	annotations := map[string]string{}
-	if p.mode == awskit.ModeIRSA {
-		annotations[annotationRoleARN] = role.ARN
-	}
-
-	raw, err := json.Marshal(annotations)
-	if err != nil {
-		return nil, fmt.Errorf("encoding the ServiceAccount annotations: %w", err)
-	}
-
-	return map[string]string{outputPrincipal: role.ARN, outputAnnotations: string(raw)}, nil
-}
-
 // Delete deletes the associations of the role of the request, its inline
 // policies, and the role. A role that is gone is not an error.
 func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
@@ -373,8 +352,8 @@ func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[s
 	return p.deleteAssociations(ctx, req, p.roleName(req.Object))
 }
 
-// deleteAssociations deletes the associations of the role roleName in the
-// namespace of req, with Pod Identity. It also deletes them when the role is
+// deleteAssociations deletes the associations of the role roleName that
+// carry the tags of the claim of req, with Pod Identity. It also deletes them when the role is
 // gone, if req has a principal output.
 func (p *Plugin) deleteAssociations(
 	ctx context.Context,
@@ -391,13 +370,21 @@ func (p *Plugin) deleteAssociations(
 	}
 	if arn == "" {
 		// A role that someone deleted by hand can still have associations.
-		arn = req.Object.Status.Outputs[outputPrincipal]
+		arn = req.Object.Status.Outputs[awskit.OutputPrincipal]
 	}
 	if arn == "" {
 		return nil
 	}
 
-	deleted, err := awskit.DeleteAssociations(ctx, p.clients.EKS, p.eksCluster, req.Object.Namespace, arn)
+	request := req.Object
+	deleted, err := awskit.DeleteAssociations(
+		ctx,
+		p.clients.EKS,
+		p.eksCluster,
+		request.Namespace,
+		arn,
+		awskit.RequestTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name),
+	)
 	for _, sa := range deleted {
 		req.Event(
 			corev1.EventTypeNormal,

@@ -196,6 +196,57 @@ func DeleteRole(ctx context.Context, c IAM, name string) (bool, error) {
 	return true, nil
 }
 
+// PolicyChange names the managed policies that EnsureAttachedPolicies
+// attached and detached, each sorted.
+type PolicyChange struct {
+	Attached, Detached []string
+}
+
+// EnsureAttachedPolicies makes the managed policies of the role exactly
+// arns, which may hold an ARN twice. It detaches each other policy before it
+// attaches a missing one, so a swap does not hit the quota of managed
+// policies on a role. An error keeps its AWS code, for IsLimitExceeded and
+// IsNotFound.
+func EnsureAttachedPolicies(ctx context.Context, c IAM, role string, arns []string) (PolicyChange, error) {
+	var change PolicyChange
+	live, err := attachedPolicies(ctx, c, role)
+	if err != nil {
+		return change, err
+	}
+
+	for _, arn := range live {
+		if slices.Contains(arns, arn) {
+			continue
+		}
+		_, err := c.DetachRolePolicy(
+			ctx,
+			&iam.DetachRolePolicyInput{RoleName: aws.String(role), PolicyArn: aws.String(arn)},
+		)
+		if err != nil && !IsNotFound(err) {
+			return change, fmt.Errorf("detaching the policy %s from the IAM role %s: %w", arn, role, err)
+		}
+		change.Detached = append(change.Detached, arn)
+	}
+
+	wanted := slices.Compact(slices.Sorted(slices.Values(arns)))
+	for _, arn := range wanted {
+		if slices.Contains(live, arn) {
+			continue
+		}
+		_, err := c.AttachRolePolicy(
+			ctx,
+			&iam.AttachRolePolicyInput{RoleName: aws.String(role), PolicyArn: aws.String(arn)},
+		)
+		if err != nil {
+			return change, fmt.Errorf("attaching the policy %s to the IAM role %s: %w", arn, role, err)
+		}
+		change.Attached = append(change.Attached, arn)
+	}
+
+	slices.Sort(change.Detached)
+	return change, nil
+}
+
 // policyNames returns the name of each inline policy of the role, from every
 // page. The error of a missing role keeps its code.
 func policyNames(ctx context.Context, c IAM, role string) ([]string, error) {

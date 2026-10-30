@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aws-connectors-role.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aws-connectors-role.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aws-connectors-role.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/registrations: {{ include "aws-connectors-role.registrations" . | sha256sum }}
+        # IRSA reads the annotations of the ServiceAccount when a pod starts.
+        checksum/serviceaccount: {{ toYaml .Values.serviceAccount.annotations | sha256sum }}
+      labels:
+        {{- include "aws-connectors-role.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "aws-connectors-role.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -registrations=/etc/plugin/registrations.yaml
+            - -leader-elect
+            - -leader-election-id={{ include "aws-connectors-role.fullname" . }}
+            - -mode={{ .Values.mode }}
+            - -region={{ .Values.region }}
+            - -role-name-prefix={{ .Values.roleNamePrefix }}
+            - -permissions-boundary-arn={{ .Values.permissionsBoundaryArn }}
+            - {{ printf "-extra-tags=%s" (include "aws-connectors-role.extraTags" .) | quote }}
+            - -oidc-provider-arn={{ .Values.oidcProviderArn }}
+            - -eks-cluster-name={{ .Values.eksClusterName }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_ACCOUNT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+          volumeMounts:
+            - name: registrations
+              mountPath: /etc/plugin
+              readOnly: true
+          ports:
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: registrations
+          configMap:
+            name: {{ include "aws-connectors-role.fullname" . }}-registrations

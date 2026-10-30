@@ -65,3 +65,14 @@ func TestSamePolicyComparesJSONValues(t *testing.T) {
 	assert.False(t, SamePolicy([]byte(`{"a":1}`), []byte(`not json`)))
 	assert.False(t, SamePolicy(nil, []byte(`{}`)))
 }
+
+// IAM stores an array of one item as the item, as in the trust policy of a
+// role with one sub value.
+func TestSamePolicyTakesAnArrayOfOneItemAsTheItem(t *testing.T) {
+	assert.True(t, SamePolicy(
+		[]byte(`{"Statement":[{"Condition":{"StringEquals":{"sub":["a"]}},"Action":["s3:GetObject"]}]}`),
+		[]byte(`{"Statement":{"Condition":{"StringEquals":{"sub":"a"}},"Action":"s3:GetObject"}}`),
+	))
+	assert.False(t, SamePolicy([]byte(`{"sub":["a","b"]}`), []byte(`{"sub":"a"}`)))
+	assert.False(t, SamePolicy([]byte(`{"sub":[]}`), []byte(`{"sub":""}`)))
+}
