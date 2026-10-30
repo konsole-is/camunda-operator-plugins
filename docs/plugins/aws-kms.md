@@ -105,7 +105,7 @@ When you change a policy value, the plugin writes the new key policy on each key
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `region` | `""` | The AWS region of the keys. Empty takes the region of the pod, such as `AWS_REGION`. The controller does not start without a region. |
-| `aliasPrefix` | `camunda` | The prefix of each alias, after `alias/`. 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `/`, `_`, and `-`, not `aws`, not starting with `aws/` or `alias/`, and not starting or ending with `/`. The registrations show it as a limit. |
+| `aliasPrefix` | `camunda` | The prefix of each alias, after `alias/`. 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `/`, `_`, and `-`, not `aws`, not starting with `aws/` or `alias/`, and not starting or ending with `/`. The registrations show it as a limit. Give each Kubernetes cluster that uses the same AWS account and region a prefix of its own: the plugin finds a key by its alias, so two clusters with one prefix share the keys of their claims of the same namespace and name. |
 | `extraTags` | `{}` | Tags for each key and each replica, such as a cost center. A key must not start with `aws:` or `camunda.io/`. A value must not hold a comma. |
 | `keyAdministratorArns` | `[]` | The IAM principals that administer each key. See [Key policy](#key-policy). |
 | `csiDriverRoleArn` | `""` | The IAM role of the EBS CSI driver. See [Key policy](#key-policy). |
@@ -177,7 +177,7 @@ The registrations offer the deletion policies `Delete` and `Orphan`.
 
 **A deleted key makes every volume and every object that it encrypted unreadable, for good.** From the start of the window, KMS refuses every use of the key, so the data is unreadable at once. At the end of the window, KMS deletes the key. During the window, you can cancel the deletion in the KMS console, then enable the key again. A key that is pending deletion has no alias. Find it by its tags `camunda.io/namespace` and `camunda.io/claim`, or by its description `Camunda cluster <namespace>/<claim>`. KMS deletes a multi-Region primary key only after its replicas.
 
-Find an orphaned key by its alias. While the kept key has the alias, a new claim of the same name in the same namespace reports `KeyAliasInUse` and gets no key. Delete the alias, or move it to another key, to let the new claim create one.
+Find an orphaned key by its alias. While the kept key has the alias, a new claim of the same name in the same namespace reports `KeyAliasInUse` and gets no key. Delete the alias to let the new claim create one. To keep a name on the kept key, first give it an alias of another name.
 
 When the controller stops between the create of a key and the create of its alias, a key with the request tags and no alias stays. When the alias fails, the plugin schedules the deletion of that key after 7 days.
 
@@ -186,7 +186,7 @@ When the controller stops between the create of a key and the create of its alia
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not match the schema of the registration, or `replicaRegions` holds the region of the plugin. The message says which. Correct the parameters of the claim or the `parameterValues` of the registration. |
-| `KeyAliasInUse` | `OutputsReady` and `Ready` of the request | The alias of the claim names a key of another request, or a key that an `Orphan` deletion kept. The message names the alias, the key, and its request. Delete the alias or move it to another key. |
+| `KeyAliasInUse` | `OutputsReady` and `Ready` of the request | The alias of the claim names a key of another request, or a key that an `Orphan` deletion kept. The message names the alias, the key, and its request. Delete the alias. To keep a name on the kept key, first give it an alias of another name. |
 | `KeyPendingDeletion` | `Ready` of the request | Someone scheduled the deletion of the key outside the plugin. The outputs stay. Cancel the deletion in the KMS console and enable the key, or delete the claim. |
 | `KeyNotEnabled` | `Ready` of the request | The key is in another state than `Enabled`, for example `Disabled`. The message names the state. Enable the key in the KMS console. |
 | `ReplicasPending` | `Ready` of the request | KMS is still creating a replica. The plugin checks again after 5 seconds. KMS usually needs less than a minute. When it stays, the summary shows the state of each replica: check the replica in the KMS console of its region. |

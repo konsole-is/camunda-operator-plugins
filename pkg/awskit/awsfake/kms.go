@@ -540,7 +540,8 @@ func (r kmsRegion) PutKeyPolicy(
 	return &kms.PutKeyPolicyOutput{}, nil
 }
 
-// GetKeyRotationStatus returns whether automatic rotation is on.
+// GetKeyRotationStatus returns whether automatic rotation is on. A replica
+// has the rotation of its primary key, as KMS shares it.
 func (r kmsRegion) GetKeyRotationStatus(
 	_ context.Context,
 	in *kms.GetKeyRotationStatusInput,
@@ -556,7 +557,11 @@ func (r kmsRegion) GetKeyRotationStatus(
 	if err != nil {
 		return nil, err
 	}
-	return &kms.GetKeyRotationStatusOutput{KeyId: aws.String(k.ARN), KeyRotationEnabled: k.Rotation}, nil
+	rotation := k.Rotation
+	if primary, ok := r.f.keys[k.Primary+"/"+k.ID]; ok {
+		rotation = primary.Rotation
+	}
+	return &kms.GetKeyRotationStatusOutput{KeyId: aws.String(k.ARN), KeyRotationEnabled: rotation}, nil
 }
 
 // EnableKeyRotation turns automatic rotation on.

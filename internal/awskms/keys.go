@@ -105,7 +105,7 @@ type aliasInUseError struct {
 
 func (e aliasInUseError) Error() string {
 	return fmt.Sprintf(
-		"The alias %s names the KMS key %s of %s. Delete the alias or move it to another key to free it",
+		"The alias %s names the KMS key %s of %s. Delete the alias to free it",
 		e.Alias,
 		e.KeyARN,
 		e.Owner,

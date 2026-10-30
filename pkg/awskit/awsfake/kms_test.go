@@ -128,6 +128,26 @@ func TestKMSReplicatesAMultiRegionKey(t *testing.T) {
 	assert.True(t, awskit.IsAlreadyExists(replicate()))
 }
 
+func TestKMSSharesTheRotationOfAPrimaryWithItsReplica(t *testing.T) {
+	f := NewKMS()
+	key := createKey(t, f, true)
+	_, err := f.EnableKeyRotation(context.Background(), &kms.EnableKeyRotationInput{KeyId: key.KeyId})
+	require.NoError(t, err)
+	_, err = f.ReplicateKey(context.Background(), &kms.ReplicateKeyInput{
+		KeyId:         key.KeyId,
+		ReplicaRegion: aws.String("eu-central-1"),
+	})
+	require.NoError(t, err)
+
+	out, err := f.In("eu-central-1").GetKeyRotationStatus(
+		context.Background(),
+		&kms.GetKeyRotationStatusInput{KeyId: key.KeyId},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, out.KeyRotationEnabled)
+}
+
 func TestKMSRefusesToReplicateASingleRegionKey(t *testing.T) {
 	f := NewKMS()
 	key := createKey(t, f, false)
