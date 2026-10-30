@@ -81,6 +81,8 @@ The controller role needs this policy. Replace the account, the regions, and `ca
 }
 ```
 
+KMS creates the service-linked role `AWSServiceRoleForKeyManagementServiceMultiRegionKeys` at the first multi-Region key of an account. With the multi-Region registration, create that role once before the install (`aws iam create-service-linked-role --aws-service-name mrk.kms.amazonaws.com`), or give the controller role `iam:CreateServiceLinkedRole` with the condition `"iam:AWSServiceName": "mrk.kms.amazonaws.com"`.
+
 KMS refuses to create a key with a key policy that does not let the caller change that policy later. So with policy values, the controller role needs `kms:PutKeyPolicy` also to create a key. The statement `KeyAdministrators` below gives it that when the controller role is one of `keyAdministratorArns`. Else the statement `AccountRoot` gives it, through the IAM policy above.
 
 ## Key policy
