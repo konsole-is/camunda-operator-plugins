@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aws-kms.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aws-kms.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aws-kms.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/registrations: {{ include "aws-kms.registrations" . | sha256sum }}
+        # IRSA reads the annotations of the ServiceAccount when a pod starts.
+        checksum/serviceaccount: {{ toYaml .Values.serviceAccount.annotations | sha256sum }}
+      labels:
+        {{- include "aws-kms.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "aws-kms.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -registrations=/etc/plugin/registrations.yaml
+            - -leader-elect
+            - -leader-election-id={{ include "aws-kms.fullname" . }}
+            - -region={{ .Values.region }}
+            - -alias-prefix={{ .Values.aliasPrefix }}
+            - {{ printf "-extra-tags=%s" (include "aws-kms.extraTags" .) | quote }}
+            - -key-administrator-arns={{ join "," .Values.keyAdministratorArns }}
+            - -csi-driver-role-arn={{ .Values.csiDriverRoleArn }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_ACCOUNT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            {{- with .Values.endpointURL }}
+            - name: AWS_ENDPOINT_URL
+              value: {{ . | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: registrations
+              mountPath: /etc/plugin
+              readOnly: true
+          ports:
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: registrations
+          configMap:
+            name: {{ include "aws-kms.fullname" . }}-registrations
