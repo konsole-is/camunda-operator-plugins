@@ -10,7 +10,9 @@
 # It removes a role, policy, OIDC provider, or KMS key only when it has the
 # tag. With --older-than, it also removes a cpo-ci-* bucket without the tag
 # that is that many hours old. Needs AWS_REGION and the credentials of the CI
-# role. It exits 1 when a removal or the listing of a resource type failed.
+# role. With AWS_KMS_REPLICA_REGION, it also schedules the keys there, which
+# hold the replicas of multi-Region keys. It exits 1 when a removal or the
+# listing of a resource type failed.
 set -euo pipefail
 
 run=""
@@ -104,12 +106,12 @@ delete_bucket() {
 }
 
 delete_key() {
-  local key=$1 aliases alias
-  aliases=$(aws kms list-aliases --key-id "${key}" --query 'Aliases[].AliasName' --output text) || return 1
+  local region=$1 key=$2 aliases alias
+  aliases=$(aws kms list-aliases --region "${region}" --key-id "${key}" --query 'Aliases[].AliasName' --output text) || return 1
   for alias in ${aliases}; do
-    aws kms delete-alias --alias-name "${alias}" || return 1
+    aws kms delete-alias --region "${region}" --alias-name "${alias}" || return 1
   done
-  aws kms schedule-key-deletion --key-id "${key}" --pending-window-in-days 7 >/dev/null
+  aws kms schedule-key-deletion --region "${region}" --key-id "${key}" --pending-window-in-days 7 >/dev/null
 }
 
 # Roles before policies, so that the policies are detached.
@@ -180,23 +182,26 @@ while read -r bucket created; do
   fi
 done <<<"${buckets}"
 
-if ! keys=$(aws kms list-keys --query 'Keys[].KeyId' --output text); then
-  echo "failed to list: keys" >&2
-  failed=1
-fi
-for key in ${keys}; do
-  # The boundary allows reads only of tagged keys; others answer AccessDenied.
-  tag=$(aws kms list-resource-tags --key-id "${key}" --output json 2>/dev/null | run_tag) || continue
-  if ! metadata=$(aws kms describe-key --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text); then
+for region in "${AWS_REGION}" ${AWS_KMS_REPLICA_REGION:-}; do
+  if ! keys=$(aws kms list-keys --region "${region}" --query 'Keys[].KeyId' --output text); then
+    echo "failed to list: keys in ${region}" >&2
     failed=1
-    continue
   fi
-  read -r state created <<<"${metadata}"
-  [ "${state}" != PendingDeletion ] || continue
-  if matches "${tag}" "${created}"; then
-    echo "KMS key ${key} (${tag})"
-    step delete_key "${key}"
-  fi
+  for key in ${keys}; do
+    # The boundary allows reads only of tagged keys; others answer AccessDenied.
+    tag=$(aws kms list-resource-tags --region "${region}" --key-id "${key}" --output json 2>/dev/null | run_tag) || continue
+    if ! metadata=$(aws kms describe-key --region "${region}" --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text); then
+      failed=1
+      continue
+    fi
+    read -r state created <<<"${metadata}"
+    # A primary key waits in PendingReplicaDeletion until its replicas are gone.
+    case ${state} in PendingDeletion | PendingReplicaDeletion) continue ;; esac
+    if matches "${tag}" "${created}"; then
+      echo "KMS key ${key} in ${region} (${tag})"
+      step delete_key "${region}" "${key}"
+    fi
+  done
 done
 
 exit ${failed}

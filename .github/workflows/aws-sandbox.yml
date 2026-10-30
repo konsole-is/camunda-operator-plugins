@@ -36,6 +36,7 @@ jobs:
     environment: ${{ github.actor_id == vars.AWS_SANDBOX_ACTOR_ID && 'aws-sandbox' || 'aws-sandbox-review' }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_KMS_REPLICA_REGION: ${{ vars.AWS_KMS_REPLICA_REGION }}
     steps:
       - name: Clone the code
         uses: actions/checkout@v7

@@ -32,10 +32,10 @@ Give each run an ID that starts with `cpo-ci-`, for example `cpo-ci-${{ github.r
 
 ## The sweep
 
-A cancelled job cannot remove its resources. The workflow `.github/workflows/aws-sandbox.yml` runs each hour. It removes each role, managed policy, OIDC provider, and bucket with the tag `cpo-ci-run` that is older than six hours. It schedules each such KMS key for deletion after 7 days, the shortest window. The issuer documents expire after one day.
+A cancelled job cannot remove its resources. The workflow `.github/workflows/aws-sandbox.yml` runs each hour. It removes each role, managed policy, OIDC provider, and bucket with the tag `cpo-ci-run` that is older than six hours. It schedules each such KMS key for deletion after 7 days, the shortest window, in the region of the sandbox and in the replica region of `AWS_KMS_REPLICA_REGION`. The issuer documents expire after one day.
 
 To do a sweep from your machine, use administrator credentials:
 
 ```sh
-AWS_REGION=eu-west-1 hack/aws-sandbox/sweep.sh --older-than 6
+AWS_REGION=eu-west-1 AWS_KMS_REPLICA_REGION=eu-central-1 hack/aws-sandbox/sweep.sh --older-than 6
 ```

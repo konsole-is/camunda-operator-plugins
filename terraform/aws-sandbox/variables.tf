@@ -4,6 +4,12 @@ variable "region" {
   default     = "eu-west-1"
 }
 
+variable "kms_replica_region" {
+  description = "The one other region where a run can use KMS, for the replicas of its multi-Region keys."
+  type        = string
+  default     = "eu-central-1"
+}
+
 variable "github_owner" {
   description = "The owner of the repository whose workflows get the CI role."
   type        = string

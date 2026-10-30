@@ -10,13 +10,21 @@ locals {
   # The kind cluster of a run has its OIDC issuer under the issuer bucket.
   run_providers = "${local.iam}:oidc-provider/${aws_s3_bucket.issuer.bucket_regional_domain_name}/*"
   run_buckets   = ["arn:${data.aws_partition.current.partition}:s3:::cpo-ci-*", "arn:${data.aws_partition.current.partition}:s3:::cpo-ci-*/*"]
-  keys          = "arn:${data.aws_partition.current.partition}:kms:${var.region}:${data.aws_caller_identity.current.account_id}:key/*"
+  kms_regions   = [var.region, var.kms_replica_region]
+  keys          = [for r in local.kms_regions : "arn:${data.aws_partition.current.partition}:kms:${r}:${data.aws_caller_identity.current.account_id}:key/*"]
+  aliases       = [for r in local.kms_regions : "arn:${data.aws_partition.current.partition}:kms:${r}:${data.aws_caller_identity.current.account_id}:alias/cpo-ci-*"]
   issuer_documents = [
     "${aws_s3_bucket.issuer.arn}/*/.well-known/openid-configuration",
     "${aws_s3_bucket.issuer.arn}/*/openid/v1/jwks",
   ]
 
   github_oidc_provider_arn = coalesce(var.github_oidc_provider_arn, one(aws_iam_openid_connect_provider.github[*].arn))
+}
+
+# KMS creates this role at the first multi-Region key, and the boundary does
+# not allow a run to create it.
+resource "aws_iam_service_linked_role" "kms_multi_region" {
+  aws_service_name = "mrk.kms.amazonaws.com"
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -42,8 +50,7 @@ data "aws_iam_policy_document" "storage" {
     resources = [aws_s3_bucket.issuer.arn]
   }
 
-  # A key in a custom key store costs by the hour, and the sweep looks in one
-  # region only.
+  # A key in a custom key store costs by the hour.
   statement {
     actions   = ["kms:CreateKey"]
     resources = ["*"]
@@ -57,16 +64,11 @@ data "aws_iam_policy_document" "storage" {
       variable = "kms:KeyOrigin"
       values   = ["AWS_KMS"]
     }
-    condition {
-      test     = "Bool"
-      variable = "kms:MultiRegion"
-      values   = ["false"]
-    }
   }
   # CreateKey with tags also needs TagResource, before the key has a tag.
   statement {
     actions   = ["kms:TagResource"]
-    resources = [local.keys]
+    resources = local.keys
     condition {
       test     = "Null"
       variable = "aws:RequestTag/cpo-ci-run"
@@ -75,7 +77,7 @@ data "aws_iam_policy_document" "storage" {
   }
   statement {
     actions   = ["kms:*"]
-    resources = [local.keys]
+    resources = local.keys
     condition {
       test     = "Null"
       variable = "aws:ResourceTag/cpo-ci-run"
@@ -83,11 +85,8 @@ data "aws_iam_policy_document" "storage" {
     }
   }
   statement {
-    actions = ["kms:CreateAlias", "kms:DeleteAlias", "kms:UpdateAlias"]
-    resources = [
-      "arn:${data.aws_partition.current.partition}:kms:${var.region}:${data.aws_caller_identity.current.account_id}:alias/cpo-ci-*",
-      local.keys,
-    ]
+    actions   = ["kms:CreateAlias", "kms:DeleteAlias", "kms:UpdateAlias"]
+    resources = concat(local.aliases, local.keys)
   }
 }
 
@@ -231,12 +230,22 @@ data "aws_iam_policy_document" "boundary" {
   }
   statement {
     effect      = "Deny"
-    not_actions = ["iam:*", "sts:*"]
+    not_actions = ["iam:*", "sts:*", "kms:*"]
     resources   = ["*"]
     condition {
       test     = "StringNotEquals"
       variable = "aws:RequestedRegion"
       values   = [var.region]
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["kms:*"]
+    resources = ["*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:RequestedRegion"
+      values   = local.kms_regions
     }
   }
   # A key policy can shut out the sweep.
