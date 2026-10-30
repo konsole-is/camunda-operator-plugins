@@ -43,6 +43,14 @@ func TestExtraTagsParseAListOfKeyValuePairs(t *testing.T) {
 	assert.Equal(t, ExtraTags{"team": "payments", "cpo-ci-run": "cpo-ci-42"}, tags)
 }
 
+func TestExtraTagsAcceptEachCharacterThatAWSAllows(t *testing.T) {
+	var tags ExtraTags
+
+	require.NoError(t, tags.Set("Kostnaður 1_.:/+-@=Á b_.:/=+-@"))
+
+	assert.Equal(t, ExtraTags{"Kostnaður 1_.:/+-@": "Á b_.:/=+-@"}, tags)
+}
+
 func TestExtraTagsSplitAtTheFirstEquals(t *testing.T) {
 	var tags ExtraTags
 
@@ -95,10 +103,14 @@ func TestExtraTagsRefuseABadItem(t *testing.T) {
 		{name: "AWS key upper case", in: "AWS:x=1", names: "AWS:x"},
 		{name: "request key", in: "camunda.io/claim=x", names: "camunda.io/claim"},
 		{name: "any camunda.io key", in: "camunda.io/other=x", names: "camunda.io/other"},
+		{name: "camunda.io key upper case", in: "CAMUNDA.IO/claim=x", names: "CAMUNDA.IO/claim"},
 		{name: "key set before", in: "team=other", names: "team"},
+		{name: "key set before in another case", in: "Team=other", names: "Team"},
 		{name: "key twice in one list", in: "a=1,a=2", names: "a"},
 		{name: "long key", in: strings.Repeat("k", 129) + "=v", names: "128"},
 		{name: "long value", in: "k=" + strings.Repeat("v", 257), names: "256"},
+		{name: "mark in the key", in: "team!=x", names: "team!"},
+		{name: "mark in the value", in: "k=payments!", names: "payments!"},
 		{name: "long key of two-byte characters", in: strings.Repeat("é", 129) + "=v", names: "128"},
 		{name: "long value of two-byte characters", in: "k=" + strings.Repeat("é", 257), names: "256"},
 	}
