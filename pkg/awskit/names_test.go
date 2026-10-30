@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRoleNameFitsIAMForLongNamespacesAndClaims(t *testing.T) {
@@ -65,10 +66,69 @@ func TestFitNameKeepsAShortNameAndCutsALongOne(t *testing.T) {
 	assert.NotEqual(t, cut, FitName(strings.Repeat("x", 299)+"y", 256))
 }
 
-func TestRequestTagsNameTheNamespaceTheClaimAndTheRequest(t *testing.T) {
-	assert.Equal(t, map[string]string{
-		"camunda.io/namespace": "team-a",
-		"camunda.io/claim":     "orders",
-		"camunda.io/request":   "orders-identity",
-	}, RequestTags("team-a", "orders", "orders-identity"))
+func TestCheckRolePrefix(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		ok     bool
+	}{
+		{name: "plain", prefix: "camunda", ok: true},
+		{name: "run prefix", prefix: "cpo-ci-42-conn", ok: true},
+		{name: "every allowed mark", prefix: "a+b=c,d.e@f_g", ok: true},
+		{name: "longest", prefix: strings.Repeat("p", 47), ok: true},
+		{name: "too long", prefix: strings.Repeat("p", 48)},
+		{name: "empty", prefix: ""},
+		{name: "slash", prefix: "team/conn"},
+		{name: "space", prefix: "team conn"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CheckRolePrefix(tt.prefix)
+			if !tt.ok {
+				assert.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.LessOrEqual(t, len(RoleName(tt.prefix, "s", "n", "c")), 64)
+		})
+	}
+
+	assert.Len(t, RoleName(strings.Repeat("p", 47), "s", "n", "c"), 64)
+	assert.ErrorContains(t, CheckRolePrefix(strings.Repeat("p", 48)), "47")
+}
+
+func TestCheckAliasPrefix(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		ok     bool
+	}{
+		{name: "plain", prefix: "camunda", ok: true},
+		{name: "run prefix", prefix: "cpo-ci-42", ok: true},
+		{name: "path", prefix: "team/kms_keys", ok: true},
+		{name: "longest", prefix: strings.Repeat("p", 128), ok: true},
+		{name: "too long", prefix: strings.Repeat("p", 129)},
+		{name: "empty", prefix: ""},
+		{name: "aws", prefix: "aws"},
+		{name: "under aws", prefix: "aws/keys"},
+		{name: "starts with the letters aws", prefix: "awskeys", ok: true},
+		{name: "alias prefix", prefix: "alias/camunda"},
+		{name: "leading slash", prefix: "/camunda"},
+		{name: "trailing slash", prefix: "camunda/"},
+		{name: "dot", prefix: "camunda.keys"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.ok {
+				assert.NoError(t, CheckAliasPrefix(tt.prefix))
+			} else {
+				assert.Error(t, CheckAliasPrefix(tt.prefix))
+			}
+		})
+	}
+
+	assert.ErrorContains(t, CheckAliasPrefix(strings.Repeat("p", 129)), "128")
 }
