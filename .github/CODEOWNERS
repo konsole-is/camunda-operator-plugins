@@ -18,6 +18,10 @@
 /charts/aws-kms/                  @sourcehawk
 /docs/plugins/aws-kms.md          @sourcehawk
 /pkg/awskit/                      @sourcehawk
+/cmd/aws-connectors-role/         @sourcehawk
+/internal/awsconnectorsrole/      @sourcehawk
+/charts/aws-connectors-role/      @sourcehawk
+/docs/plugins/aws-connectors-role.md @sourcehawk
 /cmd/rustfs/                      @sourcehawk
 /internal/rustfs/                 @sourcehawk
 /charts/rustfs/                   @sourcehawk
