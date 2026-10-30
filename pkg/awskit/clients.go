@@ -138,7 +138,7 @@ type Clients struct {
 // LoadConfig returns the AWS config of the default chain: the environment,
 // the shared files, and the web identity or Pod Identity of the pod. An empty
 // region takes the region of that chain. The SDK reads AWS_ENDPOINT_URL
-// itself, which points every client at one endpoint, such as LocalStack.
+// itself, which points every client at one endpoint.
 func LoadConfig(ctx context.Context, region string) (aws.Config, error) {
 	var opts []func(*config.LoadOptions) error
 	if region != "" {

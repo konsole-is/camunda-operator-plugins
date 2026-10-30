@@ -111,7 +111,7 @@ The condition on the boundary makes sure that the controller cannot create a rol
 | `oidcProviderArn` | `""` | Required with IRSA. The IAM OIDC provider of the EKS cluster. |
 | `eksClusterName` | `""` | Required with Pod Identity. The EKS cluster of the associations. |
 | `region` | `""` | The AWS region. Empty takes the region of the pod, such as `AWS_REGION`. |
-| `endpointURL` | `""` | Sends every AWS call to this endpoint, for example LocalStack. |
+| `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |
 | `serviceAccount.annotations` | `{}` | The annotations of the ServiceAccount of the controller, for example `eks.amazonaws.com/role-arn` of the controller role. |
 | `registrations` | `[{name: aws-irsa}]` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and fields of a registration spec, merged over the defaults of `mode`. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one, `aws-pod-identity` with `mode: irsa`, and `aws-irsa` with `mode: podIdentity`. |
 | `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/aws-identity` | The image of the controller. |
