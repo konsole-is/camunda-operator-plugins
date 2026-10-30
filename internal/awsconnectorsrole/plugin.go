@@ -137,11 +137,7 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	switch r := req.Object.Spec.Registration; r {
 	case RegistrationRole:
-		arn, err := p.ownedRoleARN(ctx, req)
-		if err != nil {
-			return err
-		}
-		return p.deleteAssociations(ctx, req, arn)
+		return p.deleteOwnedAssociations(ctx, req)
 	case RegistrationExistingRole:
 		return p.deleteExistingAssociations(ctx, req)
 	default:

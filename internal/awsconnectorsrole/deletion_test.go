@@ -104,6 +104,19 @@ var _ = Describe("the deletion of a request", func() {
 		),
 	)
 
+	It("orphans an IRSA request without an IAM call", func() {
+		ns := newNamespace(role)
+		req := connectorsRequest(role, ns, paramsOf(role))
+		req.Spec.DeletionPolicy = pluginsv1alpha1.DeletionPolicyOrphan
+		Expect(role.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(role, req)
+		before := len(iamCallsBut(role, "GetPolicy"))
+
+		waitGone(role, req)
+
+		Expect(iamCallsBut(role, "GetPolicy")[before:]).To(BeEmpty())
+	})
+
 	It("releases the request when its role is already gone", func() {
 		ns := newNamespace(role)
 		req := connectorsRequest(role, ns, paramsOf(role))

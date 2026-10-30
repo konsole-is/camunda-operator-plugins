@@ -255,11 +255,7 @@ func (p *Plugin) ensureAttachedPolicies(
 // deleteRole deletes the associations of the role of the claim of req, its
 // policies, and the role.
 func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
-	arn, err := p.ownedRoleARN(ctx, req)
-	if err != nil {
-		return err
-	}
-	if err := p.deleteAssociations(ctx, req, arn); err != nil {
+	if err := p.deleteOwnedAssociations(ctx, req); err != nil {
 		return err
 	}
 
@@ -279,6 +275,23 @@ func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, m
 		)
 	}
 	return nil
+}
+
+// deleteOwnedAssociations deletes, with Pod Identity, the associations of the
+// claim of req to its role. With IRSA it makes no AWS call.
+func (p *Plugin) deleteOwnedAssociations(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+) error {
+	if p.mode != awskit.ModePodIdentity {
+		return nil
+	}
+
+	arn, err := p.ownedRoleARN(ctx, req)
+	if err != nil {
+		return err
+	}
+	return p.deleteAssociations(ctx, req, arn)
 }
 
 // ownedRoleARN returns the ARN of the role of the claim of req. When the
