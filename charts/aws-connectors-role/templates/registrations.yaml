@@ -1,0 +1,12 @@
+# The controller reads its registrations from this file at startup, and
+# applies them as PluginRegistrations.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aws-connectors-role.fullname" . }}-registrations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aws-connectors-role.labels" . | nindent 4 }}
+data:
+  registrations.yaml: |
+    {{- include "aws-connectors-role.registrations" . | nindent 4 }}

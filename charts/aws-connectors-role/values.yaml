@@ -1,0 +1,95 @@
+image:
+  repository: ghcr.io/konsole-is/camunda-operator-plugins/aws-connectors-role
+  # An empty tag is the appVersion of the chart, which the release sets.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# mode is how the Connectors pods assume their role: irsa (IAM roles for
+# service accounts) or podIdentity (EKS Pod Identity).
+mode: irsa
+
+# region is the AWS region of the API calls. Empty takes the region of the
+# AWS SDK chain, such as the AWS_REGION of the pod.
+region: ""
+
+# roleNamePrefix starts the name of each role of aws-connectors-role, at most
+# 47 characters. It must differ from the role name prefix of aws-identity,
+# camunda by default. Else both plugins write the same role for one claim.
+roleNamePrefix: camunda-connectors
+
+# permissionsBoundaryArn is the managed policy that bounds each role of
+# aws-connectors-role. No environment and no claim can change it. The
+# controller does not start without it when it serves aws-connectors-role.
+permissionsBoundaryArn: ""
+
+# extraTags go on each AWS object of the plugin, next to the tags of the
+# request, for example a cost center. A key cannot start with aws: or
+# camunda.io/.
+extraTags: {}
+
+# oidcProviderArn is the IAM OIDC provider of the EKS cluster. Mode irsa needs
+# it.
+oidcProviderArn: ""
+
+# eksClusterName is the EKS cluster of the Pod Identity associations. Mode
+# podIdentity needs it.
+eksClusterName: ""
+
+serviceAccount:
+  # annotations of the ServiceAccount of the controller, for example the
+  # IRSA annotation of the role that the controller itself runs as.
+  annotations: {}
+
+# registrations are the PluginRegistrations that the controller writes at
+# startup and serves. Each item is a name and the fields of a registration
+# spec, merged over the defaults of the chart. The chart grants the
+# controller the verb serve on each name, and on no other registration. The
+# chart refuses to render without one.
+registrations:
+  - name: aws-connectors-existing-role
+    label: Existing role
+    description: The Connectors of each cluster use one IAM role that the admin made.
+    parameters:
+      type: object
+      required: [roleArn]
+      properties:
+        roleArn:
+          type: string
+          description: The IAM role of the Connectors.
+          pattern: '^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$'
+  - name: aws-connectors-role
+    label: Role for each cluster
+    description: The Connectors of each cluster get an IAM role of their own, with the policies that the admin allows.
+    parameters:
+      type: object
+      properties:
+        managedPolicyArns:
+          type: array
+          x-kubernetes-list-type: set
+          maxItems: 10
+          items:
+            type: string
+            pattern: '^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/.+$'
+          description: Managed policies that every cluster of the environment gets.
+        extraPolicyArns:
+          type: array
+          x-kubernetes-list-type: set
+          maxItems: 10
+          items:
+            type: string
+            pattern: '^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/.+$'
+          description: Managed policies that a claim can add from the allowed values of its environment.
+        inlinePolicy:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+          x-fleet-template: true
+          description: One IAM policy document. Its placeholders scope it to one cluster.
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
