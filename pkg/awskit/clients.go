@@ -24,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -122,17 +123,91 @@ type STS interface {
 	) (*sts.GetCallerIdentityOutput, error)
 }
 
+// KMS is the part of the KMS API of one region that the plugins call. Each
+// method behaves as the method of the same name of *kms.Client.
+type KMS interface {
+	CreateKey(ctx context.Context, in *kms.CreateKeyInput, opts ...func(*kms.Options)) (*kms.CreateKeyOutput, error)
+	DescribeKey(
+		ctx context.Context,
+		in *kms.DescribeKeyInput,
+		opts ...func(*kms.Options),
+	) (*kms.DescribeKeyOutput, error)
+	CreateAlias(
+		ctx context.Context,
+		in *kms.CreateAliasInput,
+		opts ...func(*kms.Options),
+	) (*kms.CreateAliasOutput, error)
+	DeleteAlias(
+		ctx context.Context,
+		in *kms.DeleteAliasInput,
+		opts ...func(*kms.Options),
+	) (*kms.DeleteAliasOutput, error)
+	ListAliases(
+		ctx context.Context,
+		in *kms.ListAliasesInput,
+		opts ...func(*kms.Options),
+	) (*kms.ListAliasesOutput, error)
+	ListResourceTags(
+		ctx context.Context,
+		in *kms.ListResourceTagsInput,
+		opts ...func(*kms.Options),
+	) (*kms.ListResourceTagsOutput, error)
+	TagResource(
+		ctx context.Context,
+		in *kms.TagResourceInput,
+		opts ...func(*kms.Options),
+	) (*kms.TagResourceOutput, error)
+	UntagResource(
+		ctx context.Context,
+		in *kms.UntagResourceInput,
+		opts ...func(*kms.Options),
+	) (*kms.UntagResourceOutput, error)
+	GetKeyPolicy(
+		ctx context.Context,
+		in *kms.GetKeyPolicyInput,
+		opts ...func(*kms.Options),
+	) (*kms.GetKeyPolicyOutput, error)
+	PutKeyPolicy(
+		ctx context.Context,
+		in *kms.PutKeyPolicyInput,
+		opts ...func(*kms.Options),
+	) (*kms.PutKeyPolicyOutput, error)
+	GetKeyRotationStatus(
+		ctx context.Context,
+		in *kms.GetKeyRotationStatusInput,
+		opts ...func(*kms.Options),
+	) (*kms.GetKeyRotationStatusOutput, error)
+	EnableKeyRotation(
+		ctx context.Context,
+		in *kms.EnableKeyRotationInput,
+		opts ...func(*kms.Options),
+	) (*kms.EnableKeyRotationOutput, error)
+	ReplicateKey(
+		ctx context.Context,
+		in *kms.ReplicateKeyInput,
+		opts ...func(*kms.Options),
+	) (*kms.ReplicateKeyOutput, error)
+	ScheduleKeyDeletion(
+		ctx context.Context,
+		in *kms.ScheduleKeyDeletionInput,
+		opts ...func(*kms.Options),
+	) (*kms.ScheduleKeyDeletionOutput, error)
+}
+
 var (
 	_ IAM = (*iam.Client)(nil)
 	_ EKS = (*eks.Client)(nil)
 	_ STS = (*sts.Client)(nil)
+	_ KMS = (*kms.Client)(nil)
 )
 
-// Clients are the AWS clients of a plugin.
+// Clients are the AWS clients of a plugin. KMS is the client of the region of
+// the config.
 type Clients struct {
 	IAM IAM
 	EKS EKS
 	STS STS
+	KMS KMS
 }
 
 // LoadConfig returns the AWS config of the default chain: the environment,
@@ -159,5 +234,14 @@ func NewClients(cfg aws.Config) Clients {
 		IAM: iam.NewFromConfig(cfg),
 		EKS: eks.NewFromConfig(cfg),
 		STS: sts.NewFromConfig(cfg),
+		KMS: kms.NewFromConfig(cfg),
+	}
+}
+
+// KMSIn returns a function that gives a KMS client of cfg for a region, such
+// as the region of a replica key.
+func KMSIn(cfg aws.Config) func(region string) KMS {
+	return func(region string) KMS {
+		return kms.NewFromConfig(cfg, func(o *kms.Options) { o.Region = region })
 	}
 }

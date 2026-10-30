@@ -74,3 +74,25 @@ func RoleConsoleURL(roleARN string) (string, error) {
 
 	return "https://" + host + "/iam/home#/roles/details/" + name[strings.LastIndex(name, "/")+1:], nil
 }
+
+// KeyConsoleURL returns the page of the KMS key keyARN in the KMS console of
+// its region. It refuses an ARN that is not a KMS key ARN, and a partition
+// without a known console.
+func KeyConsoleURL(keyARN string) (string, error) {
+	parsed, err := arn.Parse(keyARN)
+	id, ok := strings.CutPrefix(parsed.Resource, "key/")
+	if err != nil || parsed.Service != "kms" || !ok || id == "" || parsed.Region == "" {
+		return "", fmt.Errorf("%q is not the ARN of a KMS key", keyARN)
+	}
+
+	host, ok := consoles[parsed.Partition]
+	if !ok {
+		return "", fmt.Errorf(
+			"the key %s is in the partition %q, which has no known console",
+			keyARN,
+			parsed.Partition,
+		)
+	}
+
+	return "https://" + parsed.Region + "." + host + "/kms/home?region=" + parsed.Region + "#/kms/keys/" + id, nil
+}
