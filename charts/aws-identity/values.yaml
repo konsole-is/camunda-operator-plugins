@@ -31,8 +31,8 @@ oidcProviderArn: ""
 # podIdentity needs it.
 eksClusterName: ""
 
-# endpointURL, when set, sends every AWS call to this endpoint, for example
-# LocalStack.
+# endpointURL, when set, sends every AWS call to this endpoint instead of the
+# endpoints of AWS.
 endpointURL: ""
 
 serviceAccount:
