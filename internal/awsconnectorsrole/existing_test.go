@@ -17,11 +17,19 @@ limitations under the License.
 package awsconnectorsrole_test
 
 import (
+	"context"
+	"errors"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	"github.com/aws/smithy-go"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
+
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 func existingParams(arn string) string {
@@ -71,6 +79,45 @@ var _ = Describe("the aws-connectors-existing-role registration", func() {
 		Eventually(func(g Gomega) {
 			g.Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf("orders-connectors=" + other))
 		}, timeout).Should(Succeed())
+	})
+
+	It("deletes the association of the old role when its move to a new roleArn failed", func() {
+		const other = "arn:aws:iam::111122223333:role/connectors-3"
+		ns := newNamespace(existingPodIdentity)
+		req := connectorsRequest(existingPodIdentity, ns, existingParams(existingRoleARN))
+		Expect(existingPodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(existingPodIdentity, req)
+
+		// Enough failures that every move in this spec fails. The spec
+		// drains the rest, so that no other spec meets them.
+		denied := &smithy.GenericAPIError{Code: "AccessDeniedException", Message: "denied by the spec"}
+		for range 100 {
+			existingPodIdentity.eks.FailNext("UpdatePodIdentityAssociation", denied)
+		}
+		DeferCleanup(func() {
+			for {
+				_, err := existingPodIdentity.eks.UpdatePodIdentityAssociation(
+					context.Background(),
+					&eks.UpdatePodIdentityAssociationInput{
+						ClusterName:   aws.String("none"),
+						AssociationId: aws.String("none"),
+					},
+				)
+				if !errors.Is(err, denied) {
+					return
+				}
+			}
+		})
+		update(existingPodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(existingParams(other))
+		})
+		Expect(waitReason(existingPodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)).
+			To(ContainSubstring("denied by the spec"))
+		Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf("orders-connectors=" + existingRoleARN))
+
+		waitGone(existingPodIdentity, req)
+
+		Expect(associationsIn(existingPodIdentity, ns)).To(BeEmpty())
 	})
 
 	It("keeps the association of another claim that uses the same role", func() {

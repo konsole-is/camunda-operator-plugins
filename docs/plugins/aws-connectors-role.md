@@ -21,7 +21,7 @@ The Connectors read documents through the Orchestration REST API, not from the d
 
 For each request of `aws-connectors-role`, the plugin creates one IAM role:
 
-- The name is `<roleNamePrefix>-<hash>`, with 16 hex digits of a hash of the EKS cluster (its OIDC issuer with IRSA, its name with Pod Identity), the namespace, and the claim.
+- The name is `<roleNamePrefix>-<hash>`, with 16 hex digits of a hash of the EKS cluster (its OIDC issuer with IRSA, its region and name with Pod Identity), the namespace, and the claim.
 - The permissions boundary is the chart value `permissionsBoundaryArn`. No Environment and no claim can change it.
 - The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tags of the chart value `extraTags` go on the role too.
 - The role trusts only `spec.target.serviceAccountName` of the request, which is `<claim>-connectors`. It never trusts the ServiceAccount of the cluster, `<claim>-camunda`, or another name in `spec.target.additionalServiceAccounts`.
@@ -140,7 +140,7 @@ With only `aws-connectors-existing-role`, the controller needs `sts:GetCallerIde
 | `extraTags` | `{}` | Tags that go on each role and association, next to the tags of the request, for example `cost-center: platform`. A key cannot start with `aws:` or `camunda.io/`. |
 | `oidcProviderArn` | `""` | Required with IRSA. The IAM OIDC provider of the EKS cluster. |
 | `eksClusterName` | `""` | Required with Pod Identity. The EKS cluster of the associations. |
-| `region` | `""` | The AWS region. Empty takes the region of the pod, such as `AWS_REGION`. |
+| `region` | `""` | The AWS region. Empty takes the region of the pod, such as `AWS_REGION`. With Pod Identity the controller needs a region, because the role names include it. |
 | `serviceAccount.annotations` | `{}` | The annotations of the ServiceAccount of the controller, for example `eks.amazonaws.com/role-arn` of the controller role. |
 | `registrations` | `aws-connectors-existing-role` and `aws-connectors-role` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and fields of a registration spec, merged over the defaults of the chart. Remove an item to offer only the other option. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
 | `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/aws-connectors-role` | The image of the controller. |
