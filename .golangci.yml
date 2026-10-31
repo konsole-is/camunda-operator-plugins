@@ -61,6 +61,10 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # Each client interface lists the methods of its SDK client in one shape.
+      - linters:
+          - dupl
+        path: pkg/awskit/clients.go
     paths:
       - third_party$
       - examples$

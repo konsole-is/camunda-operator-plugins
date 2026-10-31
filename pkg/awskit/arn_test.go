@@ -73,3 +73,37 @@ func TestRoleConsoleURLRefusesAnUnknownPartitionAndAnotherARN(t *testing.T) {
 	_, err = RoleConsoleURL("arn:aws:iam::111122223333:policy/x")
 	assert.ErrorContains(t, err, "is not the ARN of an IAM role")
 }
+
+func TestKeyConsoleURLUsesTheConsoleOfTheRegion(t *testing.T) {
+	for _, tc := range []struct{ arn, want string }{
+		{
+			"arn:aws:kms:eu-west-1:111122223333:key/abc",
+			"https://eu-west-1.console.aws.amazon.com/kms/home?region=eu-west-1#/kms/keys/abc",
+		},
+		{
+			"arn:aws-cn:kms:cn-north-1:111122223333:key/mrk-1",
+			"https://cn-north-1.console.amazonaws.cn/kms/home?region=cn-north-1#/kms/keys/mrk-1",
+		},
+	} {
+		got, err := KeyConsoleURL(tc.arn)
+
+		require.NoError(t, err, tc.arn)
+		assert.Equal(t, tc.want, got)
+	}
+}
+
+func TestKeyConsoleURLRefusesAnUnknownPartitionAndAnotherARN(t *testing.T) {
+	_, err := KeyConsoleURL("arn:aws-iso:kms:us-iso-east-1:111122223333:key/abc")
+	assert.ErrorContains(t, err, `partition "aws-iso"`)
+
+	for _, arn := range []string{
+		"arn:aws:iam::111122223333:role/x",
+		"arn:aws:kms:eu-west-1:111122223333:alias/x",
+		"arn:aws:kms:eu-west-1:111122223333:key/",
+		"not an arn",
+	} {
+		_, err := KeyConsoleURL(arn)
+
+		assert.ErrorContains(t, err, "is not the ARN of a KMS key", arn)
+	}
+}

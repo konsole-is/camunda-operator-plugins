@@ -1,0 +1,12 @@
+# The controller reads its registrations from this file at startup, and
+# applies them as PluginRegistrations.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aws-kms.fullname" . }}-registrations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aws-kms.labels" . | nindent 4 }}
+data:
+  registrations.yaml: |
+    {{- include "aws-kms.registrations" . | nindent 4 }}
