@@ -190,7 +190,7 @@ CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
 # renovate: datasource=github-releases depName=envoyproxy/gateway
 ENVOY_GATEWAY_VERSION ?= v1.9.2
 # renovate: datasource=docker depName=rustfs/rustfs
-RUSTFS_VERSION ?= 1.0.1
+RUSTFS_VERSION ?= 1.0.4
 
 .PHONY: operator-source
 operator-source: ## Check out the operator at API_REF into OPERATOR_DIR.
