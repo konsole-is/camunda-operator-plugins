@@ -430,3 +430,24 @@ func TestDeleteAssociationsLeavesTheAssociationsOfAnotherRequestOfTheClaim(t *te
 	assert.Empty(t, deleted)
 	assert.Len(t, f.Associations(), 1)
 }
+
+func TestDeleteRequestAssociationsWithoutKeptRoleKeepsTheKeptServiceAccountsOnAnyRole(t *testing.T) {
+	f := awsfake.NewEKS()
+	createAssociation(t, f, "orders-connectors", roleB, connectorsTags())
+	createAssociation(t, f, "old", roleA, connectorsTags())
+
+	deleted, err := awskit.DeleteRequestAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		connectorsTags(),
+		"",
+		[]string{"orders-connectors"},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"old"}, deleted)
+	require.Len(t, f.Associations(), 1)
+	assert.Equal(t, roleB, f.Associations()[0].RoleARN)
+}

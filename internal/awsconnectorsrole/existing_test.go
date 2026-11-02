@@ -154,6 +154,36 @@ var _ = Describe("the aws-connectors-existing-role registration", func() {
 		}, timeout).Should(Succeed())
 	})
 
+	It("deletes the association of the former ServiceAccount when the new one fails", func() {
+		const (
+			other = "arn:aws:iam::111122223333:role/connectors-5"
+			taken = "arn:aws:iam::111122223333:role/someone-else"
+		)
+		ns := newNamespace(existingPodIdentity)
+		req := connectorsRequest(existingPodIdentity, ns, existingParams(existingRoleARN))
+		Expect(existingPodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(existingPodIdentity, req)
+		// Someone else holds the new ServiceAccount, so its association fails.
+		_, err := existingPodIdentity.eks.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
+			ClusterName:    aws.String(eksCluster),
+			Namespace:      aws.String(ns),
+			ServiceAccount: aws.String("orders-connectors-2"),
+			RoleArn:        aws.String(taken),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		update(existingPodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(existingParams(other))
+			r.Spec.Target.ServiceAccountName = "orders-connectors-2"
+		})
+
+		Expect(waitReason(existingPodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)).
+			To(ContainSubstring("orders-connectors-2"))
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf("orders-connectors-2=" + taken))
+		}, timeout).Should(Succeed())
+	})
+
 	It("keeps the association of another claim that uses the same role", func() {
 		ns := newNamespace(existingPodIdentity)
 		orders := connectorsRequest(existingPodIdentity, ns, existingParams(existingRoleARN))

@@ -18,6 +18,7 @@ package awsconnectorsrole
 
 import (
 	"context"
+	"errors"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -73,7 +74,9 @@ func (p *Plugin) ensureAssociations(
 		}
 	}
 	if err != nil {
-		return nil, err
+		// The former ServiceAccounts lose their access also when the
+		// association of a new one fails.
+		return nil, errors.Join(err, p.deleteAssociations(ctx, req, "", sas))
 	}
 
 	if err := p.deleteAssociations(ctx, req, roleARN, sas); err != nil {
@@ -95,8 +98,8 @@ func (p *Plugin) ensureAssociations(
 }
 
 // deleteAssociations deletes, with Pod Identity, each association of the
-// request on any role, except those of keepRoleARN for keep. With IRSA it
-// does nothing.
+// request on any role, except those of keepRoleARN for keep, or of keep on
+// any role when keepRoleARN is empty. With IRSA it does nothing.
 func (p *Plugin) deleteAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
