@@ -57,6 +57,8 @@ const (
 	policyB         = "arn:aws:iam::111122223333:policy/connectors-b"
 	policyC         = "arn:aws:iam::111122223333:policy/connectors-c"
 	existingRoleARN = "arn:aws:iam::111122223333:role/connectors"
+	// otherServiceAccount replaces orders-connectors in a request.
+	otherServiceAccount = "orders-connectors-2"
 )
 
 // connectorsSection is the section as the operator ships it.

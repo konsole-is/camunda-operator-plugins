@@ -242,7 +242,7 @@ var _ = Describe("the aws-connectors-role registration", func() {
 
 		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
 			r.Spec.Parameters = raw(managedParams("arn:aws:iam::111122223333:policy/missing"))
-			r.Spec.Target.ServiceAccountName = "orders-connectors-2"
+			r.Spec.Target.ServiceAccountName = otherServiceAccount
 		})
 
 		Expect(waitReason(rolePodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)).

@@ -146,11 +146,11 @@ var _ = Describe("the aws-connectors-existing-role registration", func() {
 
 		update(existingPodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
 			r.Spec.Parameters = raw(existingParams(other))
-			r.Spec.Target.ServiceAccountName = "orders-connectors-2"
+			r.Spec.Target.ServiceAccountName = otherServiceAccount
 		})
 
 		Eventually(func(g Gomega) {
-			g.Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf("orders-connectors-2=" + other))
+			g.Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf(otherServiceAccount + "=" + other))
 		}, timeout).Should(Succeed())
 	})
 
@@ -167,20 +167,20 @@ var _ = Describe("the aws-connectors-existing-role registration", func() {
 		_, err := existingPodIdentity.eks.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
 			ClusterName:    aws.String(eksCluster),
 			Namespace:      aws.String(ns),
-			ServiceAccount: aws.String("orders-connectors-2"),
+			ServiceAccount: aws.String(otherServiceAccount),
 			RoleArn:        aws.String(taken),
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		update(existingPodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
 			r.Spec.Parameters = raw(existingParams(other))
-			r.Spec.Target.ServiceAccountName = "orders-connectors-2"
+			r.Spec.Target.ServiceAccountName = otherServiceAccount
 		})
 
 		Expect(waitReason(existingPodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)).
-			To(ContainSubstring("orders-connectors-2"))
+			To(ContainSubstring(otherServiceAccount))
 		Eventually(func(g Gomega) {
-			g.Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf("orders-connectors-2=" + taken))
+			g.Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf(otherServiceAccount + "=" + taken))
 		}, timeout).Should(Succeed())
 	})
 
