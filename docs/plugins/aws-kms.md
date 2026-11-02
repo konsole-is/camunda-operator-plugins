@@ -108,7 +108,7 @@ When you change a policy value, the plugin writes the new key policy on each key
 | --- | --- | --- |
 | `region` | `""` | The AWS region of the keys. Empty takes the region of the pod, such as `AWS_REGION`. The controller does not start without a region. |
 | `aliasPrefix` | `camunda` | The prefix of each alias, after `alias/`. 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `/`, `_`, and `-`, not `aws`, not starting with `aws/` or `alias/`, and not starting or ending with `/`. The registrations show it as a limit. |
-| `extraTags` | `{}` | Tags for each key and each replica, such as a cost center. At most 46, because a key also carries four `camunda.io/` tags. A key must not start with `aws:` or `camunda.io/`. A value must not hold a comma. |
+| `extraTags` | `{}` | Tags for each key and each replica, such as a cost center. At most 46, because a key also carries four `camunda.io/` tags. A key must not start with `aws:` or `camunda.io/`, and must not hold a `=`. A value must not hold a comma. |
 | `keyAdministratorArns` | `[]` | The IAM principals that administer each key. See [Key policy](#key-policy). |
 | `csiDriverRoleArn` | `""` | The IAM role of the EBS CSI driver. See [Key policy](#key-policy). |
 | `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |

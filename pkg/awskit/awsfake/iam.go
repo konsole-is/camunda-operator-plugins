@@ -51,6 +51,7 @@ type IAM struct {
 	roles    map[string]*Role
 	policies map[string]bool
 	fail     failures
+	byRole   map[string][]string
 }
 
 // Role is a role of the fake, with its documents decoded.
@@ -131,6 +132,25 @@ func (f *IAM) Calls() []string {
 	return slices.Clone(f.fail.calls)
 }
 
+// RoleCalls returns the names of the operations called on the role name, in
+// call order.
+func (f *IAM) RoleCalls(name string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.byRole[name])
+}
+
+// call records a call of operation on role and returns the error that
+// FailNext set for it.
+func (f *IAM) call(operation string, role *string) error {
+	if f.byRole == nil {
+		f.byRole = map[string][]string{}
+	}
+	name := aws.ToString(role)
+	f.byRole[name] = append(f.byRole[name], operation)
+	return f.fail.call(operation)
+}
+
 func (f *IAM) role(name *string) (*Role, error) {
 	r, ok := f.roles[aws.ToString(name)]
 	if !ok {
@@ -151,7 +171,7 @@ func (f *IAM) arn(kind, name string) string {
 func (f *IAM) GetRole(_ context.Context, in *iam.GetRoleInput, _ ...func(*iam.Options)) (*iam.GetRoleOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("GetRole"); err != nil {
+	if err := f.call("GetRole", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -186,7 +206,7 @@ func (f *IAM) CreateRole(
 ) (*iam.CreateRoleOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("CreateRole"); err != nil {
+	if err := f.call("CreateRole", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -224,7 +244,7 @@ func (f *IAM) UpdateAssumeRolePolicy(
 ) (*iam.UpdateAssumeRolePolicyOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("UpdateAssumeRolePolicy"); err != nil {
+	if err := f.call("UpdateAssumeRolePolicy", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -245,7 +265,7 @@ func (f *IAM) PutRolePermissionsBoundary(
 ) (*iam.PutRolePermissionsBoundaryOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("PutRolePermissionsBoundary"); err != nil {
+	if err := f.call("PutRolePermissionsBoundary", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -262,7 +282,7 @@ func (f *IAM) PutRolePermissionsBoundary(
 func (f *IAM) TagRole(_ context.Context, in *iam.TagRoleInput, _ ...func(*iam.Options)) (*iam.TagRoleOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("TagRole"); err != nil {
+	if err := f.call("TagRole", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -286,7 +306,7 @@ func (f *IAM) DeleteRole(
 ) (*iam.DeleteRoleOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("DeleteRole"); err != nil {
+	if err := f.call("DeleteRole", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -313,7 +333,7 @@ func (f *IAM) PutRolePolicy(
 ) (*iam.PutRolePolicyOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("PutRolePolicy"); err != nil {
+	if err := f.call("PutRolePolicy", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -354,7 +374,7 @@ func (f *IAM) GetRolePolicy(
 ) (*iam.GetRolePolicyOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("GetRolePolicy"); err != nil {
+	if err := f.call("GetRolePolicy", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -388,7 +408,7 @@ func (f *IAM) ListRolePolicies(
 ) (*iam.ListRolePoliciesOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("ListRolePolicies"); err != nil {
+	if err := f.call("ListRolePolicies", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -412,7 +432,7 @@ func (f *IAM) DeleteRolePolicy(
 ) (*iam.DeleteRolePolicyOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("DeleteRolePolicy"); err != nil {
+	if err := f.call("DeleteRolePolicy", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -439,7 +459,7 @@ func (f *IAM) ListAttachedRolePolicies(
 ) (*iam.ListAttachedRolePoliciesOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("ListAttachedRolePolicies"); err != nil {
+	if err := f.call("ListAttachedRolePolicies", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -468,7 +488,7 @@ func (f *IAM) AttachRolePolicy(
 ) (*iam.AttachRolePolicyOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("AttachRolePolicy"); err != nil {
+	if err := f.call("AttachRolePolicy", in.RoleName); err != nil {
 		return nil, err
 	}
 
@@ -496,7 +516,7 @@ func (f *IAM) DetachRolePolicy(
 ) (*iam.DetachRolePolicyOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail.call("DetachRolePolicy"); err != nil {
+	if err := f.call("DetachRolePolicy", in.RoleName); err != nil {
 		return nil, err
 	}
 

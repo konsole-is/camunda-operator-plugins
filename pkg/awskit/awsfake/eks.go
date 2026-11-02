@@ -91,9 +91,14 @@ func (f *EKS) find(cluster, id *string) (*Association, error) {
 	return nil, apiError("ResourceNotFoundException", "The association %s was not found.", aws.ToString(id))
 }
 
+func (a *Association) arn() string {
+	return "arn:aws:eks:eu-west-1:111122223333:podidentityassociation/" + a.Cluster + "/" + a.ID
+}
+
 func (a *Association) describe() *types.PodIdentityAssociation {
 	return &types.PodIdentityAssociation{
 		AssociationId:  aws.String(a.ID),
+		AssociationArn: aws.String(a.arn()),
 		ClusterName:    aws.String(a.Cluster),
 		Namespace:      aws.String(a.Namespace),
 		ServiceAccount: aws.String(a.ServiceAccount),
@@ -244,4 +249,29 @@ func (f *EKS) DeletePodIdentityAssociation(
 
 	f.associations = slices.DeleteFunc(f.associations, func(o *Association) bool { return o == a })
 	return &eks.DeletePodIdentityAssociationOutput{Association: a.describe()}, nil
+}
+
+// TagResource adds tags to the association of an ARN, and replaces the value
+// of a tag it has.
+func (f *EKS) TagResource(
+	_ context.Context,
+	in *eks.TagResourceInput,
+	_ ...func(*eks.Options),
+) (*eks.TagResourceOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.fail.call("TagResource"); err != nil {
+		return nil, err
+	}
+
+	for _, a := range f.associations {
+		if a.arn() == aws.ToString(in.ResourceArn) {
+			if a.Tags == nil {
+				a.Tags = map[string]string{}
+			}
+			maps.Copy(a.Tags, in.Tags)
+			return &eks.TagResourceOutput{}, nil
+		}
+	}
+	return nil, apiError("ResourceNotFoundException", "The resource %s was not found.", aws.ToString(in.ResourceArn))
 }
