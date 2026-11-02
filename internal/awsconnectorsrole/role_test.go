@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	eventsv1 "k8s.io/api/events/v1"
@@ -246,6 +248,27 @@ var _ = Describe("the aws-connectors-role registration", func() {
 		Expect(waitReason(rolePodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)).
 			To(ContainSubstring("policy/missing"))
 		Expect(associationsIn(rolePodIdentity, ns)).To(BeEmpty())
+	})
+
+	It("attaches a policy again that was detached in AWS, after the resync", func() {
+		ns := newNamespace(rolePodIdentity)
+		req := connectorsRequest(rolePodIdentity, ns, managedParams(policyA))
+		Expect(rolePodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(rolePodIdentity, req)
+		name := rolePodIdentity.roleName(ns)
+		settledRoleCalls(rolePodIdentity, name)
+
+		_, err := rolePodIdentity.iam.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+			RoleName:  aws.String(name),
+			PolicyArn: aws.String(policyA),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			iamRole, ok := rolePodIdentity.iam.Role(name)
+			g.Expect(ok).To(BeTrue())
+			g.Expect(iamRole.Attached).To(ContainElement(policyA))
+		}, timeout).Should(Succeed())
 	})
 
 	It("keeps the resourceVersion of a Ready request while nothing changes", func() {

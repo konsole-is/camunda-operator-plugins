@@ -37,6 +37,12 @@ oidcProviderArn: ""
 # podIdentity needs it.
 eksClusterName: ""
 
+# resync is the time after which the controller reconciles each request
+# again, and repairs a role, a policy, or an association that was changed
+# outside the cluster.
+# 0 turns the resync off.
+resync: 1h
+
 serviceAccount:
   # annotations of the ServiceAccount of the controller, for example the
   # IRSA annotation of the role that the controller itself runs as.

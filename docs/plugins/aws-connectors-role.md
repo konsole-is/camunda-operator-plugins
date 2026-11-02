@@ -140,6 +140,7 @@ With only `aws-connectors-existing-role`, the controller needs `sts:GetCallerIde
 | `extraTags` | `{}` | Tags that go on each role and association, next to the tags of the request, for example `cost-center: platform`. A key cannot start with `aws:` or `camunda.io/`. |
 | `oidcProviderArn` | `""` | Required with IRSA. The IAM OIDC provider of the EKS cluster. |
 | `eksClusterName` | `""` | Required with Pod Identity. The EKS cluster of the associations. |
+| `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It repairs a role, a policy, or an association that someone changed in AWS. A Go duration such as `30m`. `0` turns it off, and then a change in AWS stays until something else reconciles the request. |
 | `region` | `""` | The AWS region. Empty takes the region of the pod, such as `AWS_REGION`. With Pod Identity the controller needs a region, because the role names include it. |
 | `serviceAccount.annotations` | `{}` | The annotations of the ServiceAccount of the controller, for example `eks.amazonaws.com/role-arn` of the controller role. |
 | `registrations` | `aws-connectors-existing-role` and `aws-connectors-role` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and fields of a registration spec, merged over the defaults of the chart. Remove an item to offer only the other option. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |

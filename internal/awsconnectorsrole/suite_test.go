@@ -20,6 +20,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -172,6 +173,9 @@ func newConnectors(
 		EKSClusterName:     eksCluster,
 		Region:             region,
 		Clients:            awskit.Clients{IAM: h.iam, EKS: h.eks, STS: awsfake.NewSTS()},
+	}
+	if registration == awsconnectorsrole.RegistrationRole && mode == awskit.ModePodIdentity {
+		opts.Resync = 2 * time.Second
 	}
 	if registration == awsconnectorsrole.RegistrationRole {
 		opts.RoleNamePrefix = rolePrefix

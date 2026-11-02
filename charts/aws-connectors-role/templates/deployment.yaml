@@ -43,6 +43,7 @@ spec:
             - {{ printf "-extra-tags=%s" (include "aws-connectors-role.extraTags" .) | quote }}
             - -oidc-provider-arn={{ .Values.oidcProviderArn }}
             - -eks-cluster-name={{ .Values.eksClusterName }}
+            - -resync={{ .Values.resync }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
