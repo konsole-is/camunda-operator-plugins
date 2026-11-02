@@ -32,7 +32,7 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          version: v4.3.0
+          version: v4.3.1
 
       # Each plugin has a chart, each chart grants serve on its own
       # registrations only, and no chart ships an admission policy.
