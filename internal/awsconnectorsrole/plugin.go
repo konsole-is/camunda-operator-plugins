@@ -119,8 +119,9 @@ func (p *Plugin) Reconcile(
 }
 
 // Delete deletes the associations of the request, and the role of a
-// RegistrationRole request with its policies. It never deletes the role of a
-// RegistrationExistingRole request. An object that is gone is not an error.
+// RegistrationRole request with its inline policies and policy attachments.
+// It never deletes the role of a RegistrationExistingRole request. An object
+// that is gone is not an error.
 func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	switch r := req.Object.Spec.Registration; r {
 	case RegistrationRole:
