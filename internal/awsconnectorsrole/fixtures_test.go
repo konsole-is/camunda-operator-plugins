@@ -240,6 +240,19 @@ func waitReady(c *connectors, request *pluginsv1alpha1.PluginRequest) *pluginsv1
 	return got
 }
 
+// settledRoleCalls waits until no IAM call on the role name of c comes for one
+// second, and returns the number of calls on it.
+func settledRoleCalls(c *connectors, name string) int {
+	GinkgoHelper()
+	n := -1
+	Eventually(func(g Gomega) {
+		calls := len(c.iam.RoleCalls(name))
+		g.Consistently(func() int { return len(c.iam.RoleCalls(name)) }, time.Second).Should(Equal(calls))
+		n = calls
+	}, timeout).Should(Succeed())
+	return n
+}
+
 // waitReason waits until the condition conditionType of request of c has
 // reason, and returns its message.
 func waitReason(c *connectors, request *pluginsv1alpha1.PluginRequest, conditionType, reason string) string {

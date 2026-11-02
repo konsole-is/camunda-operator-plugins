@@ -110,11 +110,12 @@ var _ = Describe("the deletion of a request", func() {
 		req.Spec.DeletionPolicy = pluginsv1alpha1.DeletionPolicyOrphan
 		Expect(role.k8s.Create(ctx, req)).To(Succeed())
 		waitReady(role, req)
-		before := len(iamCallsBut(role, "GetPolicy"))
+		// The write of Ready starts one more reconcile of the request.
+		before := settledRoleCalls(role, role.roleName(ns))
 
 		waitGone(role, req)
 
-		Expect(iamCallsBut(role, "GetPolicy")[before:]).To(BeEmpty())
+		Expect(role.iam.RoleCalls(role.roleName(ns))[before:]).To(BeEmpty())
 	})
 
 	It("releases the request when its role is already gone", func() {
