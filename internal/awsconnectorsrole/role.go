@@ -59,6 +59,11 @@ func (p *Plugin) reconcileRole(
 		return pluginkit.Result{}, err
 	}
 
+	// A former ServiceAccount loses its access before a policy step can fail.
+	if err := p.deleteAssociations(ctx, req, "", sas); err != nil {
+		return pluginkit.Result{}, err
+	}
+
 	if err := p.ensureInlinePolicy(ctx, req, role, doc); err != nil {
 		return pluginkit.Result{}, err
 	}

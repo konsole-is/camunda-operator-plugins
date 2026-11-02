@@ -30,6 +30,7 @@ import (
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 // sqsPolicy is an inline policy with the placeholders of a Connectors role.
@@ -229,6 +230,22 @@ var _ = Describe("the aws-connectors-role registration", func() {
 			HaveField("Name", "orders-connectors"),
 			HaveField("OnOrphan", pluginsv1alpha1.OnOrphanDeleted),
 		)))
+	})
+
+	It("deletes the association of a former ServiceAccount when a policy fails to attach", func() {
+		ns := newNamespace(rolePodIdentity)
+		req := connectorsRequest(rolePodIdentity, ns, managedParams(policyA))
+		Expect(rolePodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(rolePodIdentity, req)
+
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(managedParams("arn:aws:iam::111122223333:policy/missing"))
+			r.Spec.Target.ServiceAccountName = "orders-connectors-2"
+		})
+
+		Expect(waitReason(rolePodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)).
+			To(ContainSubstring("policy/missing"))
+		Expect(associationsIn(rolePodIdentity, ns)).To(BeEmpty())
 	})
 
 	It("keeps the resourceVersion of a Ready request while nothing changes", func() {
