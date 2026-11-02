@@ -43,9 +43,10 @@ type AssociationChange struct {
 // ServiceAccount. It uses an existing association only when the association
 // carries the TagNamespace, TagClaim, and TagRequest values of tags, and else
 // refuses with an error that names the ServiceAccount and the role of the
-// association. It deletes each association of roleARN in namespace whose
-// ServiceAccount is not in serviceAccounts and that carries those values, so
-// the associations of another request of the same role stay.
+// association. Before it creates one, it deletes each association in
+// namespace, on any role, whose ServiceAccount is not in serviceAccounts and
+// that carries those values, so a ServiceAccount that left loses its access
+// also when a later call fails.
 func EnsureAssociations(
 	ctx context.Context,
 	c EKS,
@@ -61,7 +62,7 @@ func EnsureAssociations(
 	}
 
 	for _, a := range live {
-		if a.RoleARN != roleARN || !a.ownedBy(tags) || slices.Contains(serviceAccounts, a.ServiceAccount) {
+		if !a.ownedBy(tags) || slices.Contains(serviceAccounts, a.ServiceAccount) {
 			continue
 		}
 		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {
@@ -167,9 +168,8 @@ func DeleteAssociations(
 
 // DeleteRequestAssociations deletes each association in namespace of the EKS
 // cluster that carries the TagNamespace, TagClaim, and TagRequest values of
-// tags, on any role, except an association of keepRoleARN whose
-// ServiceAccount is in keep. An empty keepRoleARN keeps the associations of
-// keep on any role. It returns the ServiceAccounts of the deleted
+// tags, on any role, except the associations of the ServiceAccounts in keep.
+// It returns the ServiceAccounts of the deleted
 // associations, sorted. It finds an association that a failed or interrupted
 // change of the role left behind.
 func DeleteRequestAssociations(
@@ -177,7 +177,6 @@ func DeleteRequestAssociations(
 	c EKS,
 	cluster, namespace string,
 	tags map[string]string,
-	keepRoleARN string,
 	keep []string,
 ) ([]string, error) {
 	live, err := associations(ctx, c, cluster, namespace)
@@ -187,8 +186,7 @@ func DeleteRequestAssociations(
 
 	var deleted []string
 	for _, a := range live {
-		if !a.ownedBy(tags) ||
-			(slices.Contains(keep, a.ServiceAccount) && (keepRoleARN == "" || a.RoleARN == keepRoleARN)) {
+		if !a.ownedBy(tags) || slices.Contains(keep, a.ServiceAccount) {
 			continue
 		}
 		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {

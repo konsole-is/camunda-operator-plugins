@@ -303,7 +303,6 @@ func (p *Plugin) ensureAssociations(
 		{eventReasonAssociationCreated, eventActionCreate, "Created", change.Created},
 		{eventReasonAssociationUpdated, eventActionUpdate, "Moved", change.Updated},
 		{eventReasonAssociationUpdated, eventActionUpdate, "Tagged", change.Tagged},
-		{eventReasonAssociationDeleted, eventActionDelete, "Deleted", change.Deleted},
 	} {
 		for _, sa := range e.names {
 			req.Event(
@@ -316,6 +315,15 @@ func (p *Plugin) ensureAssociations(
 				role.Name,
 			)
 		}
+	}
+	for _, sa := range change.Deleted {
+		req.Event(
+			corev1.EventTypeNormal,
+			eventReasonAssociationDeleted,
+			eventActionDelete,
+			"Deleted the Pod Identity association of the ServiceAccount %s",
+			sa,
+		)
 	}
 
 	return associations, err

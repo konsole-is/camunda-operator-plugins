@@ -18,7 +18,6 @@ package awsconnectorsrole
 
 import (
 	"context"
-	"errors"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -59,7 +58,6 @@ func (p *Plugin) ensureAssociations(
 		{eventReasonAssociationCreated, eventActionCreate, "Created", change.Created},
 		{eventReasonAssociationUpdated, eventActionUpdate, "Moved", change.Updated},
 		{eventReasonAssociationUpdated, eventActionUpdate, "Tagged", change.Tagged},
-		{eventReasonAssociationDeleted, eventActionDelete, "Deleted", change.Deleted},
 	} {
 		for _, sa := range e.names {
 			req.Event(
@@ -73,13 +71,8 @@ func (p *Plugin) ensureAssociations(
 			)
 		}
 	}
+	p.associationsDeleted(req, change.Deleted)
 	if err != nil {
-		// The former ServiceAccounts lose their access also when the
-		// association of a new one fails.
-		return nil, errors.Join(err, p.deleteAssociations(ctx, req, "", sas))
-	}
-
-	if err := p.deleteAssociations(ctx, req, roleARN, sas); err != nil {
 		return nil, err
 	}
 
@@ -98,12 +91,11 @@ func (p *Plugin) ensureAssociations(
 }
 
 // deleteAssociations deletes, with Pod Identity, each association of the
-// request on any role, except those of keepRoleARN for keep, or of keep on
-// any role when keepRoleARN is empty. With IRSA it does nothing.
+// request on any role, except those of the ServiceAccounts in keep. With IRSA
+// it does nothing.
 func (p *Plugin) deleteAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
-	keepRoleARN string,
 	keep []string,
 ) error {
 	if p.mode != awskit.ModePodIdentity {
@@ -117,10 +109,16 @@ func (p *Plugin) deleteAssociations(
 		p.eksCluster,
 		request.Namespace,
 		p.tags(request),
-		keepRoleARN,
 		keep,
 	)
-	for _, sa := range deleted {
+	p.associationsDeleted(req, deleted)
+	return err
+}
+
+// associationsDeleted records an event for each ServiceAccount in sas whose
+// association was deleted.
+func (p *Plugin) associationsDeleted(req pluginkit.Request[Params, map[string]string], sas []string) {
+	for _, sa := range sas {
 		req.Event(
 			corev1.EventTypeNormal,
 			eventReasonAssociationDeleted,
@@ -129,5 +127,4 @@ func (p *Plugin) deleteAssociations(
 			sa,
 		)
 	}
-	return err
 }
