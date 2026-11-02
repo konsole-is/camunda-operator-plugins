@@ -20,6 +20,8 @@ For each request, the plugin creates one IAM role:
 
 When a ServiceAccount leaves the request, the plugin removes it from the trust policy, and with Pod Identity it deletes its association. The plugin deletes only an association that carries the tags of the request. It keeps an association that someone made by hand for the role. It does not use an association of one of its ServiceAccounts that it did not create, and the request reports the error.
 
+AWS cannot take back credentials that it already issued. A pod of a former ServiceAccount keeps the credentials that it has until they expire, also after the plugin changed the trust policy or deleted the association. To end them sooner, revoke the active sessions of the role in the IAM console. That also denies the current sessions of the ServiceAccounts that still use the role, until their pods get new credentials.
+
 The plugin also writes:
 
 - One PluginRegistration for each item of the chart value `registrations`.

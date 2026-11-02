@@ -34,6 +34,8 @@ The plugin owns every managed policy attachment of the role. On each reconcile, 
 
 For each request of `aws-connectors-existing-role`, the plugin creates nothing in IAM. With Pod Identity, it creates one association of `<claim>-connectors` to the role of `roleArn`.
 
+When `spec.target.serviceAccountName` changes, the role trusts the new ServiceAccount only, and with Pod Identity the association of the former one goes. AWS cannot take back credentials that it already issued. A pod of a former ServiceAccount keeps the credentials that it has until they expire, also after the plugin changed the trust policy or deleted the association. To end them sooner, revoke the active sessions of the role in the IAM console. That also denies the current sessions of the ServiceAccounts that still use the role, until their pods get new credentials.
+
 The plugin also writes:
 
 - One PluginRegistration for each item of the chart value `registrations`.
