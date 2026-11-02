@@ -34,7 +34,7 @@ extraTags of the values as key=value items, sorted by key, joined by ",".
 {{- define "aws-connectors-role.extraTags" -}}
 {{- $items := list }}
 {{- range $key, $value := .Values.extraTags }}
-{{- $items = append $items (printf "%s=%s" $key $value) }}
+{{- $items = append $items (printf "%s=%v" $key $value) }}
 {{- end }}
 {{- join "," $items -}}
 {{- end -}}
