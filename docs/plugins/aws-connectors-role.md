@@ -139,7 +139,7 @@ With only `aws-connectors-existing-role`, the controller needs `sts:GetCallerIde
 | `mode` | `irsa` | `irsa` or `podIdentity`. The chart refuses another value. |
 | `roleNamePrefix` | `camunda-connectors` | The start of the name of each role of `aws-connectors-role`, at most 47 characters of `A-Z`, `a-z`, `0-9`, and `+=,.@_-`. It must differ from the role name prefix of aws-identity, `camunda` by default. Else both plugins write the same role for one claim. The controller refuses `camunda`. |
 | `permissionsBoundaryArn` | `""` | Required for `aws-connectors-role`. The managed policy that bounds each role. The registration shows it as a limit. |
-| `extraTags` | `{}` | Tags that go on each role and association, next to the tags of the request, for example `cost-center: platform`. A key cannot start with `aws:` or `camunda.io/`. |
+| `extraTags` | `{}` | Tags that go on each role and association, next to the tags of the request, for example `cost-center: platform`. A key cannot start with `aws:` or `camunda.io/`, and cannot hold a `=`. |
 | `oidcProviderArn` | `""` | Required with IRSA. The IAM OIDC provider of the EKS cluster. |
 | `eksClusterName` | `""` | Required with Pod Identity. The EKS cluster of the associations. |
 | `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It repairs a role, a policy, or an association that someone changed in AWS. A Go duration such as `30m`. `0` turns it off, and then a change in AWS stays until something else reconciles the request. |
