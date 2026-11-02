@@ -126,7 +126,7 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 	case RegistrationRole:
 		return p.deleteRole(ctx, req)
 	case RegistrationExistingRole:
-		return p.deleteAssociations(ctx, req, nil)
+		return p.deleteAssociations(ctx, req)
 	default:
 		return fmt.Errorf("the plugin does not serve the registration %q", r)
 	}
@@ -135,7 +135,7 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 // Orphan keeps the role and its policies. With Pod Identity it deletes the
 // associations of the request, because they name its namespace.
 func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
-	return p.deleteAssociations(ctx, req, nil)
+	return p.deleteAssociations(ctx, req)
 }
 
 // tags returns the tags of each AWS object of request.

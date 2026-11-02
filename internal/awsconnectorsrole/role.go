@@ -19,7 +19,6 @@ package awsconnectorsrole
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -60,11 +59,11 @@ func (p *Plugin) reconcileRole(
 		return pluginkit.Result{}, err
 	}
 
-	// A former ServiceAccount loses its access before a policy step can fail.
-	if listsOtherAssociation(request, sas) {
-		if err := p.deleteAssociations(ctx, req, sas); err != nil {
-			return pluginkit.Result{}, err
-		}
+	// Like the trust policy of IRSA, so that a former ServiceAccount loses its
+	// access before a policy step can fail.
+	associations, err := p.ensureAssociations(ctx, req, sas, role.ARN)
+	if err != nil {
+		return pluginkit.Result{}, err
 	}
 
 	if err := p.ensureInlinePolicy(ctx, req, role, doc); err != nil {
@@ -73,11 +72,6 @@ func (p *Plugin) reconcileRole(
 
 	wanted := wantedPolicies(req.Parameters)
 	if err := p.ensureAttachedPolicies(ctx, req, role, wanted); err != nil {
-		return pluginkit.Result{}, err
-	}
-
-	associations, err := p.ensureAssociations(ctx, req, sas, role.ARN)
-	if err != nil {
 		return pluginkit.Result{}, err
 	}
 	resources := append([]pluginsv1alpha1.ResourceRef{{
@@ -119,7 +113,7 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 		}
 	}
 
-	if err := p.deleteAssociations(ctx, req, nil); err != nil {
+	if err := p.deleteAssociations(ctx, req); err != nil {
 		return pluginkit.Result{}, err
 	}
 	return pluginkit.Result{Pending: missingServiceAccount()}, nil
@@ -287,7 +281,7 @@ func (p *Plugin) ensureAttachedPolicies(
 // deleteRole deletes the associations of req, and the role of its claim with
 // its policies.
 func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
-	if err := p.deleteAssociations(ctx, req, nil); err != nil {
+	if err := p.deleteAssociations(ctx, req); err != nil {
 		return err
 	}
 
@@ -307,17 +301,6 @@ func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, m
 		)
 	}
 	return nil
-}
-
-// listsOtherAssociation reports whether the status of request lists the
-// association of a ServiceAccount that is not in sas.
-func listsOtherAssociation(request *pluginsv1alpha1.PluginRequest, sas []string) bool {
-	for _, r := range request.Status.Resources {
-		if r.Kind == kindPodIdentityAssociation && !slices.Contains(sas, r.Name) {
-			return true
-		}
-	}
-	return false
 }
 
 // liveRoleARN returns the ARN of the role name, or "" when it does not exist.

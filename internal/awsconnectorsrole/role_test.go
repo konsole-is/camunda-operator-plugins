@@ -247,7 +247,32 @@ var _ = Describe("the aws-connectors-role registration", func() {
 
 		Expect(waitReason(rolePodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)).
 			To(ContainSubstring("policy/missing"))
-		Expect(associationsIn(rolePodIdentity, ns)).To(BeEmpty())
+		Expect(associationsIn(rolePodIdentity, ns)).To(ConsistOf(HavePrefix(otherServiceAccount + "=")))
+	})
+
+	It("deletes the association of a former ServiceAccount after a refused inline policy", func() {
+		ns := newNamespace(rolePodIdentity)
+		req := connectorsRequest(rolePodIdentity, ns, managedParams(policyA))
+		Expect(rolePodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(rolePodIdentity, req)
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(`{"managedPolicyArns":["` + policyA + `"],"inlinePolicy":{"Version":"2012-10-17",` +
+				`"Statement":[{"Sid":"` + strings.Repeat("a", 10300) + `","Effect":"Allow","Action":"sqs:SendMessage",` +
+				`"Resource":"*"}]}}`)
+		})
+		waitReason(rolePodIdentity, req, v1.ConditionReady, pluginsv1alpha1.ReasonInvalidParameters)
+
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(
+				`{"managedPolicyArns":["` + policyA + `","arn:aws:iam::111122223333:policy/missing"]}`,
+			)
+			r.Spec.Target.ServiceAccountName = otherServiceAccount
+		})
+
+		waitReason(rolePodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(rolePodIdentity, ns)).NotTo(ContainElement(HavePrefix("orders-connectors=")))
+		}, timeout).Should(Succeed())
 	})
 
 	It("attaches a policy again that was detached in AWS, after the resync", func() {

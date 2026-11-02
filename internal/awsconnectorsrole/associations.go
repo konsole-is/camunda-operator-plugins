@@ -91,13 +91,8 @@ func (p *Plugin) ensureAssociations(
 }
 
 // deleteAssociations deletes, with Pod Identity, each association of the
-// request on any role, except those of the ServiceAccounts in keep. With IRSA
-// it does nothing.
-func (p *Plugin) deleteAssociations(
-	ctx context.Context,
-	req pluginkit.Request[Params, map[string]string],
-	keep []string,
-) error {
+// request on any role. With IRSA it does nothing.
+func (p *Plugin) deleteAssociations(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	if p.mode != awskit.ModePodIdentity {
 		return nil
 	}
@@ -109,7 +104,7 @@ func (p *Plugin) deleteAssociations(
 		p.eksCluster,
 		request.Namespace,
 		p.tags(request),
-		keep,
+		nil,
 	)
 	p.associationsDeleted(req, deleted)
 	return err
