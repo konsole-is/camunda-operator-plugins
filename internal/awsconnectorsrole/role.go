@@ -17,7 +17,6 @@ limitations under the License.
 package awsconnectorsrole
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -95,8 +94,8 @@ func (p *Plugin) reconcileRole(
 }
 
 // reconcileRoleWithoutServiceAccount makes the role of the claim of req, when
-// it exists, trust nobody, and deletes the associations of the claim to it.
-// It creates no role.
+// it exists, trust nobody, and deletes the associations of the request. It
+// creates no role.
 func (p *Plugin) reconcileRoleWithoutServiceAccount(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -112,7 +111,7 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 		}
 	}
 
-	if err := p.deleteOwnedAssociations(ctx, req); err != nil {
+	if err := p.deleteAssociations(ctx, req, "", nil); err != nil {
 		return pluginkit.Result{}, err
 	}
 	return pluginkit.Result{Pending: missingServiceAccount()}, nil
@@ -277,10 +276,10 @@ func (p *Plugin) ensureAttachedPolicies(
 	return err
 }
 
-// deleteRole deletes the associations of the role of the claim of req, its
-// policies, and the role.
+// deleteRole deletes the associations of req, and the role of its claim with
+// its policies.
 func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
-	if err := p.deleteOwnedAssociations(ctx, req); err != nil {
+	if err := p.deleteAssociations(ctx, req, "", nil); err != nil {
 		return err
 	}
 
@@ -300,34 +299,6 @@ func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, m
 		)
 	}
 	return nil
-}
-
-// deleteOwnedAssociations deletes, with Pod Identity, the associations of the
-// claim of req to its role. With IRSA it makes no AWS call.
-func (p *Plugin) deleteOwnedAssociations(
-	ctx context.Context,
-	req pluginkit.Request[Params, map[string]string],
-) error {
-	if p.mode != awskit.ModePodIdentity {
-		return nil
-	}
-
-	arn, err := p.ownedRoleARN(ctx, req)
-	if err != nil {
-		return err
-	}
-	return p.deleteAssociations(ctx, req, arn)
-}
-
-// ownedRoleARN returns the ARN of the role of the claim of req. When the
-// role is gone, it returns the principal output, because the associations of
-// a role that someone deleted by hand stay, or "" when there is none.
-func (p *Plugin) ownedRoleARN(ctx context.Context, req pluginkit.Request[Params, map[string]string]) (string, error) {
-	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
-	if err != nil {
-		return "", err
-	}
-	return cmp.Or(arn, req.Object.Status.Outputs[awskit.OutputPrincipal]), nil
 }
 
 // liveRoleARN returns the ARN of the role name, or "" when it does not exist.

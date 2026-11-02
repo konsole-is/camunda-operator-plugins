@@ -149,6 +149,41 @@ func DeleteAssociations(
 	return deleted, nil
 }
 
+// DeleteRequestAssociations deletes each association in namespace of the EKS
+// cluster that carries the TagNamespace, TagClaim, and TagRequest values of
+// tags, on any role, except an association of keepRoleARN whose
+// ServiceAccount is in keep. It returns the ServiceAccounts of the deleted
+// associations, sorted. It finds an association that a failed or interrupted
+// change of the role left behind.
+func DeleteRequestAssociations(
+	ctx context.Context,
+	c EKS,
+	cluster, namespace string,
+	tags map[string]string,
+	keepRoleARN string,
+	keep []string,
+) ([]string, error) {
+	live, err := associations(ctx, c, cluster, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	var deleted []string
+	for _, a := range live {
+		if !a.ownedBy(tags) || a.tags[TagRequest] != tags[TagRequest] ||
+			(a.RoleARN == keepRoleARN && slices.Contains(keep, a.ServiceAccount)) {
+			continue
+		}
+		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {
+			return nil, err
+		}
+		deleted = append(deleted, a.ServiceAccount)
+	}
+
+	slices.Sort(deleted)
+	return deleted, nil
+}
+
 type liveAssociation struct {
 	Association
 	tags map[string]string

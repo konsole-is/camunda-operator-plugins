@@ -28,8 +28,9 @@ import (
 )
 
 // ensureAssociations keeps, with Pod Identity, one association of roleARN
-// for each of sas, records an event for each change, and returns the
-// resources of the associations. With IRSA it does nothing.
+// for each of sas, deletes each other association of the request, records an
+// event for each change, and returns the resources of the associations. With
+// IRSA it does nothing.
 func (p *Plugin) ensureAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -74,6 +75,10 @@ func (p *Plugin) ensureAssociations(
 		return nil, err
 	}
 
+	if err := p.deleteAssociations(ctx, req, roleARN, sas); err != nil {
+		return nil, err
+	}
+
 	resources := make([]pluginsv1alpha1.ResourceRef, 0, len(associations))
 	for _, a := range associations {
 		resources = append(resources, pluginsv1alpha1.ResourceRef{
@@ -88,26 +93,28 @@ func (p *Plugin) ensureAssociations(
 	return resources, nil
 }
 
-// deleteAssociations deletes, with Pod Identity, the associations of roleARN
-// that carry the tags of the claim of req. An empty roleARN or IRSA deletes
-// nothing.
+// deleteAssociations deletes, with Pod Identity, each association of the
+// request on any role, except those of keepRoleARN for keep. With IRSA it
+// does nothing.
 func (p *Plugin) deleteAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
-	roleARN string,
+	keepRoleARN string,
+	keep []string,
 ) error {
-	if p.mode != awskit.ModePodIdentity || roleARN == "" {
+	if p.mode != awskit.ModePodIdentity {
 		return nil
 	}
 
 	request := req.Object
-	deleted, err := awskit.DeleteAssociations(
+	deleted, err := awskit.DeleteRequestAssociations(
 		ctx,
 		p.clients.EKS,
 		p.eksCluster,
 		request.Namespace,
-		roleARN,
 		p.tags(request),
+		keepRoleARN,
+		keep,
 	)
 	for _, sa := range deleted {
 		req.Event(

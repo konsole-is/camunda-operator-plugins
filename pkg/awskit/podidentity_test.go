@@ -283,3 +283,58 @@ func TestDeleteAssociationsDeletesOnlyTheAssociationsOfTheClaim(t *testing.T) {
 	require.Len(t, f.Associations(), 1)
 	assert.Equal(t, "billing-connectors", f.Associations()[0].ServiceAccount)
 }
+
+func createAssociation(t *testing.T, f *awsfake.EKS, sa, role string, tags map[string]string) {
+	_, err := f.CreatePodIdentityAssociation(context.Background(), &eks.CreatePodIdentityAssociationInput{
+		ClusterName:    aws.String("eks"),
+		Namespace:      aws.String("team-a"),
+		ServiceAccount: aws.String(sa),
+		RoleArn:        aws.String(role),
+		Tags:           tags,
+	})
+	require.NoError(t, err)
+}
+
+func TestDeleteRequestAssociationsDeletesEachAssociationOfTheRequestButTheKeptOnes(t *testing.T) {
+	f := awsfake.NewEKS()
+	f.PageSize = 1
+	request := awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
+	createAssociation(t, f, "orders-connectors", roleA, request)
+	createAssociation(t, f, "old-on-a", roleA, request)
+	createAssociation(t, f, "old-on-b", roleB, request)
+	// Another request of the same claim, such as the cloud identity.
+	createAssociation(t, f, "orders-camunda", roleB, awskit.RequestTags("team-a", "orders", "orders-identity"))
+	createAssociation(t, f, "by-hand", roleA, nil)
+
+	deleted, err := awskit.DeleteRequestAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		request,
+		roleA,
+		[]string{"orders-connectors"},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"old-on-a", "old-on-b"}, deleted)
+	sas := make([]string, 0, len(f.Associations()))
+	for _, a := range f.Associations() {
+		sas = append(sas, a.ServiceAccount)
+	}
+	assert.ElementsMatch(t, []string{"orders-connectors", "orders-camunda", "by-hand"}, sas)
+}
+
+func TestDeleteRequestAssociationsWithoutKeepDeletesEachOfTheRequest(t *testing.T) {
+	f := awsfake.NewEKS()
+	request := awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
+	createAssociation(t, f, "orders-connectors", roleA, request)
+	createAssociation(t, f, "orders-camunda", roleB, awskit.RequestTags("team-a", "orders", "orders-identity"))
+
+	deleted, err := awskit.DeleteRequestAssociations(context.Background(), f, "eks", "team-a", request, "", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"orders-connectors"}, deleted)
+	require.Len(t, f.Associations(), 1)
+	assert.Equal(t, "orders-camunda", f.Associations()[0].ServiceAccount)
+}
