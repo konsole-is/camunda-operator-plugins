@@ -111,6 +111,11 @@ type EKS interface {
 		in *eks.DeletePodIdentityAssociationInput,
 		opts ...func(*eks.Options),
 	) (*eks.DeletePodIdentityAssociationOutput, error)
+	TagResource(
+		ctx context.Context,
+		in *eks.TagResourceInput,
+		opts ...func(*eks.Options),
+	) (*eks.TagResourceOutput, error)
 }
 
 // STS is the part of the STS API that the plugins call. Each method behaves

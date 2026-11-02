@@ -263,14 +263,14 @@ The registrations offer the deletion policies `Delete` and `Orphan`.
 | `aws-connectors-role` | Deletes the association (Pod Identity), the inline policies, the managed policy attachments, and the role. | Deletes the association (Pod Identity). Keeps the role and its policies. |
 | `aws-connectors-existing-role` | Deletes the association (Pod Identity). Never deletes the role. | The same as `Delete`. |
 
-The plugin deletes only an association that carries the tags of the claim. Two claims that share one existing role keep each other's association. An orphaned role keeps its tags, so you can find it by the namespace and the claim.
+The plugin deletes only an association that carries the tags of the request. Two claims that share one existing role keep each other's association. When `roleArn` is the role of the cloud identity of the same claim, that association stays too. The plugin does not use an association of `<claim>-connectors` that it did not create, and the request reports the error. Delete that association, and the plugin creates its own. An orphaned role keeps its tags, so you can find it by the namespace and the claim.
 
 ## Troubleshooting
 
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not match the schema, `inlinePolicy` has an unknown placeholder, or the filled-in `inlinePolicy` is over 10,240 characters. The message says which. Correct the Environment or the claim. |
-| `MissingServiceAccount` | `OutputsReady` and `Ready` of the request | The request names no `spec.target.serviceAccountName`. A role that the plugin made for the request then trusts nobody, and with Pod Identity the associations of the claim go. The claim controller sets the ServiceAccount. Check the claim and the operator version. |
+| `MissingServiceAccount` | `OutputsReady` and `Ready` of the request | The request names no `spec.target.serviceAccountName`. A role that the plugin made for the request then trusts nobody, and with Pod Identity the associations of the request go. The claim controller sets the ServiceAccount. Check the claim and the operator version. |
 | `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, for example `LimitExceeded` when the role has more managed policies than its quota, or `AccessDenied` when the controller role lacks a permission above. pluginkit tries again. |
 | `DeleteFailed` | `Ready` of a deleted request | The plugin could not delete the role or an association. The message gives the AWS error. The finalizer stays, and pluginkit tries again. |
 | `Unhealthy` | `Ready` of the registration | The controller cannot call STS with its credentials, or it cannot read the permissions boundary. The message gives the error. Check the controller role and `permissionsBoundaryArn`. |

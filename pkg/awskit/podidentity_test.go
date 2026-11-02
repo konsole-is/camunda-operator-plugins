@@ -338,3 +338,95 @@ func TestDeleteRequestAssociationsWithoutKeepDeletesEachOfTheRequest(t *testing.
 	require.Len(t, f.Associations(), 1)
 	assert.Equal(t, "orders-camunda", f.Associations()[0].ServiceAccount)
 }
+
+func connectorsTags() map[string]string {
+	return awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
+}
+
+func TestEnsureAssociationsLeavesTheAssociationsOfAnotherRequestOfTheClaimOnTheRole(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-camunda")
+
+	_, change, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-connectors"},
+		roleA,
+		connectorsTags(),
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, change.Deleted)
+	assert.Len(t, f.Associations(), 2)
+}
+
+func TestEnsureAssociationsRefusesTheAssociationOfAnotherRequestOfTheClaim(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleB, "orders-connectors")
+
+	_, _, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-connectors"},
+		roleA,
+		connectorsTags(),
+	)
+
+	require.ErrorContains(t, err, "orders-connectors")
+	assert.Equal(t, roleB, f.Associations()[0].RoleARN)
+	assert.Equal(t, hubTags(), f.Associations()[0].Tags)
+}
+
+func TestEnsureAssociationsRefusesAnAssociationOfItsRoleThatTheRequestDidNotMake(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-connectors")
+
+	_, _, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-connectors"},
+		roleA,
+		connectorsTags(),
+	)
+
+	require.ErrorContains(t, err, "orders-connectors")
+	assert.Equal(t, hubTags(), f.Associations()[0].Tags)
+}
+
+func TestEnsureAssociationsTagsItsAssociationWithChangedTags(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-camunda")
+	tags := hubTags()
+	tags["cost-center"] = "1234"
+
+	_, change, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-camunda"},
+		roleA,
+		tags,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"orders-camunda"}, change.Tagged)
+	assert.Equal(t, tags, f.Associations()[0].Tags)
+}
+
+func TestDeleteAssociationsLeavesTheAssociationsOfAnotherRequestOfTheClaim(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-camunda")
+
+	deleted, err := awskit.DeleteAssociations(context.Background(), f, "eks", "team-a", roleA, connectorsTags())
+
+	require.NoError(t, err)
+	assert.Empty(t, deleted)
+	assert.Len(t, f.Associations(), 1)
+}

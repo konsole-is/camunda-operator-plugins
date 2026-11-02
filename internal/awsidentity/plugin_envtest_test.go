@@ -572,7 +572,7 @@ var _ = Describe("the AWS identity hub", func() {
 		}, timeout).Should(Succeed())
 		Eventually(func(g Gomega) {
 			ready := conditionOf(read(g, s.hub.DeepCopy()).Status.Conditions, v1.ConditionReady)
-			g.Expect(ready.Message).To(ContainSubstring("belongs to another claim"))
+			g.Expect(ready.Message).To(ContainSubstring("belongs to another request"))
 		}, timeout).Should(Succeed())
 
 		Expect(k8s.Delete(ctx, grant)).To(Succeed())

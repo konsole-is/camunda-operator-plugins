@@ -302,6 +302,7 @@ func (p *Plugin) ensureAssociations(
 	}{
 		{eventReasonAssociationCreated, eventActionCreate, "Created", change.Created},
 		{eventReasonAssociationUpdated, eventActionUpdate, "Moved", change.Updated},
+		{eventReasonAssociationUpdated, eventActionUpdate, "Tagged", change.Tagged},
 		{eventReasonAssociationDeleted, eventActionDelete, "Deleted", change.Deleted},
 	} {
 		for _, sa := range e.names {
@@ -353,7 +354,7 @@ func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[s
 }
 
 // deleteAssociations deletes the associations of the role roleName that
-// carry the tags of the claim of req, with Pod Identity. It also deletes them when the role is
+// carry the tags of req, with Pod Identity. It also deletes them when the role is
 // gone, if req has a principal output.
 func (p *Plugin) deleteAssociations(
 	ctx context.Context,

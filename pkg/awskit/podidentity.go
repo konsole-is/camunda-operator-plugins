@@ -32,21 +32,20 @@ type Association struct {
 }
 
 // AssociationChange names the ServiceAccounts whose association
-// EnsureAssociations created, moved to the role, or deleted.
+// EnsureAssociations created, moved to the role, tagged, or deleted.
 type AssociationChange struct {
-	Created, Updated, Deleted []string
+	Created, Updated, Tagged, Deleted []string
 }
 
 // EnsureAssociations makes one association of roleARN for each of
 // serviceAccounts in namespace of the EKS cluster, with tags, and returns
 // them sorted by ServiceAccount. EKS allows one association for each
-// ServiceAccount. It moves an association of another role only when the
-// association carries the TagNamespace and TagClaim values of tags, and else
-// refuses with an error that names the ServiceAccount and that role. It
-// deletes each association of roleARN in namespace whose ServiceAccount is
-// not in serviceAccounts and that carries the TagNamespace and TagClaim
-// values of tags, so the associations of another claim of the same role
-// stay.
+// ServiceAccount. It uses an existing association only when the association
+// carries the TagNamespace, TagClaim, and TagRequest values of tags, and else
+// refuses with an error that names the ServiceAccount and the role of the
+// association. It deletes each association of roleARN in namespace whose
+// ServiceAccount is not in serviceAccounts and that carries those values, so
+// the associations of another request of the same role stay.
 func EnsureAssociations(
 	ctx context.Context,
 	c EKS,
@@ -91,28 +90,45 @@ func EnsureAssociations(
 				Association{ID: aws.ToString(out.Association.AssociationId), ServiceAccount: sa, RoleARN: roleARN},
 			)
 			change.Created = append(change.Created, sa)
-		case live[i].RoleARN == roleARN:
-			result = append(result, live[i].Association)
-		case live[i].ownedBy(tags):
-			_, err := c.UpdatePodIdentityAssociation(ctx, &eks.UpdatePodIdentityAssociationInput{
-				ClusterName:   aws.String(cluster),
-				AssociationId: aws.String(live[i].ID),
-				RoleArn:       aws.String(roleARN),
-			})
-			if err != nil {
-				return nil, change, fmt.Errorf("moving the Pod Identity association of %s/%s: %w", namespace, sa, err)
-			}
-			result = append(result, Association{ID: live[i].ID, ServiceAccount: sa, RoleARN: roleARN})
-			change.Updated = append(change.Updated, sa)
-		default:
+		case !live[i].ownedBy(tags):
 			return nil, change, fmt.Errorf(
 				"the ServiceAccount %s/%s has the Pod Identity association %s for the role %s, "+
-					"which belongs to another claim",
+					"which belongs to another request",
 				namespace,
 				sa,
 				live[i].ID,
 				live[i].RoleARN,
 			)
+		default:
+			if live[i].RoleARN != roleARN {
+				_, err := c.UpdatePodIdentityAssociation(ctx, &eks.UpdatePodIdentityAssociationInput{
+					ClusterName:   aws.String(cluster),
+					AssociationId: aws.String(live[i].ID),
+					RoleArn:       aws.String(roleARN),
+				})
+				if err != nil {
+					return nil, change, fmt.Errorf(
+						"moving the Pod Identity association of %s/%s: %w",
+						namespace,
+						sa,
+						err,
+					)
+				}
+				change.Updated = append(change.Updated, sa)
+			}
+			if !hasTags(live[i].tags, tags) {
+				_, err := c.TagResource(ctx, &eks.TagResourceInput{ResourceArn: aws.String(live[i].arn), Tags: tags})
+				if err != nil {
+					return nil, change, fmt.Errorf(
+						"tagging the Pod Identity association of %s/%s: %w",
+						namespace,
+						sa,
+						err,
+					)
+				}
+				change.Tagged = append(change.Tagged, sa)
+			}
+			result = append(result, Association{ID: live[i].ID, ServiceAccount: sa, RoleARN: roleARN})
 		}
 	}
 
@@ -121,8 +137,8 @@ func EnsureAssociations(
 }
 
 // DeleteAssociations deletes each association of roleARN in namespace of the
-// EKS cluster that carries the TagNamespace and TagClaim values of tags, and
-// returns their ServiceAccounts, sorted.
+// EKS cluster that carries the TagNamespace, TagClaim, and TagRequest values
+// of tags, and returns their ServiceAccounts, sorted.
 func DeleteAssociations(
 	ctx context.Context,
 	c EKS,
@@ -170,7 +186,7 @@ func DeleteRequestAssociations(
 
 	var deleted []string
 	for _, a := range live {
-		if !a.ownedBy(tags) || a.tags[TagRequest] != tags[TagRequest] ||
+		if !a.ownedBy(tags) ||
 			(a.RoleARN == keepRoleARN && slices.Contains(keep, a.ServiceAccount)) {
 			continue
 		}
@@ -186,13 +202,25 @@ func DeleteRequestAssociations(
 
 type liveAssociation struct {
 	Association
+	arn  string
 	tags map[string]string
 }
 
-// ownedBy reports whether the association carries the TagNamespace and
-// TagClaim values of tags.
+// ownedBy reports whether the association carries the TagNamespace,
+// TagClaim, and TagRequest values of tags.
 func (a liveAssociation) ownedBy(tags map[string]string) bool {
-	return a.tags[TagNamespace] == tags[TagNamespace] && a.tags[TagClaim] == tags[TagClaim]
+	return a.tags[TagNamespace] == tags[TagNamespace] && a.tags[TagClaim] == tags[TagClaim] &&
+		a.tags[TagRequest] == tags[TagRequest]
+}
+
+// hasTags reports whether live has each tag of want with its value.
+func hasTags(live, want map[string]string) bool {
+	for k, v := range want {
+		if got, ok := live[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
 }
 
 // associations returns each association in namespace of the cluster, from
@@ -233,6 +261,7 @@ func associations(ctx context.Context, c EKS, cluster, namespace string) ([]live
 					ServiceAccount: aws.ToString(d.Association.ServiceAccount),
 					RoleARN:        aws.ToString(d.Association.RoleArn),
 				},
+				arn:  aws.ToString(d.Association.AssociationArn),
 				tags: d.Association.Tags,
 			})
 		}

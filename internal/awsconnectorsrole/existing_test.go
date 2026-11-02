@@ -29,6 +29,7 @@ import (
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
+	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
@@ -175,6 +176,29 @@ var _ = Describe("the aws-connectors-existing-role registration", func() {
 		Consistently(func(g Gomega) {
 			g.Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf("billing-connectors=" + existingRoleARN))
 		}, "2s").Should(Succeed())
+	})
+
+	It("keeps the association of the cloud identity of the claim when roleArn is its role", func() {
+		ns := newNamespace(existingPodIdentity)
+		_, err := existingPodIdentity.eks.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
+			ClusterName:    aws.String(eksCluster),
+			Namespace:      aws.String(ns),
+			ServiceAccount: aws.String("orders-camunda"),
+			RoleArn:        aws.String(existingRoleARN),
+			Tags:           awskit.RequestTags(ns, "orders", "orders-identity"),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		req := connectorsRequest(existingPodIdentity, ns, existingParams(existingRoleARN))
+		Expect(existingPodIdentity.k8s.Create(ctx, req)).To(Succeed())
+		waitReady(existingPodIdentity, req)
+		Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf(
+			"orders-camunda="+existingRoleARN,
+			"orders-connectors="+existingRoleARN,
+		))
+
+		waitGone(existingPodIdentity, req)
+
+		Expect(associationsIn(existingPodIdentity, ns)).To(ConsistOf("orders-camunda=" + existingRoleARN))
 	})
 
 	It("refuses a roleArn that is not a role ARN", func() {

@@ -57,6 +57,7 @@ func (p *Plugin) ensureAssociations(
 	}{
 		{eventReasonAssociationCreated, eventActionCreate, "Created", change.Created},
 		{eventReasonAssociationUpdated, eventActionUpdate, "Moved", change.Updated},
+		{eventReasonAssociationUpdated, eventActionUpdate, "Tagged", change.Tagged},
 		{eventReasonAssociationDeleted, eventActionDelete, "Deleted", change.Deleted},
 	} {
 		for _, sa := range e.names {
