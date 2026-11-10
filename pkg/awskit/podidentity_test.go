@@ -505,3 +505,20 @@ func TestEnsureAssociationsReadsTheAssociationsOnce(t *testing.T) {
 	}
 	assert.Equal(t, 1, lists)
 }
+
+func TestAssociationChangeCorrectionsNameEachServiceAccount(t *testing.T) {
+	change := awskit.AssociationChange{
+		Created: []string{"a"},
+		Updated: []string{"b"},
+		Tagged:  []string{"c"},
+		Deleted: []string{"d"},
+	}
+
+	assert.Equal(t, []string{
+		"the Pod Identity association of the ServiceAccount a",
+		"the Pod Identity association of the ServiceAccount b",
+		"the Pod Identity association of the ServiceAccount c",
+		"the Pod Identity association of the ServiceAccount d",
+	}, change.Corrections())
+	assert.Empty(t, awskit.AssociationChange{}.Corrections())
+}

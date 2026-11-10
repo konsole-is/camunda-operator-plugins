@@ -18,6 +18,9 @@ package awskit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -42,9 +45,33 @@ type RoleSpec struct {
 	Tags                map[string]string
 }
 
+// DesiredHash returns 16 hex digits of a hash of the trust policy, the
+// permissions boundary, and the tags of s without TagDesired, and then of
+// each part of extra. Two lists of parts that differ give two hashes, also
+// when their bytes join to the same text.
+func (s RoleSpec) DesiredHash(extra ...[]byte) string {
+	tags := maps.Clone(s.Tags)
+	delete(tags, TagDesired)
+
+	var input []byte
+	for _, part := range append([][]byte{
+		s.TrustPolicy,
+		[]byte(s.PermissionsBoundary),
+		[]byte(ExtraTags(tags).String()),
+	}, extra...) {
+		input = binary.BigEndian.AppendUint64(input, uint64(len(part)))
+		input = append(input, part...)
+	}
+	sum := sha256.Sum256(input)
+	return hex.EncodeToString(sum[:8])
+}
+
 // Role is an IAM role.
 type Role struct {
 	Name, ARN string
+	// Desired is the TagDesired value of the role as EnsureRole read it,
+	// before any change. It is empty for a role that EnsureRole created.
+	Desired string
 }
 
 // RoleInUseError means that an IAM role has the name that a request wants,
@@ -65,6 +92,16 @@ func (e RoleInUseError) Error() string {
 type RoleChange struct {
 	Created bool
 	Updated []string
+}
+
+// Corrections names each part of the role name that c updated, such as "the
+// trust policy of the IAM role camunda-0123", for pluginkit.Result.Corrected.
+func (c RoleChange) Corrections(name string) []string {
+	var out []string
+	for _, part := range c.Updated {
+		out = append(out, "the "+part+" of the IAM role "+name)
+	}
+	return out
 }
 
 // EnsureRole creates the role of spec, or updates a role of that name to the
@@ -104,7 +141,7 @@ func EnsureRole(ctx context.Context, c IAM, spec RoleSpec) (Role, RoleChange, er
 		return Role{}, RoleChange{}, RoleInUseError{Name: spec.Name, Owner: ownerOf(live)}
 	}
 
-	role := Role{Name: spec.Name, ARN: aws.ToString(out.Role.Arn)}
+	role := Role{Name: spec.Name, ARN: aws.ToString(out.Role.Arn), Desired: live[TagDesired]}
 	updated, err := updateRole(ctx, c, out.Role, live, spec)
 	return role, RoleChange{Updated: updated}, err
 }
@@ -211,6 +248,26 @@ func updateRole(
 	}
 
 	return updated, nil
+}
+
+// MarkDesired tags the role with tags and TagDesired with hash in one
+// TagRole call, when role.Desired is not hash. It reports whether it tagged.
+// A plugin calls it after every step of a pass succeeded, so that a retry of
+// a change is not drift.
+func MarkDesired(ctx context.Context, c IAM, role Role, tags map[string]string, hash string) (bool, error) {
+	if role.Desired == hash {
+		return false, nil
+	}
+
+	tags = maps.Clone(tags)
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	tags[TagDesired] = hash
+	if _, err := c.TagRole(ctx, &iam.TagRoleInput{RoleName: aws.String(role.Name), Tags: iamTags(tags)}); err != nil {
+		return false, fmt.Errorf("tagging the IAM role %s with its desired state: %w", role.Name, err)
+	}
+	return true, nil
 }
 
 // ClaimRole returns the Role of name when it belongs to the request of tags,
@@ -347,6 +404,16 @@ func ReplacedRoles(current string, names []string) []string {
 // attached and detached, each sorted.
 type PolicyChange struct {
 	Attached, Detached []string
+}
+
+// Corrections names each managed policy of the role name that c attached or
+// detached, for pluginkit.Result.Corrected.
+func (c PolicyChange) Corrections(name string) []string {
+	var out []string
+	for _, arn := range slices.Concat(c.Attached, c.Detached) {
+		out = append(out, "the managed policy "+arn+" of the IAM role "+name)
+	}
+	return out
 }
 
 // EnsureAttachedPolicies makes the managed policies of the role exactly

@@ -85,10 +85,10 @@ type Options struct {
 // registrations of opts. It refuses an unknown mode, no permissions
 // boundary, a role name prefix that awskit.CheckRolePrefix refuses or that
 // aws-connectors-role uses by default, more extra tags than
-// awskit.CheckExtraTags allows next to the UID tag, no allowed action or a
-// bad one, ModeIRSA without a valid OIDC provider ARN, ModePodIdentity
-// without an EKS cluster name, and a missing client. /healthz and /readyz
-// answer while it runs.
+// awskit.CheckExtraTags allows next to the UID tag and the desired tag, no
+// allowed action or a bad one, ModeIRSA without a valid OIDC provider ARN,
+// ModePodIdentity without an EKS cluster name, and a missing client.
+// /healthz and /readyz answer while it runs.
 func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 	plugin, err := newPlugin(opts)
 	if err != nil {

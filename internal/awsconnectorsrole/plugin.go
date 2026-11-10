@@ -60,8 +60,8 @@ const (
 	// awsIdentityRolePrefix starts the role names of aws-identity by default.
 	awsIdentityRolePrefix = "camunda"
 	// ownTags is the number of tags that a role carries besides the request
-	// tags and the extra tags: awskit.TagRequestUID.
-	ownTags = 1
+	// tags and the extra tags: awskit.TagRequestUID and awskit.TagDesired.
+	ownTags = 2
 )
 
 // The events that the plugin records on a request.

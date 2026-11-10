@@ -34,6 +34,10 @@ const (
 	// Request names do not name the Kubernetes cluster, so two clusters in one
 	// account can have a request of the same namespace and name.
 	TagRequestUID = "camunda.io/request-uid"
+	// TagDesired holds the RoleSpec.DesiredHash of an IAM role that a plugin
+	// last applied in full. A repair of a role whose tag matches the hash of
+	// the pass is drift.
+	TagDesired = "camunda.io/desired"
 )
 
 // MaxExtraTags is the most extra tags that Set accepts: the 50 tags of one

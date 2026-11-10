@@ -19,6 +19,7 @@ package awskit_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -209,6 +210,104 @@ func TestRoleInUseErrorNamesTheRoleAndItsOwner(t *testing.T) {
 		"The IAM role camunda-0123 belongs to no request. Delete the role, or change the role name prefix",
 		err.Error(),
 	)
+}
+
+func TestDesiredHashChangesWithEachPart(t *testing.T) {
+	base := roleSpec()
+	hash := base.DesiredHash([]byte("orders-camunda"))
+
+	assert.Regexp(t, `^[0-9a-f]{16}$`, hash)
+	assert.Equal(t, hash, base.DesiredHash([]byte("orders-camunda")), "the hash is stable")
+
+	withDesired := base
+	withDesired.Tags = maps.Clone(base.Tags)
+	withDesired.Tags[awskit.TagDesired] = "0000000000000000"
+	assert.Equal(t, hash, withDesired.DesiredHash([]byte("orders-camunda")), "the desired tag is not part of the hash")
+
+	for name, change := range map[string]func(*awskit.RoleSpec){
+		"trust": func(s *awskit.RoleSpec) {
+			s.TrustPolicy = []byte(`{"Version":"2012-10-17","Statement":[{"Effect":"Deny"}]}`)
+		},
+		"boundary": func(s *awskit.RoleSpec) { s.PermissionsBoundary = otherBoundary },
+		"tags":     func(s *awskit.RoleSpec) { s.Tags = map[string]string{"team": "b"} },
+	} {
+		s := base
+		change(&s)
+		assert.NotEqual(t, hash, s.DesiredHash([]byte("orders-camunda")), name)
+	}
+	assert.NotEqual(t, hash, base.DesiredHash([]byte("orders-camunda"), nil), "one more part")
+	assert.NotEqual(t,
+		base.DesiredHash([]byte("ab"), []byte("c")),
+		base.DesiredHash([]byte("a"), []byte("bc")),
+		"two lists of parts never give one input",
+	)
+}
+
+func TestEnsureRoleReadsTheDesiredTagBeforeItChanges(t *testing.T) {
+	f := awsfake.NewIAM()
+	created, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	require.NoError(t, err)
+	assert.Empty(t, created.Desired, "a new role has no desired tag")
+	_, err = awskit.MarkDesired(context.Background(), f, created, roleSpec().Tags, "aaaaaaaaaaaaaaaa")
+	require.NoError(t, err)
+	spec := roleSpec()
+	spec.TrustPolicy = []byte(`{"Version":"2012-10-17","Statement":[]}`)
+
+	role, change, err := awskit.EnsureRole(context.Background(), f, spec)
+
+	require.NoError(t, err)
+	assert.Equal(t, "aaaaaaaaaaaaaaaa", role.Desired)
+	assert.Equal(t, awskit.RoleChange{Updated: []string{"trust policy"}}, change)
+	got, _ := f.Role(spec.Name)
+	assert.Equal(t, "aaaaaaaaaaaaaaaa", got.Tags[awskit.TagDesired], "EnsureRole keeps the desired tag")
+}
+
+func TestMarkDesiredTagsOnlyAChangedHash(t *testing.T) {
+	f := awsfake.NewIAM()
+	role, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	require.NoError(t, err)
+	role.Desired = "aaaaaaaaaaaaaaaa"
+	before := len(f.Calls())
+
+	tagged, err := awskit.MarkDesired(context.Background(), f, role, roleSpec().Tags, "aaaaaaaaaaaaaaaa")
+
+	require.NoError(t, err)
+	assert.False(t, tagged)
+	assert.Empty(t, f.Calls()[before:])
+
+	// The sandbox refuses a tag request without its run tag, so the request
+	// tags go with the desired tag.
+	tags := map[string]string{"cpo-ci-run": "cpo-ci-x"}
+	tagged, err = awskit.MarkDesired(context.Background(), f, role, tags, "bbbbbbbbbbbbbbbb")
+
+	require.NoError(t, err)
+	assert.True(t, tagged)
+	assert.Equal(t, []string{"TagRole"}, f.Calls()[before:])
+	got, _ := f.Role(role.Name)
+	assert.Equal(t, "bbbbbbbbbbbbbbbb", got.Tags[awskit.TagDesired])
+	assert.Equal(t, "cpo-ci-x", got.Tags["cpo-ci-run"])
+}
+
+func TestMarkDesiredReturnsAFailedCall(t *testing.T) {
+	f := awsfake.NewIAM()
+	role, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	require.NoError(t, err)
+	f.FailNext("TagRole", errors.New("throttled"))
+
+	tagged, err := awskit.MarkDesired(context.Background(), f, role, roleSpec().Tags, "bbbbbbbbbbbbbbbb")
+
+	assert.False(t, tagged)
+	assert.ErrorContains(t, err, role.Name)
+}
+
+func TestRoleChangeCorrectionsNameEachUpdatedPart(t *testing.T) {
+	change := awskit.RoleChange{Updated: []string{"trust policy", "tags"}}
+
+	assert.Equal(t, []string{
+		"the trust policy of the IAM role camunda-0123",
+		"the tags of the IAM role camunda-0123",
+	}, change.Corrections("camunda-0123"))
+	assert.Empty(t, awskit.RoleChange{Created: true}.Corrections("camunda-0123"), "a new role is no repair")
 }
 
 func TestDeleteRoleDeletesEveryPage(t *testing.T) {
@@ -538,4 +637,14 @@ func TestEnsureAttachedPoliciesKeepsTheAWSErrorCode(t *testing.T) {
 
 	assert.True(t, awskit.IsLimitExceeded(err))
 	assert.ErrorContains(t, err, policyA)
+}
+
+func TestPolicyChangeCorrectionsNameEachPolicy(t *testing.T) {
+	change := awskit.PolicyChange{Attached: []string{policyA}, Detached: []string{policyB}}
+
+	assert.Equal(t, []string{
+		"the managed policy " + policyA + " of the IAM role camunda-0123",
+		"the managed policy " + policyB + " of the IAM role camunda-0123",
+	}, change.Corrections("camunda-0123"))
+	assert.Empty(t, awskit.PolicyChange{}.Corrections("camunda-0123"))
 }

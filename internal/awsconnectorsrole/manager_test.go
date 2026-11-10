@@ -75,7 +75,7 @@ func TestNewPluginRefuses(t *testing.T) {
 		"a prefix with a slash":       {func(o *Options) { o.RoleNamePrefix = "cam/x" }, "role name prefix"},
 		"the prefix of aws-identity":  {func(o *Options) { o.RoleNamePrefix = "camunda" }, "aws-identity"},
 		"that prefix in another case": {func(o *Options) { o.RoleNamePrefix = "Camunda" }, "aws-identity"},
-		"too many extra tags":         {func(o *Options) { o.ExtraTags = extraTags(47) }, "at most 46"},
+		"too many extra tags":         {func(o *Options) { o.ExtraTags = extraTags(46) }, "at most 45"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			opts := validOptions()
@@ -102,7 +102,7 @@ func TestNewPluginAcceptsTheExistingRoleAloneWithoutBoundaryOrPrefix(t *testing.
 
 func TestNewPluginAcceptsTheMostExtraTags(t *testing.T) {
 	opts := validOptions()
-	opts.ExtraTags = extraTags(46)
+	opts.ExtraTags = extraTags(45)
 
 	_, err := newPlugin(opts)
 
