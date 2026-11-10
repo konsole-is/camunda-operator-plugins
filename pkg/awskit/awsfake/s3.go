@@ -1,0 +1,709 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package awsfake
+
+import (
+	"cmp"
+	"context"
+	"maps"
+	"slices"
+	"sync"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+
+	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
+)
+
+const (
+	// foreignAccount is the account of the buckets of AddForeignBucket.
+	foreignAccount = "444455556666"
+	// maxKeys is the most keys that one ListObjectsV2 call returns and that
+	// one DeleteObjects call takes.
+	maxKeys = 1000
+	// maxBucketTags is the most tags of a bucket.
+	maxBucketTags = 50
+	usEast1       = "us-east-1"
+)
+
+var (
+	_ awskit.S3 = (*S3)(nil)
+	_ awskit.S3 = s3Region{}
+)
+
+// S3 is an in-memory S3 of every region and of one account. Its methods act
+// in Home; In gives the same store seen from another region.
+type S3 struct {
+	s3Region
+
+	// Account is the account of the buckets that the fake creates. Empty is
+	// DefaultAccount.
+	Account string
+	// Home is the region of the methods of S3. Empty is eu-west-1.
+	Home string
+
+	mu sync.Mutex
+	// buckets maps a name to its bucket. Names are global, as in S3.
+	buckets map[string]*Bucket
+	// refused holds bucket/key for each key that DeleteObjects refuses, with
+	// the code of the refusal.
+	refused map[string]string
+	fail    failures
+}
+
+// Bucket is a bucket of the fake. A nil configuration is one that the bucket
+// does not have, and its Get call answers with the code of a missing
+// configuration.
+type Bucket struct {
+	Name, Region, Account string
+	Tags                  map[string]string
+	PublicAccessBlock     *types.PublicAccessBlockConfiguration
+	Encryption            *types.ServerSideEncryptionRule
+	LifecycleRules        []types.LifecycleRule
+	// Objects are the keys of the objects, in order.
+	Objects []string
+}
+
+// NewS3 returns an S3 without buckets.
+func NewS3() *S3 {
+	f := &S3{buckets: map[string]*Bucket{}, refused: map[string]string{}}
+	f.s3Region = s3Region{f: f}
+	return f
+}
+
+// In returns the S3 of region, with the buckets of f.
+func (f *S3) In(region string) awskit.S3 {
+	return s3Region{f: f, region: region}
+}
+
+// Bucket returns a copy of the bucket name.
+func (f *S3) Bucket(name string) (Bucket, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.buckets[name]
+	if !ok {
+		return Bucket{}, false
+	}
+	return b.clone(), true
+}
+
+// Buckets returns a copy of each bucket, of every account, sorted by name.
+func (f *S3) Buckets() []Bucket {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	buckets := make([]Bucket, 0, len(f.buckets))
+	for _, name := range slices.Sorted(maps.Keys(f.buckets)) {
+		buckets = append(buckets, f.buckets[name].clone())
+	}
+	return buckets
+}
+
+// AddForeignBucket adds the bucket name of another account in region. A call
+// of the fake on it is denied, and its name cannot be created.
+func (f *S3) AddForeignBucket(name, region string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buckets[name] = &Bucket{Name: name, Region: region, Account: foreignAccount, Tags: map[string]string{}}
+}
+
+// PutObjects adds an object for each key to the bucket, as a writer outside
+// the plugin does. A key that exists stays one object.
+func (f *S3) PutObjects(bucket string, keys ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if b, ok := f.buckets[bucket]; ok {
+		b.Objects = slices.Compact(slices.Sorted(slices.Values(slices.Concat(b.Objects, keys))))
+	}
+}
+
+// Edit changes the bucket with edit, as a change outside the plugin does.
+func (f *S3) Edit(bucket string, edit func(*Bucket)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if b, ok := f.buckets[bucket]; ok {
+		edit(b)
+	}
+}
+
+// RefuseDelete makes each DeleteObjects call keep the object key of bucket
+// and report it in Errors with code.
+func (f *S3) RefuseDelete(bucket, key, code string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refused[bucket+"/"+key] = code
+}
+
+// FailNext makes the next call of operation, such as "CreateBucket", in any
+// region, return err.
+func (f *S3) FailNext(operation string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail.next(operation, err)
+}
+
+// Calls returns the names of the operations called in every region, in call
+// order.
+func (f *S3) Calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.fail.calls)
+}
+
+func (b *Bucket) clone() Bucket {
+	c := *b
+	c.Tags = maps.Clone(b.Tags)
+	c.PublicAccessBlock = clonePointer(b.PublicAccessBlock)
+	c.Encryption = cloneRule(b.Encryption)
+	c.LifecycleRules = slices.Clone(b.LifecycleRules)
+	c.Objects = slices.Clone(b.Objects)
+	return c
+}
+
+func clonePointer[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	c := *p
+	return &c
+}
+
+func cloneRule(r *types.ServerSideEncryptionRule) *types.ServerSideEncryptionRule {
+	c := clonePointer(r)
+	if c != nil {
+		c.ApplyServerSideEncryptionByDefault = clonePointer(r.ApplyServerSideEncryptionByDefault)
+	}
+	return c
+}
+
+// s3Region is the S3 API of one region of a fake. An empty region is the
+// Home of the fake.
+type s3Region struct {
+	f      *S3
+	region string
+}
+
+// begin locks the fake, records the call of operation, and returns the
+// region of r and the error of FailNext, if any. The caller unlocks.
+func (r s3Region) begin(operation string) (string, error) {
+	r.f.mu.Lock()
+	region := cmp.Or(r.region, r.f.Home, defaultHome)
+	return region, r.f.fail.call(operation)
+}
+
+func (r s3Region) account() string {
+	return cmp.Or(r.f.Account, DefaultAccount)
+}
+
+// bucket returns the bucket name for a call in region. S3 answers a missing
+// bucket with NoSuchBucket, a bucket of another region with
+// PermanentRedirect, and a bucket of another account with AccessDenied.
+func (r s3Region) bucket(region string, name *string) (*Bucket, error) {
+	b, ok := r.f.buckets[aws.ToString(name)]
+	switch {
+	case !ok:
+		return nil, apiError("NoSuchBucket", "The specified bucket does not exist")
+	case b.Region != region:
+		return nil, apiError(
+			"PermanentRedirect",
+			"The bucket you are attempting to access must be addressed using the specified endpoint.",
+		)
+	case b.Account != r.account():
+		return nil, apiError("AccessDenied", "Access Denied")
+	}
+	return b, nil
+}
+
+// HeadBucket returns the region of a bucket. A missing bucket is
+// *types.NotFound, as the SDK reads the empty answer of S3.
+func (r s3Region) HeadBucket(
+	_ context.Context,
+	in *s3.HeadBucketInput,
+	_ ...func(*s3.Options),
+) (*s3.HeadBucketOutput, error) {
+	region, err := r.begin("HeadBucket")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, ok := r.f.buckets[aws.ToString(in.Bucket)]
+	switch {
+	case !ok:
+		return nil, &types.NotFound{}
+	case b.Region != region:
+		return nil, apiError("MovedPermanently", "Moved Permanently")
+	case b.Account != r.account():
+		return nil, apiError("Forbidden", "Forbidden")
+	}
+	return &s3.HeadBucketOutput{BucketRegion: aws.String(b.Region)}, nil
+}
+
+// CreateBucket creates a bucket in the region of r, with the tags of its
+// configuration, all four flags of the public access block on, and SSE-S3
+// default encryption, as AWS gives a new bucket.
+func (r s3Region) CreateBucket(
+	_ context.Context,
+	in *s3.CreateBucketInput,
+	_ ...func(*s3.Options),
+) (*s3.CreateBucketOutput, error) {
+	region, err := r.begin("CreateBucket")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	name := aws.ToString(in.Bucket)
+	if b, ok := r.f.buckets[name]; ok {
+		if b.Account == r.account() {
+			return nil, &types.BucketAlreadyOwnedByYou{}
+		}
+		return nil, &types.BucketAlreadyExists{}
+	}
+
+	var config types.CreateBucketConfiguration
+	if in.CreateBucketConfiguration != nil {
+		config = *in.CreateBucketConfiguration
+	}
+	if err := checkLocation(region, string(config.LocationConstraint)); err != nil {
+		return nil, err
+	}
+
+	b := &Bucket{
+		Name:    name,
+		Region:  region,
+		Account: r.account(),
+		Tags:    map[string]string{},
+		PublicAccessBlock: &types.PublicAccessBlockConfiguration{
+			BlockPublicAcls:       aws.Bool(true),
+			IgnorePublicAcls:      aws.Bool(true),
+			BlockPublicPolicy:     aws.Bool(true),
+			RestrictPublicBuckets: aws.Bool(true),
+		},
+		Encryption: &types.ServerSideEncryptionRule{
+			ApplyServerSideEncryptionByDefault: &types.ServerSideEncryptionByDefault{
+				SSEAlgorithm: types.ServerSideEncryptionAes256,
+			},
+			BucketKeyEnabled: aws.Bool(false),
+		},
+	}
+	for _, t := range config.Tags {
+		b.Tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
+	}
+	r.f.buckets[name] = b
+
+	return &s3.CreateBucketOutput{Location: aws.String("/" + name)}, nil
+}
+
+// checkLocation refuses a location constraint that S3 refuses in region:
+// us-east-1 takes none, and every other region takes its own.
+func checkLocation(region, constraint string) error {
+	switch {
+	case region == usEast1 && constraint == region:
+		return apiError("InvalidLocationConstraint", "The specified location-constraint is not valid")
+	case region == usEast1 && constraint == "":
+		return nil
+	case constraint != region:
+		return apiError(
+			"IllegalLocationConstraintException",
+			"The %s location constraint is incompatible for the region specific endpoint this request was sent to.",
+			cmp.Or(constraint, "unspecified"),
+		)
+	}
+	return nil
+}
+
+// DeleteBucket deletes a bucket. A bucket with objects is BucketNotEmpty.
+func (r s3Region) DeleteBucket(
+	_ context.Context,
+	in *s3.DeleteBucketInput,
+	_ ...func(*s3.Options),
+) (*s3.DeleteBucketOutput, error) {
+	region, err := r.begin("DeleteBucket")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(b.Objects) > 0 {
+		return nil, apiError("BucketNotEmpty", "The bucket you tried to delete is not empty")
+	}
+	delete(r.f.buckets, b.Name)
+	return &s3.DeleteBucketOutput{}, nil
+}
+
+// ListBuckets returns the buckets of the account of every region, sorted by
+// name, in pages of MaxBuckets.
+func (r s3Region) ListBuckets(
+	_ context.Context,
+	in *s3.ListBucketsInput,
+	_ ...func(*s3.Options),
+) (*s3.ListBucketsOutput, error) {
+	_, err := r.begin("ListBuckets")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	var all []types.Bucket
+	for _, name := range slices.Sorted(maps.Keys(r.f.buckets)) {
+		if b := r.f.buckets[name]; b.Account == r.account() {
+			all = append(all, types.Bucket{Name: aws.String(b.Name), BucketRegion: aws.String(b.Region)})
+		}
+	}
+
+	items, next, err := page(all, in.ContinuationToken, int(aws.ToInt32(in.MaxBuckets)))
+	if err != nil {
+		return nil, err
+	}
+	return &s3.ListBucketsOutput{Buckets: items, ContinuationToken: next}, nil
+}
+
+// GetBucketTagging returns the tags of a bucket, sorted by key. A bucket
+// without tags is NoSuchTagSet.
+func (r s3Region) GetBucketTagging(
+	_ context.Context,
+	in *s3.GetBucketTaggingInput,
+	_ ...func(*s3.Options),
+) (*s3.GetBucketTaggingOutput, error) {
+	region, err := r.begin("GetBucketTagging")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(b.Tags) == 0 {
+		return nil, apiError("NoSuchTagSet", "The TagSet does not exist")
+	}
+	tags := make([]types.Tag, 0, len(b.Tags))
+	for _, k := range slices.Sorted(maps.Keys(b.Tags)) {
+		tags = append(tags, types.Tag{Key: aws.String(k), Value: aws.String(b.Tags[k])})
+	}
+	return &s3.GetBucketTaggingOutput{TagSet: tags}, nil
+}
+
+// PutBucketTagging replaces every tag of a bucket. More than 50 tags is
+// InvalidTag.
+func (r s3Region) PutBucketTagging(
+	_ context.Context,
+	in *s3.PutBucketTaggingInput,
+	_ ...func(*s3.Options),
+) (*s3.PutBucketTaggingOutput, error) {
+	region, err := r.begin("PutBucketTagging")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if in.Tagging == nil {
+		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
+	}
+	if len(in.Tagging.TagSet) > maxBucketTags {
+		return nil, apiError("InvalidTag", "Object tags cannot be greater than %d", maxBucketTags)
+	}
+	b.Tags = map[string]string{}
+	for _, t := range in.Tagging.TagSet {
+		b.Tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
+	}
+	return &s3.PutBucketTaggingOutput{}, nil
+}
+
+// DeleteBucketTagging removes every tag of a bucket.
+func (r s3Region) DeleteBucketTagging(
+	_ context.Context,
+	in *s3.DeleteBucketTaggingInput,
+	_ ...func(*s3.Options),
+) (*s3.DeleteBucketTaggingOutput, error) {
+	region, err := r.begin("DeleteBucketTagging")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	b.Tags = map[string]string{}
+	return &s3.DeleteBucketTaggingOutput{}, nil
+}
+
+// GetPublicAccessBlock returns the public access block of a bucket. A bucket
+// without one is NoSuchPublicAccessBlockConfiguration.
+func (r s3Region) GetPublicAccessBlock(
+	_ context.Context,
+	in *s3.GetPublicAccessBlockInput,
+	_ ...func(*s3.Options),
+) (*s3.GetPublicAccessBlockOutput, error) {
+	region, err := r.begin("GetPublicAccessBlock")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if b.PublicAccessBlock == nil {
+		return nil, apiError(
+			"NoSuchPublicAccessBlockConfiguration",
+			"The public access block configuration was not found",
+		)
+	}
+	return &s3.GetPublicAccessBlockOutput{PublicAccessBlockConfiguration: clonePointer(b.PublicAccessBlock)}, nil
+}
+
+// PutPublicAccessBlock replaces the public access block of a bucket.
+func (r s3Region) PutPublicAccessBlock(
+	_ context.Context,
+	in *s3.PutPublicAccessBlockInput,
+	_ ...func(*s3.Options),
+) (*s3.PutPublicAccessBlockOutput, error) {
+	region, err := r.begin("PutPublicAccessBlock")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if in.PublicAccessBlockConfiguration == nil {
+		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
+	}
+	b.PublicAccessBlock = clonePointer(in.PublicAccessBlockConfiguration)
+	return &s3.PutPublicAccessBlockOutput{}, nil
+}
+
+// GetBucketEncryption returns the default encryption of a bucket. A bucket
+// without one is ServerSideEncryptionConfigurationNotFoundError.
+func (r s3Region) GetBucketEncryption(
+	_ context.Context,
+	in *s3.GetBucketEncryptionInput,
+	_ ...func(*s3.Options),
+) (*s3.GetBucketEncryptionOutput, error) {
+	region, err := r.begin("GetBucketEncryption")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if b.Encryption == nil {
+		return nil, apiError(
+			"ServerSideEncryptionConfigurationNotFoundError",
+			"The server side encryption configuration was not found",
+		)
+	}
+	return &s3.GetBucketEncryptionOutput{
+		ServerSideEncryptionConfiguration: &types.ServerSideEncryptionConfiguration{
+			Rules: []types.ServerSideEncryptionRule{*cloneRule(b.Encryption)},
+		},
+	}, nil
+}
+
+// PutBucketEncryption replaces the default encryption of a bucket with the
+// one rule of the call.
+func (r s3Region) PutBucketEncryption(
+	_ context.Context,
+	in *s3.PutBucketEncryptionInput,
+	_ ...func(*s3.Options),
+) (*s3.PutBucketEncryptionOutput, error) {
+	region, err := r.begin("PutBucketEncryption")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if in.ServerSideEncryptionConfiguration == nil || len(in.ServerSideEncryptionConfiguration.Rules) != 1 {
+		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
+	}
+	b.Encryption = cloneRule(&in.ServerSideEncryptionConfiguration.Rules[0])
+	return &s3.PutBucketEncryptionOutput{}, nil
+}
+
+// GetBucketLifecycleConfiguration returns the lifecycle rules of a bucket. A
+// bucket without rules is NoSuchLifecycleConfiguration.
+func (r s3Region) GetBucketLifecycleConfiguration(
+	_ context.Context,
+	in *s3.GetBucketLifecycleConfigurationInput,
+	_ ...func(*s3.Options),
+) (*s3.GetBucketLifecycleConfigurationOutput, error) {
+	region, err := r.begin("GetBucketLifecycleConfiguration")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(b.LifecycleRules) == 0 {
+		return nil, apiError("NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist")
+	}
+	return &s3.GetBucketLifecycleConfigurationOutput{Rules: slices.Clone(b.LifecycleRules)}, nil
+}
+
+// PutBucketLifecycleConfiguration replaces every lifecycle rule of a bucket.
+func (r s3Region) PutBucketLifecycleConfiguration(
+	_ context.Context,
+	in *s3.PutBucketLifecycleConfigurationInput,
+	_ ...func(*s3.Options),
+) (*s3.PutBucketLifecycleConfigurationOutput, error) {
+	region, err := r.begin("PutBucketLifecycleConfiguration")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if in.LifecycleConfiguration == nil || len(in.LifecycleConfiguration.Rules) == 0 {
+		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
+	}
+	b.LifecycleRules = slices.Clone(in.LifecycleConfiguration.Rules)
+	return &s3.PutBucketLifecycleConfigurationOutput{}, nil
+}
+
+// ListObjectsV2 returns the objects of a bucket in key order, in pages of
+// MaxKeys, at most 1,000. A missing bucket is *types.NoSuchBucket.
+func (r s3Region) ListObjectsV2(
+	_ context.Context,
+	in *s3.ListObjectsV2Input,
+	_ ...func(*s3.Options),
+) (*s3.ListObjectsV2Output, error) {
+	region, err := r.begin("ListObjectsV2")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	if _, ok := r.f.buckets[aws.ToString(in.Bucket)]; !ok {
+		return nil, &types.NoSuchBucket{Message: aws.String("The specified bucket does not exist")}
+	}
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	// A token is the last key of the page before, so a delete between two
+	// calls moves no key past the next page.
+	keys := b.Objects
+	if token := aws.ToString(in.ContinuationToken); token != "" {
+		start, _ := slices.BinarySearch(keys, token)
+		if start < len(keys) && keys[start] == token {
+			start++
+		}
+		keys = keys[start:]
+	}
+
+	size := min(int(cmp.Or(aws.ToInt32(in.MaxKeys), maxKeys)), maxKeys)
+	truncated := len(keys) > size
+	keys = keys[:min(size, len(keys))]
+	out := &s3.ListObjectsV2Output{
+		Name:              in.Bucket,
+		KeyCount:          aws.Int32(int32(len(keys))),
+		MaxKeys:           aws.Int32(int32(size)),
+		IsTruncated:       aws.Bool(truncated),
+		ContinuationToken: in.ContinuationToken,
+	}
+	for _, k := range keys {
+		out.Contents = append(out.Contents, types.Object{Key: aws.String(k)})
+	}
+	if truncated {
+		out.NextContinuationToken = aws.String(keys[len(keys)-1])
+	}
+	return out, nil
+}
+
+// DeleteObjects deletes up to 1,000 objects of a bucket. A key of
+// RefuseDelete stays and is reported in Errors; a quiet call reports only the
+// errors.
+func (r s3Region) DeleteObjects(
+	_ context.Context,
+	in *s3.DeleteObjectsInput,
+	_ ...func(*s3.Options),
+) (*s3.DeleteObjectsOutput, error) {
+	region, err := r.begin("DeleteObjects")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	if in.Delete == nil || len(in.Delete.Objects) == 0 || len(in.Delete.Objects) > maxKeys {
+		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
+	}
+
+	out := &s3.DeleteObjectsOutput{}
+	gone := map[string]bool{}
+	for _, o := range in.Delete.Objects {
+		key := aws.ToString(o.Key)
+		if code, ok := r.f.refused[b.Name+"/"+key]; ok {
+			out.Errors = append(out.Errors, types.Error{
+				Key:     aws.String(key),
+				Code:    aws.String(code),
+				Message: aws.String("The fake refused the delete"),
+			})
+			continue
+		}
+		gone[key] = true
+		if !aws.ToBool(in.Delete.Quiet) {
+			out.Deleted = append(out.Deleted, types.DeletedObject{Key: aws.String(key)})
+		}
+	}
+	b.Objects = slices.DeleteFunc(b.Objects, func(k string) bool { return gone[k] })
+	return out, nil
+}
