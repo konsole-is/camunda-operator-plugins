@@ -17,6 +17,8 @@ limitations under the License.
 package pluginkit
 
 import (
+	"context"
+	"encoding/json"
 	"maps"
 	"testing"
 
@@ -27,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 )
@@ -91,6 +94,38 @@ func TestDeleteClusterScopedWaitsForAnObjectThatAFinalizerHolds(t *testing.T) {
 
 	assert.Empty(t, deleted, "an object that is already deleting is not deleted again")
 	assert.ErrorContains(t, err, "own")
+}
+
+func TestDeleteClusterScopedReturnsEachDeletedObjectWhileOneStillExists(t *testing.T) {
+	request := ownedRequest()
+	free := storageClassWith("a-free", ClusterScopedLabels(request))
+	held := storageClassWith("b-held", ClusterScopedLabels(request))
+	held.Finalizers = []string{"example.com/hold"}
+	c := fake.NewClientBuilder().WithScheme(ownedScheme(t)).WithObjects(free, held).Build()
+	// The client of the API server decodes a list into the items that the
+	// list already holds, as json.Unmarshal does.
+	reader := interceptor.NewClient(c, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			var fresh storagev1.StorageClassList
+			if err := c.List(ctx, &fresh, opts...); err != nil {
+				return err
+			}
+			data, err := json.Marshal(&fresh)
+			if err != nil {
+				return err
+			}
+			return json.Unmarshal(data, list)
+		},
+	})
+
+	deleted, err := DeleteClusterScoped(t.Context(), reader, c, request, &storagev1.StorageClassList{})
+
+	assert.ErrorContains(t, err, "b-held")
+	names := make([]string, 0, len(deleted))
+	for _, obj := range deleted {
+		names = append(names, obj.GetName())
+	}
+	assert.ElementsMatch(t, []string{"a-free", "b-held"}, names)
 }
 
 func storageClassWith(name string, labels map[string]string) *storagev1.StorageClass {

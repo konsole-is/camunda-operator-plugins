@@ -72,7 +72,9 @@ func DeleteClusterScoped(
 		deleted = append(deleted, obj)
 	}
 
-	remaining, err := listClusterScoped(ctx, reader, request, list)
+	// A read into list would overwrite the deleted objects, which point
+	// into its items.
+	remaining, err := listClusterScoped(ctx, reader, request, list.DeepCopyObject().(client.ObjectList))
 	if err != nil {
 		return deleted, err
 	}
