@@ -128,10 +128,17 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{}, err
 	}
 
+	// A ServiceAccount that left the request loses its association before a
+	// Grant step can fail.
+	var leftErr error
+	if p.mode == awskit.ModePodIdentity {
+		leftErr = p.deleteLeftAssociations(ctx, req, sas)
+	}
+
 	// The Grants reach the role before an association moves to it, so a pod
 	// never holds the role without its policies.
 	counts, conflicted, err := p.syncGrants(ctx, req, role)
-	if err != nil {
+	if err := errors.Join(leftErr, err); err != nil {
 		return pluginkit.Result{}, err
 	}
 
@@ -404,6 +411,34 @@ func (p *Plugin) tags(request *pluginsv1alpha1.PluginRequest) map[string]string 
 // of request.
 func (p *Plugin) roleTags(request *pluginsv1alpha1.PluginRequest) map[string]string {
 	return p.extraTags.OwnerTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name, string(request.UID))
+}
+
+// deleteLeftAssociations deletes the associations of req of each
+// ServiceAccount that is not in sas, and records an event for each.
+func (p *Plugin) deleteLeftAssociations(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+	sas []string,
+) error {
+	request := req.Object
+	deleted, err := awskit.DeleteRequestAssociations(
+		ctx,
+		p.clients.EKS,
+		p.eksCluster,
+		request.Namespace,
+		p.tags(request),
+		sas,
+	)
+	for _, sa := range deleted {
+		req.Event(
+			corev1.EventTypeNormal,
+			eventReasonAssociationDeleted,
+			eventActionDelete,
+			"Deleted the Pod Identity association of the ServiceAccount %s",
+			sa,
+		)
+	}
+	return err
 }
 
 // ensureAssociations keeps one Pod Identity association of role for each of

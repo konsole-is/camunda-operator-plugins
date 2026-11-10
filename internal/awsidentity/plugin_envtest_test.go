@@ -738,6 +738,31 @@ func (s renameSetup) putRole(name, uid string) {
 	Expect(err).NotTo(HaveOccurred())
 }
 
+var _ = Describe("a Grant sync that fails", Serial, func() {
+	It("still deletes the association of a ServiceAccount that left the request", func() {
+		ns := newNamespace()
+		iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
+		h, stop := startHub(awskit.ModePodIdentity, "aws-pod-identity-"+ns, "camunda", iamFake, eksFake)
+		DeferCleanup(stop)
+		request := hubRequest(h.registration, ns, "orders-es-es")
+		readyRequest(request)
+		Expect(associationsIn(h, ns)).To(ConsistOf("orders-camunda", "orders-es-es"))
+
+		for range 1000 {
+			iamFake.FailNext("ListRolePolicies", errors.New("the policies cannot be listed"))
+		}
+		Eventually(func(g Gomega) {
+			got := read(g, request.DeepCopy())
+			got.Spec.Target.AdditionalServiceAccounts = nil
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(h, ns)).To(ConsistOf("orders-camunda"))
+		}, timeout).Should(Succeed())
+	})
+})
+
 var _ = Describe("a change of the role name prefix", Serial, func() {
 	DescribeTable("deletes the old role after the outputs name the new one",
 		func(mode awskit.Mode, registrationPrefix string) {
