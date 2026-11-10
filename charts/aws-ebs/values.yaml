@@ -1,0 +1,71 @@
+image:
+  repository: ghcr.io/konsole-is/camunda-operator-plugins/aws-ebs
+  # An empty tag is the appVersion of the chart, which the release sets.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# registrations are the PluginRegistrations that the controller writes at
+# startup and serves. Each item is a name and the fields of a registration
+# spec. The chart grants the controller the verb serve on each name, and on no
+# other registration. The chart refuses to render without one.
+registrations:
+  - name: aws-ebs-encrypted
+    sections: [volume-encryption]
+    label: Encrypted EBS volumes
+    description: Creates a StorageClass for each cluster that encrypts its EBS volumes with the AWS KMS key of the cluster.
+    docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/aws-ebs.md
+    mode: Optional
+    deletionPolicies: [Delete, Orphan]
+    inputs:
+      - name: key
+        from: encryption-key/keyRef
+        required: true
+        formats: [aws-kms-arn]
+    outputs:
+      - key: storageClassName
+        description: The name of the StorageClass of the volumes of the cluster.
+    parameters:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [gp3, gp2, io1, io2, st1, sc1]
+          default: gp3
+          description: The EBS volume type.
+        iops:
+          type: integer
+          minimum: 100
+          description: The IOPS of each volume. Only for gp3, io1, and io2.
+        throughput:
+          type: integer
+          minimum: 125
+          description: The throughput of each volume in MiB/s. Only for gp3.
+        fsType:
+          type: string
+          enum: [ext4, xfs, ext3]
+          default: ext4
+          description: The file system of each volume.
+        reclaimPolicy:
+          type: string
+          enum: [Delete, Retain]
+          default: Delete
+          description: What happens to a volume when its claim is deleted.
+      x-kubernetes-validations:
+        - rule: "!has(self.throughput) || !has(self.type) || self.type == 'gp3'"
+          message: throughput is only for the volume type gp3
+        - rule: "!has(self.iops) || !has(self.type) || self.type in ['gp3', 'io1', 'io2']"
+          message: iops is only for the volume types gp3, io1, and io2
+
+# resync is the time after which the controller reconciles each request
+# again, also when nothing in the cluster changed. It brings back a
+# StorageClass that someone deleted. 0 turns it off.
+resync: 1h
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
