@@ -40,6 +40,8 @@ func TestChartParameters(t *testing.T) {
 		{"gp3 with iops and throughput", `{"type":"gp3","iops":6000,"throughput":500}`, ""},
 		{"io2 with iops", `{"type":"io2","iops":6000}`, ""},
 		{"io1 with the least iops", `{"type":"io1","iops":100}`, ""},
+		{"io1 without iops", `{"type":"io1"}`, "iops is required for the volume types io1 and io2"},
+		{"io2 without iops", `{"type":"io2"}`, "iops is required for the volume types io1 and io2"},
 		{"gp3 with the least iops", `{"type":"gp3","iops":3000}`, ""},
 		{"gp3 below its least iops", `{"type":"gp3","iops":2999}`, "iops of gp3 is at least 3000"},
 		{"the default type below the least iops of gp3", `{"iops":100}`, "iops of gp3 is at least 3000"},

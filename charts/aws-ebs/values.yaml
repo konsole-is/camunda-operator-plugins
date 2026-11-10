@@ -37,7 +37,7 @@ registrations:
         iops:
           type: integer
           minimum: 100
-          description: The IOPS of each volume. Only for gp3, io1, and io2. At least 3000 for gp3.
+          description: The IOPS of each volume. Only for gp3, io1, and io2, and required for io1 and io2. At least 3000 for gp3.
         throughput:
           type: integer
           minimum: 125
@@ -59,6 +59,8 @@ registrations:
           message: iops is only for the volume types gp3, io1, and io2
         - rule: "!has(self.iops) || (has(self.type) && self.type != 'gp3') || self.iops >= 3000"
           message: iops of gp3 is at least 3000
+        - rule: "!has(self.type) || !(self.type in ['io1', 'io2']) || has(self.iops)"
+          message: iops is required for the volume types io1 and io2
 
 # resync is the time after which the controller reconciles each request
 # again, also when nothing in the cluster changed. It brings back a
