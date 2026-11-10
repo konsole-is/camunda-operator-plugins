@@ -20,8 +20,9 @@ permissionsBoundaryArn: ""
 
 # roleNamePrefix starts the name of each role, at most 47 characters. It must
 # differ from the prefix of aws-connectors-role, camunda-connectors by
-# default. A change creates new roles and deletes the old ones, and pods
-# under IRSA need a restart.
+# default. A change creates new roles and deletes the old ones. Restart the
+# pods of each cluster after the change, with IRSA and with Pod Identity: see
+# "Change the role name prefix" in the docs of the plugin.
 roleNamePrefix: camunda
 
 # extraTags go on each AWS object of the plugin, next to the tags of the
