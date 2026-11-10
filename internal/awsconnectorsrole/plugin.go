@@ -41,9 +41,15 @@ const (
 	RegistrationExistingRole = "aws-connectors-existing-role"
 )
 
-// ReasonMissingServiceAccount means that a request names no
-// spec.target.serviceAccountName, so no ServiceAccount gets the role.
-const ReasonMissingServiceAccount = "MissingServiceAccount"
+// The reasons of OutputsReady and Ready of a request that waits.
+const (
+	// ReasonMissingServiceAccount means that a request names no
+	// spec.target.serviceAccountName, so no ServiceAccount gets the role.
+	ReasonMissingServiceAccount = "MissingServiceAccount"
+	// ReasonRoleNameInUse means that the IAM role of the name of a request
+	// belongs to another request, or to none. The plugin does not change it.
+	ReasonRoleNameInUse = "RoleNameInUse"
+)
 
 const (
 	// name is the controller name of the plugin.
@@ -51,8 +57,11 @@ const (
 	// inlinePolicyName is the inline policy of a role of RegistrationRole.
 	// The plugin owns no other inline policy.
 	inlinePolicyName = "connectors"
-	// awsIdentityRolePrefix starts the role names of aws-identity.
+	// awsIdentityRolePrefix starts the role names of aws-identity by default.
 	awsIdentityRolePrefix = "camunda"
+	// ownTags is the number of tags that a role carries besides the request
+	// tags and the extra tags: awskit.TagRequestUID.
+	ownTags = 1
 )
 
 // The events that the plugin records on a request.
@@ -60,6 +69,7 @@ const (
 	eventReasonRoleCreated         = "RoleCreated"
 	eventReasonRoleUpdated         = "RoleUpdated"
 	eventReasonRoleDeleted         = "RoleDeleted"
+	eventReasonRoleKept            = "RoleKept"
 	eventReasonInlinePolicyUpdated = "InlinePolicyUpdated"
 	eventReasonInlinePolicyDeleted = "InlinePolicyDeleted"
 	eventReasonPolicyAttached      = "PolicyAttached"
@@ -103,7 +113,11 @@ type Plugin struct {
 
 // Reconcile keeps the role of a RegistrationRole request, or the
 // association of the role of a RegistrationExistingRole request, and
-// publishes the outputs of the role.
+// publishes the outputs of the role. After a change of the role name, it
+// deletes the old role of a RegistrationRole request once the outputs name
+// the new one, and until then keeps the old role in status.resources. It is
+// Pending with the reason RoleNameInUse when the role of the name of a
+// RegistrationRole request belongs to another request.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -118,10 +132,12 @@ func (p *Plugin) Reconcile(
 	}
 }
 
-// Delete deletes the associations of the request, and the role of a
-// RegistrationRole request with its inline policies and policy attachments.
-// It never deletes the role of a RegistrationExistingRole request. An object
-// that is gone is not an error.
+// Delete deletes the associations of the request, and each role of a
+// RegistrationRole request with its inline policies and policy attachments:
+// the role of its current name and the roles of its status.resources, each
+// only with the UID of the request. A role of another request UID stays,
+// with a Warning event. It never deletes the role of a
+// RegistrationExistingRole request. An object that is gone is not an error.
 func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	switch r := req.Object.Spec.Registration; r {
 	case RegistrationRole:
@@ -142,6 +158,12 @@ func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[s
 // tags returns the tags of each AWS object of request.
 func (p *Plugin) tags(request *pluginsv1alpha1.PluginRequest) map[string]string {
 	return p.extraTags.RequestTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name)
+}
+
+// roleTags returns the tags of the role of request, which bind it to the UID
+// of request.
+func (p *Plugin) roleTags(request *pluginsv1alpha1.PluginRequest) map[string]string {
+	return p.extraTags.OwnerTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name, string(request.UID))
 }
 
 // health checks that the AWS credentials work and that the permissions

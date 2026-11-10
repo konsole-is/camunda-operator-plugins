@@ -124,7 +124,7 @@ var _ = Describe("the deletion of a request", func() {
 		Expect(role.k8s.Create(ctx, req)).To(Succeed())
 		waitReady(role, req)
 
-		deleted, err := awskit.DeleteRole(context.Background(), role.iam, role.roleName(ns), "")
+		deleted, err := awskit.DeleteRole(context.Background(), role.iam, role.roleName(ns), string(req.UID))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(deleted).To(BeTrue())
 
