@@ -74,12 +74,22 @@ The AWS plugins run against a real AWS sandbox account, not against fakes. A job
 
 A pull request of a contributor waits until a maintainer approves its AWS jobs. GitHub gives no OIDC token to a pull request from a fork. As a result, the AWS jobs do not run on such a pull request. They run on `main` after the merge. A maintainer can push the branch to this repository to run them before the merge.
 
-## 7. Before you open a pull request
+## 7. The journeys
+
+A journey proves that a set of plugins gives a working cluster from end to end. The workflow `.github/workflows/journeys.yml` runs the bare-metal journey on kind. A claim with `rustfs-bucket`, `gateway-public`, and the built-in Elasticsearch reaches `Ready`. Operate answers at the URL of the claim through the Gateway. A backup lands in the bucket, and a deletion of the claim with `Orphan` keeps the bucket.
+
+The job runs on each pull request that changes `rustfs`, `gateway-access`, `pkg/pluginkit`, the journey, the kind scripts, or `go.mod`, and each night. The operator is built from the commit that the api module of `go.mod` names. The Camunda and Elasticsearch versions come from that commit too.
+
+A journey is a directory `test/e2e/<journey>/` with an executable `setup.sh`, and one `Describe` with the label `<journey>` in `test/e2e/`. `setup.sh` installs what the journey needs beside the operator and ECK. `make journey-kind JOURNEY=<journey>` runs a journey after `make operator-source`, with the tools of [section 6](#6-the-conformance-job). It creates the kind cluster `camunda-operator-plugins` and leaves it after the run.
+
+A red journey is a bug to fix, not a run to repeat.
+
+## 8. Before you open a pull request
 
 1. Run `make lint`, `make test`, `make chart-verify`, and `make lint-renovate`. Each one must pass.
 2. Write the commit subjects and the pull request title as `<type>(<area>): <imperative summary>`. The types are `feat`, `fix`, `refactor`, `test`, `chore`, and `docs`.
 
-## 8. Releases
+## 9. Releases
 
 1. A maintainer publishes a GitHub release with a tag `vX.Y.Z`.
 2. The release publishes the image and the chart of every plugin, all at version `X.Y.Z`.

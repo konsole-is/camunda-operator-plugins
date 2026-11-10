@@ -1,0 +1,119 @@
+name: Journeys
+
+on:
+  pull_request:
+    # A change that can affect a plugin of the bare-metal set, or the journey.
+    paths:
+      - cmd/rustfs/**
+      - internal/rustfs/**
+      - charts/rustfs/**
+      - cmd/gateway-access/**
+      - internal/gatewayaccess/**
+      - charts/gateway-access/**
+      - pkg/pluginkit/**
+      - test/e2e/**
+      - test/kind/**
+      - Dockerfile
+      - Makefile
+      - go.mod
+      - go.sum
+      - .github/workflows/journeys.yml
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # A claim with the plugins of the bare-metal set, on one kind cluster with
+  # the operator of the api ref, ECK, RustFS, and Envoy Gateway.
+  bare-metal:
+    name: Bare-metal journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      JOURNEY: bare-metal
+      KIND_CLUSTER: journey
+      JOURNEY_REPORT: ${{ github.workspace }}/journey-report/bare-metal.xml
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # The operator on kind is built from the commit that the api module of
+      # go.mod names, so its CRDs are those that the plugins are built against.
+      - name: Check out the operator at the api ref
+        run: |
+          echo "OPERATOR_DIR=${RUNNER_TEMP}/camunda-operator" >> "${GITHUB_ENV}"
+          OPERATOR_DIR="${RUNNER_TEMP}/camunda-operator" hack/ci-retry.sh make operator-source
+
+      # kind and kubebuilder install the versions of .tool-versions of the
+      # operator, as its own kind jobs do.
+      - name: Install kind and kubebuilder
+        run: |
+          KIND_VERSION=$(awk '$1 == "kind" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
+          curl -fsSLo ./kind --retry 5 --retry-delay 10 --retry-all-errors \
+            "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-$(go env GOARCH)"
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+          KUBEBUILDER_VERSION=$(awk '$1 == "kubebuilder" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
+          curl -fsSL -o kubebuilder --retry 5 --retry-delay 10 --retry-all-errors \
+            "https://github.com/kubernetes-sigs/kubebuilder/releases/download/v${KUBEBUILDER_VERSION}/kubebuilder_$(go env GOOS)_$(go env GOARCH)"
+          chmod +x kubebuilder && sudo mv kubebuilder /usr/local/bin/
+          kind version
+          kubebuilder version
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+
+      # The Elasticsearch node that ECK runs needs this kernel limit on the
+      # kind host.
+      - name: Raise vm.max_map_count for Elasticsearch
+        run: sudo sysctl -w vm.max_map_count=262144
+
+      - name: Run the bare-metal journey on kind
+        run: make journey-kind
+
+      - name: Upload the journey report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: journey-bare-metal
+          path: journey-report/
+          if-no-files-found: warn
+
+      - name: Read the kind cluster
+        if: failure()
+        run: |
+          free -m || true
+          docker stats --no-stream || true
+          kubectl describe nodes || true
+          kubectl get pods -A -o wide || true
+          kubectl get camundaclusterclaims,pluginrequests,pluginregistrations,grants -A -o yaml || true
+          kubectl get camundaclusters,elasticsearchclusters,logicalbackupelasticsearches,objectstorageconfigs -A -o yaml || true
+          kubectl get gateways,httproutes,grpcroutes -A -o yaml || true
+          kubectl get events -A --sort-by=.lastTimestamp || true
+          # The claim of the journey and its cluster live in the namespace bare-metal.
+          for pod in $(kubectl get pods -n bare-metal -o name 2> /dev/null); do
+            echo "=== logs of ${pod} in bare-metal"
+            kubectl logs -n bare-metal "${pod}" --all-containers --tail=200 || true
+          done
+          for target in \
+            "camunda-operator-system deployment/camunda-operator-controller-manager" \
+            "camunda-operator-plugins deployment/rustfs" \
+            "camunda-operator-plugins deployment/gateway-access" \
+            "elastic-system statefulset/elastic-operator"; do
+            read -r namespace workload <<< "${target}"
+            echo "=== logs of ${workload} in ${namespace}"
+            kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
+          done
