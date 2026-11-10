@@ -21,12 +21,14 @@ import (
 	"context"
 	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 )
@@ -45,6 +47,10 @@ const (
 var (
 	_ awskit.S3 = (*S3)(nil)
 	_ awskit.S3 = s3Region{}
+
+	// bucketName matches the names of general purpose buckets that S3
+	// accepts, without its rules on IP addresses and reserved prefixes.
+	bucketName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 )
 
 // S3 is an in-memory S3 of every region and of one account. Its methods act
@@ -279,7 +285,8 @@ func (r s3Region) HeadBucket(
 
 // CreateBucket creates a bucket in the region of r, with the tags of its
 // configuration, all four flags of the public access block on, and SSE-S3
-// default encryption, as AWS gives a new bucket.
+// default encryption, as AWS gives a new bucket. In us-east-1, a name of a
+// bucket that the account owns there is a success that changes nothing.
 func (r s3Region) CreateBucket(
 	_ context.Context,
 	in *s3.CreateBucketInput,
@@ -292,11 +299,19 @@ func (r s3Region) CreateBucket(
 	}
 
 	name := aws.ToString(in.Bucket)
+	if !bucketName.MatchString(name) {
+		return nil, apiError("InvalidBucketName", "The specified bucket is not valid.")
+	}
+
 	if b, ok := r.f.buckets[name]; ok {
-		if b.Account == r.account() {
-			return nil, &types.BucketAlreadyOwnedByYou{}
+		switch {
+		case b.Account != r.account():
+			return nil, &types.BucketAlreadyExists{}
+		// S3 keeps this answer in us-east-1 for legacy compatibility.
+		case region == usEast1 && b.Region == usEast1:
+			return &s3.CreateBucketOutput{Location: aws.String("/" + name)}, nil
 		}
-		return nil, &types.BucketAlreadyExists{}
+		return nil, &types.BucketAlreadyOwnedByYou{}
 	}
 
 	var config types.CreateBucketConfiguration
@@ -307,11 +322,16 @@ func (r s3Region) CreateBucket(
 		return nil, err
 	}
 
+	tags, err := tagSet(config.Tags)
+	if err != nil {
+		return nil, err
+	}
+
 	b := &Bucket{
 		Name:    name,
 		Region:  region,
 		Account: r.account(),
-		Tags:    map[string]string{},
+		Tags:    tags,
 		PublicAccessBlock: &types.PublicAccessBlockConfiguration{
 			BlockPublicAcls:       aws.Bool(true),
 			IgnorePublicAcls:      aws.Bool(true),
@@ -324,9 +344,6 @@ func (r s3Region) CreateBucket(
 			},
 			BucketKeyEnabled: aws.Bool(false),
 		},
-	}
-	for _, t := range config.Tags {
-		b.Tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
 	}
 	r.f.buckets[name] = b
 
@@ -451,14 +468,30 @@ func (r s3Region) PutBucketTagging(
 	if in.Tagging == nil {
 		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
 	}
-	if len(in.Tagging.TagSet) > maxBucketTags {
+	tags, err := tagSet(in.Tagging.TagSet)
+	if err != nil {
+		return nil, err
+	}
+	b.Tags = tags
+	return &s3.PutBucketTaggingOutput{}, nil
+}
+
+// tagSet returns tags as a map. More than 50 tags, or two tags with one key,
+// is InvalidTag.
+func tagSet(tags []types.Tag) (map[string]string, error) {
+	if len(tags) > maxBucketTags {
 		return nil, apiError("InvalidTag", "Object tags cannot be greater than %d", maxBucketTags)
 	}
-	b.Tags = map[string]string{}
-	for _, t := range in.Tagging.TagSet {
-		b.Tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
+
+	set := make(map[string]string, len(tags))
+	for _, t := range tags {
+		key := aws.ToString(t.Key)
+		if _, ok := set[key]; ok {
+			return nil, apiError("InvalidTag", "Cannot provide multiple Tags with the same key")
+		}
+		set[key] = aws.ToString(t.Value)
 	}
-	return &s3.PutBucketTaggingOutput{}, nil
+	return set, nil
 }
 
 // DeleteBucketTagging removes every tag of a bucket.
@@ -633,8 +666,31 @@ func (r s3Region) PutBucketLifecycleConfiguration(
 	if in.LifecycleConfiguration == nil || len(in.LifecycleConfiguration.Rules) == 0 {
 		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
 	}
+	if err := checkRules(in.LifecycleConfiguration.Rules); err != nil {
+		return nil, err
+	}
 	b.LifecycleRules = deepCopy(in.LifecycleConfiguration.Rules)
 	return &s3.PutBucketLifecycleConfigurationOutput{}, nil
+}
+
+// checkRules refuses a rule without a status, as the SDK does before the
+// call, and two rules with one ID, as S3 does.
+func checkRules(rules []types.LifecycleRule) error {
+	ids := map[string]bool{}
+	for _, rule := range rules {
+		if rule.Status == "" {
+			params := smithy.InvalidParamsError{Context: "LifecycleRule"}
+			params.Add(smithy.NewErrParamRequired("Status"))
+			return params
+		}
+
+		id := aws.ToString(rule.ID)
+		if id != "" && ids[id] {
+			return apiError("InvalidArgument", "Rule ID must be unique. Found same ID for more than one rule")
+		}
+		ids[id] = true
+	}
+	return nil
 }
 
 // ListObjectsV2 returns the objects of a bucket in key order, in pages of

@@ -46,17 +46,17 @@ func newS3(t *testing.T, buckets ...string) (*awsfake.S3, int) {
 
 func TestEnsureBucketCreatesAMissingBucket(t *testing.T) {
 	f, _ := newS3(t)
-	created, err := (&bucketClient{api: f}).EnsureBucket(context.Background(), "b1")
+	created, err := (&bucketClient{api: f}).EnsureBucket(context.Background(), "bucket-1")
 	require.NoError(t, err)
 	assert.True(t, created)
 	assert.Len(t, slices.DeleteFunc(f.Calls(), func(c string) bool { return c != "CreateBucket" }), 1)
-	_, ok := f.Bucket("b1")
+	_, ok := f.Bucket("bucket-1")
 	assert.True(t, ok)
 }
 
 func TestEnsureBucketKeepsAnExistingBucket(t *testing.T) {
-	f, setup := newS3(t, "b1")
-	created, err := (&bucketClient{api: f}).EnsureBucket(context.Background(), "b1")
+	f, setup := newS3(t, "bucket-1")
+	created, err := (&bucketClient{api: f}).EnsureBucket(context.Background(), "bucket-1")
 	require.NoError(t, err)
 	assert.False(t, created)
 	assert.NotContains(t, f.Calls()[setup:], "CreateBucket")
@@ -65,7 +65,7 @@ func TestEnsureBucketKeepsAnExistingBucket(t *testing.T) {
 func TestEnsureBucketAcceptsAnOwnedBucket(t *testing.T) {
 	f, _ := newS3(t)
 	f.FailNext("CreateBucket", &types.BucketAlreadyOwnedByYou{})
-	created, err := (&bucketClient{api: f}).EnsureBucket(context.Background(), "b1")
+	created, err := (&bucketClient{api: f}).EnsureBucket(context.Background(), "bucket-1")
 	require.NoError(t, err)
 	assert.False(t, created)
 }
@@ -73,23 +73,23 @@ func TestEnsureBucketAcceptsAnOwnedBucket(t *testing.T) {
 func TestEnsureBucketRefusesABucketOfAnotherUser(t *testing.T) {
 	f, _ := newS3(t)
 	f.FailNext("CreateBucket", &types.BucketAlreadyExists{})
-	_, err := (&bucketClient{api: f}).EnsureBucket(context.Background(), "b1")
-	assert.ErrorContains(t, err, `bucket "b1" exists and belongs to another RustFS user`)
+	_, err := (&bucketClient{api: f}).EnsureBucket(context.Background(), "bucket-1")
+	assert.ErrorContains(t, err, `bucket "bucket-1" exists and belongs to another RustFS user`)
 }
 
 func TestDeleteBucketEmptiesAndDeletesIt(t *testing.T) {
-	f, _ := newS3(t, "b1")
-	f.PutObjects("b1", "k1")
-	deleted, err := (&bucketClient{api: f}).DeleteBucket(context.Background(), "b1")
+	f, _ := newS3(t, "bucket-1")
+	f.PutObjects("bucket-1", "k1")
+	deleted, err := (&bucketClient{api: f}).DeleteBucket(context.Background(), "bucket-1")
 	require.NoError(t, err)
 	assert.True(t, deleted)
-	_, ok := f.Bucket("b1")
+	_, ok := f.Bucket("bucket-1")
 	assert.False(t, ok)
 }
 
 func TestDeleteBucketOfAMissingBucket(t *testing.T) {
 	f, _ := newS3(t)
-	deleted, err := (&bucketClient{api: f}).DeleteBucket(context.Background(), "b1")
+	deleted, err := (&bucketClient{api: f}).DeleteBucket(context.Background(), "bucket-1")
 	require.NoError(t, err)
 	assert.False(t, deleted)
 	assert.NotContains(t, f.Calls(), "DeleteBucket")

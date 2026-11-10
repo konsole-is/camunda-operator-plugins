@@ -20,11 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -46,7 +48,7 @@ func createBucket(c awskit.S3, name, region string) error {
 func TestS3GivesANewBucketTheDefaultsOfAWS(t *testing.T) {
 	f := NewS3()
 	_, err := f.CreateBucket(context.Background(), &s3.CreateBucketInput{
-		Bucket: aws.String("b1"),
+		Bucket: aws.String("bucket-1"),
 		CreateBucketConfiguration: &types.CreateBucketConfiguration{
 			LocationConstraint: "eu-west-1",
 			Tags:               []types.Tag{{Key: aws.String("a"), Value: aws.String("b")}},
@@ -54,7 +56,7 @@ func TestS3GivesANewBucketTheDefaultsOfAWS(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	b, ok := f.Bucket("b1")
+	b, ok := f.Bucket("bucket-1")
 	require.True(t, ok)
 	assert.Equal(t, "eu-west-1", b.Region)
 	assert.Equal(t, map[string]string{"a": "b"}, b.Tags)
@@ -67,16 +69,16 @@ func TestS3GivesANewBucketTheDefaultsOfAWS(t *testing.T) {
 	assert.Equal(t, types.ServerSideEncryptionAes256, b.Encryption.ApplyServerSideEncryptionByDefault.SSEAlgorithm)
 	_, err = f.GetBucketLifecycleConfiguration(
 		context.Background(),
-		&s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String("b1")},
+		&s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String("bucket-1")},
 	)
 	assert.True(t, awskit.IsNotConfigured(err))
 }
 
 func TestS3AnswersAnOwnedNameWithBucketAlreadyOwnedByYou(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 
-	err := createBucket(f.In("eu-central-1"), "b1", "eu-central-1")
+	err := createBucket(f.In("eu-central-1"), "bucket-1", "eu-central-1")
 
 	var owned *types.BucketAlreadyOwnedByYou
 	assert.ErrorAs(t, err, &owned, "a bucket name is global across regions")
@@ -84,9 +86,9 @@ func TestS3AnswersAnOwnedNameWithBucketAlreadyOwnedByYou(t *testing.T) {
 
 func TestS3RefusesANameOfAnotherAccount(t *testing.T) {
 	f := NewS3()
-	f.AddForeignBucket("b1", "eu-west-1")
+	f.AddForeignBucket("bucket-1", "eu-west-1")
 
-	err := createBucket(f, "b1", "eu-west-1")
+	err := createBucket(f, "bucket-1", "eu-west-1")
 
 	var taken *types.BucketAlreadyExists
 	assert.ErrorAs(t, err, &taken)
@@ -96,10 +98,10 @@ func TestS3RefusesANameOfAnotherAccount(t *testing.T) {
 func TestS3NeedsTheLocationConstraintOfItsRegion(t *testing.T) {
 	f := NewS3()
 
-	_, err := f.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String("b1")})
+	_, err := f.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: aws.String("bucket-1")})
 	assert.Equal(t, "IllegalLocationConstraintException", awskit.ErrorCode(err), "no constraint")
 
-	err = createBucket(f, "b1", "eu-central-1")
+	err = createBucket(f, "bucket-1", "eu-central-1")
 	assert.Equal(t, "IllegalLocationConstraintException", awskit.ErrorCode(err), "the constraint of another region")
 
 	assert.Empty(t, f.Buckets())
@@ -110,32 +112,32 @@ func TestS3RefusesALocationConstraintInUSEast1(t *testing.T) {
 	east := f.In(usEast1)
 
 	_, err := east.CreateBucket(context.Background(), &s3.CreateBucketInput{
-		Bucket:                    aws.String("b1"),
+		Bucket:                    aws.String("bucket-1"),
 		CreateBucketConfiguration: &types.CreateBucketConfiguration{LocationConstraint: usEast1},
 	})
 	assert.Equal(t, "InvalidLocationConstraint", awskit.ErrorCode(err))
 
-	require.NoError(t, createBucket(east, "b1", usEast1))
-	b, _ := f.Bucket("b1")
+	require.NoError(t, createBucket(east, "bucket-1", usEast1))
+	b, _ := f.Bucket("bucket-1")
 	assert.Equal(t, usEast1, b.Region)
 }
 
 func TestS3RedirectsACallOfAnotherRegion(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 	other := f.In("eu-central-1")
 
-	_, err := other.GetBucketTagging(context.Background(), &s3.GetBucketTaggingInput{Bucket: aws.String("b1")})
+	_, err := other.GetBucketTagging(context.Background(), &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
 	assert.Equal(t, "PermanentRedirect", awskit.ErrorCode(err))
 
-	_, err = other.HeadBucket(context.Background(), &s3.HeadBucketInput{Bucket: aws.String("b1")})
+	_, err = other.HeadBucket(context.Background(), &s3.HeadBucketInput{Bucket: aws.String("bucket-1")})
 	assert.Equal(t, "MovedPermanently", awskit.ErrorCode(err))
 }
 
 func TestS3HeadBucketOfAMissingAndOfAForeignBucket(t *testing.T) {
 	f := NewS3()
 	f.AddForeignBucket("foreign", "eu-west-1")
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 
 	_, err := f.HeadBucket(context.Background(), &s3.HeadBucketInput{Bucket: aws.String("missing")})
 	var notFound *types.NotFound
@@ -145,7 +147,7 @@ func TestS3HeadBucketOfAMissingAndOfAForeignBucket(t *testing.T) {
 	assert.True(t, awskit.IsAccessDenied(err))
 	assert.Equal(t, "Forbidden", awskit.ErrorCode(err))
 
-	out, err := f.HeadBucket(context.Background(), &s3.HeadBucketInput{Bucket: aws.String("b1")})
+	out, err := f.HeadBucket(context.Background(), &s3.HeadBucketInput{Bucket: aws.String("bucket-1")})
 	require.NoError(t, err)
 	assert.Equal(t, "eu-west-1", aws.ToString(out.BucketRegion))
 }
@@ -168,12 +170,12 @@ func TestS3AnswersACallOnAMissingOrAForeignBucket(t *testing.T) {
 
 func TestS3AnswersEachMissingConfiguration(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
-	f.Edit("b1", func(b *Bucket) {
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.Edit("bucket-1", func(b *Bucket) {
 		b.PublicAccessBlock = nil
 		b.Encryption = nil
 	})
-	bucket := aws.String("b1")
+	bucket := aws.String("bucket-1")
 	ctx := context.Background()
 
 	_, err := f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: bucket})
@@ -188,8 +190,8 @@ func TestS3AnswersEachMissingConfiguration(t *testing.T) {
 
 func TestS3ReadsTheConfigurationThatACallWrote(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
-	bucket := aws.String("b1")
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	bucket := aws.String("bucket-1")
 	ctx := context.Background()
 	block := &types.PublicAccessBlockConfiguration{BlockPublicAcls: aws.Bool(true), BlockPublicPolicy: aws.Bool(false)}
 	rule := types.ServerSideEncryptionRule{
@@ -232,14 +234,14 @@ func TestS3ReadsTheConfigurationThatACallWrote(t *testing.T) {
 
 func TestS3ReplacesTheLifecycleRules(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 	put := func(ids ...string) {
 		rules := make([]types.LifecycleRule, 0, len(ids))
 		for _, id := range ids {
 			rules = append(rules, types.LifecycleRule{ID: aws.String(id), Status: types.ExpirationStatusEnabled})
 		}
 		_, err := f.PutBucketLifecycleConfiguration(context.Background(), &s3.PutBucketLifecycleConfigurationInput{
-			Bucket:                 aws.String("b1"),
+			Bucket:                 aws.String("bucket-1"),
 			LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: rules},
 		})
 		require.NoError(t, err)
@@ -248,70 +250,169 @@ func TestS3ReplacesTheLifecycleRules(t *testing.T) {
 	put("r1", "r2")
 	put("r3")
 
-	b, _ := f.Bucket("b1")
+	b, _ := f.Bucket("bucket-1")
 	require.Len(t, b.LifecycleRules, 1)
 	assert.Equal(t, "r3", aws.ToString(b.LifecycleRules[0].ID))
 }
 
 func TestS3ReplacesTheTagSet(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 	ctx := context.Background()
 
 	_, err := f.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
-		Bucket:  aws.String("b1"),
+		Bucket:  aws.String("bucket-1"),
 		Tagging: &types.Tagging{TagSet: []types.Tag{{Key: aws.String("a"), Value: aws.String("1")}}},
 	})
 	require.NoError(t, err)
 	_, err = f.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
-		Bucket:  aws.String("b1"),
+		Bucket:  aws.String("bucket-1"),
 		Tagging: &types.Tagging{TagSet: []types.Tag{{Key: aws.String("b"), Value: aws.String("2")}}},
 	})
 	require.NoError(t, err)
 
-	out, err := f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String("b1")})
+	out, err := f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
 	require.NoError(t, err)
 	assert.Equal(t, []types.Tag{{Key: aws.String("b"), Value: aws.String("2")}}, out.TagSet)
 
-	_, err = f.DeleteBucketTagging(ctx, &s3.DeleteBucketTaggingInput{Bucket: aws.String("b1")})
+	_, err = f.DeleteBucketTagging(ctx, &s3.DeleteBucketTaggingInput{Bucket: aws.String("bucket-1")})
 	require.NoError(t, err)
-	_, err = f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String("b1")})
+	_, err = f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
 	assert.True(t, awskit.IsNotConfigured(err))
+}
+
+func tag(key, value string) types.Tag {
+	return types.Tag{Key: aws.String(key), Value: aws.String(value)}
 }
 
 func TestS3RefusesMoreThan50Tags(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
 	tags := make([]types.Tag, 51)
 	for i := range tags {
-		tags[i] = types.Tag{Key: aws.String(fmt.Sprintf("k%d", i)), Value: aws.String("v")}
+		tags[i] = tag(fmt.Sprintf("k%d", i), "v")
 	}
 
-	_, err := f.PutBucketTagging(context.Background(), &s3.PutBucketTaggingInput{
-		Bucket:  aws.String("b1"),
+	_, err := f.CreateBucket(context.Background(), &s3.CreateBucketInput{
+		Bucket:                    aws.String("bucket-1"),
+		CreateBucketConfiguration: &types.CreateBucketConfiguration{LocationConstraint: "eu-west-1", Tags: tags},
+	})
+	assert.Equal(t, "InvalidTag", awskit.ErrorCode(err), "at create")
+	assert.Empty(t, f.Buckets())
+
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	_, err = f.PutBucketTagging(context.Background(), &s3.PutBucketTaggingInput{
+		Bucket:  aws.String("bucket-1"),
 		Tagging: &types.Tagging{TagSet: tags},
 	})
-
-	assert.Equal(t, "InvalidTag", awskit.ErrorCode(err))
-	b, _ := f.Bucket("b1")
+	assert.Equal(t, "InvalidTag", awskit.ErrorCode(err), "in a put")
+	b, _ := f.Bucket("bucket-1")
 	assert.Empty(t, b.Tags)
+}
+
+func TestS3RefusesTwoTagsWithOneKey(t *testing.T) {
+	f := NewS3()
+	tags := []types.Tag{tag("a", "1"), tag("a", "2")}
+
+	_, err := f.CreateBucket(context.Background(), &s3.CreateBucketInput{
+		Bucket:                    aws.String("bucket-1"),
+		CreateBucketConfiguration: &types.CreateBucketConfiguration{LocationConstraint: "eu-west-1", Tags: tags},
+	})
+	assert.Equal(t, "InvalidTag", awskit.ErrorCode(err), "at create")
+
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	_, err = f.PutBucketTagging(context.Background(), &s3.PutBucketTaggingInput{
+		Bucket:  aws.String("bucket-1"),
+		Tagging: &types.Tagging{TagSet: tags},
+	})
+	assert.Equal(t, "InvalidTag", awskit.ErrorCode(err), "in a put")
+	b, _ := f.Bucket("bucket-1")
+	assert.Empty(t, b.Tags)
+}
+
+func TestS3RefusesAnInvalidBucketName(t *testing.T) {
+	f := NewS3()
+	for _, name := range []string{
+		"ab",
+		strings.Repeat("a", 64),
+		"Upper",
+		"under_score",
+		"-start",
+		"end-",
+	} {
+		assert.Equal(t, "InvalidBucketName", awskit.ErrorCode(createBucket(f, name, "eu-west-1")), name)
+	}
+	assert.Empty(t, f.Buckets())
+
+	for _, name := range []string{"abc", strings.Repeat("a", 63), "a.b-c1"} {
+		assert.NoError(t, createBucket(f, name, "eu-west-1"), name)
+	}
+}
+
+func TestS3AnswersAnOwnedNameInUSEast1WithSuccessAndNoChange(t *testing.T) {
+	f := NewS3()
+	east := f.In(usEast1)
+	create := func(tags ...types.Tag) error {
+		_, err := east.CreateBucket(context.Background(), &s3.CreateBucketInput{
+			Bucket:                    aws.String("bucket-1"),
+			CreateBucketConfiguration: &types.CreateBucketConfiguration{Tags: tags},
+		})
+		return err
+	}
+	require.NoError(t, create(tag("a", "1")))
+
+	require.NoError(t, create(tag("b", "2")))
+
+	b, _ := f.Bucket("bucket-1")
+	assert.Equal(t, map[string]string{"a": "1"}, b.Tags, "the tags of the second call are not applied")
+}
+
+func TestS3RefusesTwoLifecycleRulesWithOneID(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	rule := types.LifecycleRule{ID: aws.String("r1"), Status: types.ExpirationStatusEnabled}
+
+	_, err := f.PutBucketLifecycleConfiguration(context.Background(), &s3.PutBucketLifecycleConfigurationInput{
+		Bucket:                 aws.String("bucket-1"),
+		LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: []types.LifecycleRule{rule, rule}},
+	})
+
+	assert.Equal(t, "InvalidArgument", awskit.ErrorCode(err))
+	b, _ := f.Bucket("bucket-1")
+	assert.Empty(t, b.LifecycleRules)
+}
+
+func TestS3RefusesALifecycleRuleWithoutStatus(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+
+	_, err := f.PutBucketLifecycleConfiguration(context.Background(), &s3.PutBucketLifecycleConfigurationInput{
+		Bucket: aws.String("bucket-1"),
+		LifecycleConfiguration: &types.BucketLifecycleConfiguration{
+			Rules: []types.LifecycleRule{{ID: aws.String("r1")}},
+		},
+	})
+
+	var invalid smithy.InvalidParamsError
+	assert.ErrorAs(t, err, &invalid, "the SDK refuses the call before it reaches S3")
+	b, _ := f.Bucket("bucket-1")
+	assert.Empty(t, b.LifecycleRules)
 }
 
 func TestS3ListsObjectsInPages(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 	keys := make([]string, 2500)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("k%04d", len(keys)-1-i)
 	}
-	f.PutObjects("b1", keys...)
+	f.PutObjects("bucket-1", keys...)
 
 	var listed []string
 	var pages []int
 	var token *string
 	for {
 		out, err := f.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-			Bucket:            aws.String("b1"),
+			Bucket:            aws.String("bucket-1"),
 			ContinuationToken: token,
 		})
 		require.NoError(t, err)
@@ -331,7 +432,7 @@ func TestS3ListsObjectsInPages(t *testing.T) {
 	assert.IsIncreasing(t, listed, "keys come in order")
 
 	out, err := f.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-		Bucket:  aws.String("b1"),
+		Bucket:  aws.String("bucket-1"),
 		MaxKeys: aws.Int32(5000),
 	})
 	require.NoError(t, err)
@@ -340,14 +441,14 @@ func TestS3ListsObjectsInPages(t *testing.T) {
 
 func TestS3RefusesMoreThan1000KeysInOneDelete(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 	objects := make([]types.ObjectIdentifier, 1001)
 	for i := range objects {
 		objects[i] = types.ObjectIdentifier{Key: aws.String(fmt.Sprintf("k%d", i))}
 	}
 
 	_, err := f.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
-		Bucket: aws.String("b1"),
+		Bucket: aws.String("bucket-1"),
 		Delete: &types.Delete{Objects: objects},
 	})
 
@@ -356,12 +457,12 @@ func TestS3RefusesMoreThan1000KeysInOneDelete(t *testing.T) {
 
 func TestS3ReportsARefusedKey(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
-	f.PutObjects("b1", "k1", "k2")
-	f.RefuseDelete("b1", "k1", "AccessDenied")
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.PutObjects("bucket-1", "k1", "k2")
+	f.RefuseDelete("bucket-1", "k1", "AccessDenied")
 
 	out, err := f.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
-		Bucket: aws.String("b1"),
+		Bucket: aws.String("bucket-1"),
 		Delete: &types.Delete{
 			Objects: []types.ObjectIdentifier{{Key: aws.String("k1")}, {Key: aws.String("k2")}},
 			Quiet:   aws.Bool(true),
@@ -373,31 +474,31 @@ func TestS3ReportsARefusedKey(t *testing.T) {
 	assert.Equal(t, "k1", aws.ToString(out.Errors[0].Key))
 	assert.Equal(t, "AccessDenied", aws.ToString(out.Errors[0].Code))
 	assert.Empty(t, out.Deleted, "a quiet delete names only the errors")
-	b, _ := f.Bucket("b1")
+	b, _ := f.Bucket("bucket-1")
 	assert.Equal(t, []string{"k1"}, b.Objects)
 }
 
 func TestS3RefusesToDeleteABucketWithObjects(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
-	f.PutObjects("b1", "k1")
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.PutObjects("bucket-1", "k1")
 
-	_, err := f.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String("b1")})
+	_, err := f.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String("bucket-1")})
 	assert.Equal(t, "BucketNotEmpty", awskit.ErrorCode(err))
 
-	f.Edit("b1", func(b *Bucket) { b.Objects = nil })
-	_, err = f.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String("b1")})
+	f.Edit("bucket-1", func(b *Bucket) { b.Objects = nil })
+	_, err = f.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String("bucket-1")})
 	require.NoError(t, err)
-	_, ok := f.Bucket("b1")
+	_, ok := f.Bucket("bucket-1")
 	assert.False(t, ok)
 }
 
 func TestS3ListsTheBucketsOfItsAccountInPages(t *testing.T) {
 	f := NewS3()
 	f.AddForeignBucket("foreign", "eu-west-1")
-	require.NoError(t, createBucket(f, "b2", "eu-west-1"))
-	require.NoError(t, createBucket(f.In(usEast1), "b1", usEast1))
-	require.NoError(t, createBucket(f, "b3", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-2", "eu-west-1"))
+	require.NoError(t, createBucket(f.In(usEast1), "bucket-1", usEast1))
+	require.NoError(t, createBucket(f, "bucket-3", "eu-west-1"))
 
 	var names, regions []string
 	var token *string
@@ -417,7 +518,7 @@ func TestS3ListsTheBucketsOfItsAccountInPages(t *testing.T) {
 		token = out.ContinuationToken
 	}
 
-	assert.Equal(t, []string{"b1", "b2", "b3"}, names)
+	assert.Equal(t, []string{"bucket-1", "bucket-2", "bucket-3"}, names)
 	assert.Equal(t, []string{usEast1, "eu-west-1", "eu-west-1"}, regions)
 }
 
@@ -426,13 +527,13 @@ func TestS3FailNextFailsTheNextCallOnly(t *testing.T) {
 	boom := errors.New("boom")
 	f.FailNext("CreateBucket", boom)
 
-	assert.ErrorIs(t, createBucket(f, "b1", "eu-west-1"), boom)
-	assert.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	assert.ErrorIs(t, createBucket(f, "bucket-1", "eu-west-1"), boom)
+	assert.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 	assert.Equal(t, []string{"CreateBucket", "CreateBucket"}, f.Calls())
 }
 
 // configure writes a public access block, a KMS encryption rule, and a
-// lifecycle rule to the bucket b1 of f, and returns the inputs it sent.
+// lifecycle rule to the bucket bucket-1 of f, and returns the inputs it sent.
 func configure(t *testing.T, f *S3) (
 	*types.PublicAccessBlockConfiguration,
 	*types.ServerSideEncryptionConfiguration,
@@ -454,26 +555,26 @@ func configure(t *testing.T, f *S3) (
 	}}}
 
 	_, err := f.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{
-		Bucket:                         aws.String("b1"),
+		Bucket:                         aws.String("bucket-1"),
 		PublicAccessBlockConfiguration: block,
 	})
 	require.NoError(t, err)
 	_, err = f.PutBucketEncryption(ctx, &s3.PutBucketEncryptionInput{
-		Bucket:                            aws.String("b1"),
+		Bucket:                            aws.String("bucket-1"),
 		ServerSideEncryptionConfiguration: encryption,
 	})
 	require.NoError(t, err)
 	_, err = f.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
-		Bucket:                 aws.String("b1"),
+		Bucket:                 aws.String("bucket-1"),
 		LifecycleConfiguration: lifecycle,
 	})
 	require.NoError(t, err)
 	return block, encryption, lifecycle
 }
 
-// assertConfigured asserts that the bucket b1 of f holds what configure wrote.
+// assertConfigured asserts that the bucket bucket-1 of f holds what configure wrote.
 func assertConfigured(t *testing.T, f *S3) {
-	b, _ := f.Bucket("b1")
+	b, _ := f.Bucket("bucket-1")
 	assert.True(t, aws.ToBool(b.PublicAccessBlock.BlockPublicAcls))
 	assert.Equal(t, "k1", aws.ToString(b.Encryption.ApplyServerSideEncryptionByDefault.KMSMasterKeyID))
 	assert.True(t, aws.ToBool(b.Encryption.BucketKeyEnabled))
@@ -483,12 +584,12 @@ func assertConfigured(t *testing.T, f *S3) {
 
 func TestS3CopiesDoNotChangeTheStore(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
-	f.PutObjects("b1", "k1")
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.PutObjects("bucket-1", "k1")
 	configure(t, f)
 	ctx := context.Background()
 
-	b, _ := f.Bucket("b1")
+	b, _ := f.Bucket("bucket-1")
 	b.Tags["x"] = "y"
 	b.Objects[0] = "changed"
 	*b.PublicAccessBlock.BlockPublicAcls = false
@@ -497,20 +598,20 @@ func TestS3CopiesDoNotChangeTheStore(t *testing.T) {
 	*b.LifecycleRules[0].ID = "r2"
 	*b.LifecycleRules[0].AbortIncompleteMultipartUpload.DaysAfterInitiation = 1
 
-	block, err := f.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: aws.String("b1")})
+	block, err := f.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: aws.String("bucket-1")})
 	require.NoError(t, err)
 	*block.PublicAccessBlockConfiguration.BlockPublicAcls = false
-	encryption, err := f.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: aws.String("b1")})
+	encryption, err := f.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: aws.String("bucket-1")})
 	require.NoError(t, err)
 	*encryption.ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.KMSMasterKeyID = "k2"
 	lifecycle, err := f.GetBucketLifecycleConfiguration(
 		ctx,
-		&s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String("b1")},
+		&s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String("bucket-1")},
 	)
 	require.NoError(t, err)
 	*lifecycle.Rules[0].AbortIncompleteMultipartUpload.DaysAfterInitiation = 1
 
-	again, _ := f.Bucket("b1")
+	again, _ := f.Bucket("bucket-1")
 	assert.Empty(t, again.Tags)
 	assert.Equal(t, []string{"k1"}, again.Objects)
 	assertConfigured(t, f)
@@ -518,7 +619,7 @@ func TestS3CopiesDoNotChangeTheStore(t *testing.T) {
 
 func TestS3KeepsNoReferenceToTheInputOfAPut(t *testing.T) {
 	f := NewS3()
-	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 	block, encryption, lifecycle := configure(t, f)
 
 	*block.BlockPublicAcls = false

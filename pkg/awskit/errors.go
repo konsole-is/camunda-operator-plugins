@@ -73,8 +73,8 @@ func IsMalformedPolicy(err error) bool {
 }
 
 // IsAccessDenied reports whether err says that the caller may not make the
-// call. S3 answers HeadBucket on a bucket that the caller may not read with
-// Forbidden.
+// call. S3 answers Forbidden to a HeadBucket on a bucket that the caller may
+// not read.
 func IsAccessDenied(err error) bool {
 	return hasCode(err, "AccessDenied", "AccessDeniedException", "Forbidden")
 }
