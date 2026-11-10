@@ -439,6 +439,34 @@ func TestS3ListsObjectsInPages(t *testing.T) {
 	assert.Len(t, out.Contents, 1000)
 }
 
+func TestS3ListsNoObjectWithMaxKeysZero(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.PutObjects("bucket-1", "k1", "k2")
+
+	out, err := f.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+		Bucket:  aws.String("bucket-1"),
+		MaxKeys: aws.Int32(0),
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, out.Contents)
+	assert.True(t, aws.ToBool(out.IsTruncated))
+}
+
+func TestS3RefusesANegativeMaxKeys(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.PutObjects("bucket-1", "k1")
+
+	_, err := f.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+		Bucket:  aws.String("bucket-1"),
+		MaxKeys: aws.Int32(-1),
+	})
+
+	assert.Equal(t, "InvalidArgument", awskit.ErrorCode(err))
+}
+
 func TestS3RefusesMoreThan1000KeysInOneDelete(t *testing.T) {
 	f := NewS3()
 	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))

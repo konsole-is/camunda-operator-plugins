@@ -714,6 +714,14 @@ func (r s3Region) ListObjectsV2(
 		return nil, err
 	}
 
+	size := maxKeys
+	if in.MaxKeys != nil {
+		if *in.MaxKeys < 0 {
+			return nil, apiError("InvalidArgument", "Argument maxKeys must be an integer between 0 and 2147483647")
+		}
+		size = min(int(*in.MaxKeys), maxKeys)
+	}
+
 	// A token is the last key of the page before, so a delete between two
 	// calls moves no key past the next page.
 	keys := b.Objects
@@ -725,7 +733,6 @@ func (r s3Region) ListObjectsV2(
 		keys = keys[start:]
 	}
 
-	size := min(int(cmp.Or(aws.ToInt32(in.MaxKeys), maxKeys)), maxKeys)
 	truncated := len(keys) > size
 	keys = keys[:min(size, len(keys))]
 	out := &s3.ListObjectsV2Output{
@@ -739,7 +746,11 @@ func (r s3Region) ListObjectsV2(
 		out.Contents = append(out.Contents, types.Object{Key: aws.String(k)})
 	}
 	if truncated {
-		out.NextContinuationToken = aws.String(keys[len(keys)-1])
+		next := aws.ToString(in.ContinuationToken)
+		if len(keys) > 0 {
+			next = keys[len(keys)-1]
+		}
+		out.NextContinuationToken = aws.String(next)
 	}
 	return out, nil
 }
