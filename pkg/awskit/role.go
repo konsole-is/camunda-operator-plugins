@@ -248,8 +248,8 @@ var ErrTagNotVisible = errors.New("IAM does not show the UID tag of the request 
 // DeleteClaimedRole claims the role name for the request of tags with
 // ClaimRole, then deletes it with DeleteRole. It reports false, with no
 // error, when the role does not exist, a RoleInUseError for a role of another
-// request, and ErrTagNotVisible when IAM does not show the UID tag that it
-// wrote yet.
+// request, and ErrTagNotVisible when the read of DeleteRole does not show the
+// UID tag of tags on the role yet.
 func DeleteClaimedRole(ctx context.Context, c IAM, name string, tags map[string]string) (bool, error) {
 	if _, err := ClaimRole(ctx, c, name, tags); err != nil {
 		return false, err
