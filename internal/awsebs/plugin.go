@@ -64,8 +64,7 @@ type Plugin struct {
 // not of the request, and with StorageClassDeleting while its old StorageClass
 // is still deleting. When a parameter that a StorageClass cannot change
 // differs, it deletes the StorageClass and creates it again under the same
-// name, and returns an error when a StorageClass of that name still exists.
-// Volumes that exist keep their parameters.
+// name. Volumes that exist keep their parameters.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -100,13 +99,7 @@ func (p *Plugin) Reconcile(
 			),
 		}}, nil
 	case !live.DeletionTimestamp.IsZero():
-		return pluginkit.Result{
-			Pending: &pluginkit.Waiting{
-				Reason:  ReasonStorageClassDeleting,
-				Message: fmt.Sprintf("waiting for the old StorageClass %s to be gone", name),
-			},
-			RequeueAfter: deletingRequeue,
-		}, nil
+		return deleting(name), nil
 	default:
 		if replaced, err = p.deleteChanged(ctx, req, &live, desired); err != nil {
 			return pluginkit.Result{}, err
@@ -116,7 +109,12 @@ func (p *Plugin) Reconcile(
 	// The forced apply of pluginkit would take over a StorageClass that
 	// another actor created after the read, so a missing one is created first.
 	if notFound || replaced {
-		if err := p.create(ctx, req.Object, desired); err != nil {
+		err := p.create(ctx, req.Object, desired)
+		// A finalizer can hold the StorageClass that the replace deleted.
+		if replaced && apierrors.IsAlreadyExists(err) {
+			return deleting(name), nil
+		}
+		if err != nil {
 			return pluginkit.Result{}, err
 		}
 	}
@@ -146,6 +144,18 @@ func (p *Plugin) Reconcile(
 			OnOrphan: pluginsv1alpha1.OnOrphanKept,
 		}},
 	}, nil
+}
+
+// deleting returns the result that waits for the old StorageClass name to be
+// gone.
+func deleting(name string) pluginkit.Result {
+	return pluginkit.Result{
+		Pending: &pluginkit.Waiting{
+			Reason:  ReasonStorageClassDeleting,
+			Message: fmt.Sprintf("waiting for the old StorageClass %s to be gone", name),
+		},
+		RequeueAfter: deletingRequeue,
+	}
 }
 
 // ofRequest reports whether sc carries each of the ClusterScopedLabels of

@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
@@ -135,6 +136,39 @@ var _ = Describe("the AWS EBS plugin", func() {
 		waitReady(request)
 	})
 
+	It("waits without an error for a replaced StorageClass that a finalizer holds", func() {
+		request := ebsRequest(newNamespace(), testKey, `{}`, pluginsv1alpha1.DeletionPolicyDelete)
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+		waitReady(request)
+		old := liveStorageClass(Default, request)
+		old.Finalizers = append(old.Finalizers, "example.com/hold")
+		Expect(k8s.Update(ctx, old)).To(Succeed())
+		errorsBefore := reconcileErrors()
+
+		updateRequest(request, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(`{"type":"io2","iops":6000}`)
+		})
+
+		Eventually(func(g Gomega) {
+			cond := condition(g, request, pluginsv1alpha1.ConditionOutputsReady)
+			g.Expect(cond.Reason).To(Equal(awsebs.ReasonStorageClassDeleting))
+		}).Should(Succeed())
+		Expect(reconcileErrors()).To(Equal(errorsBefore), "the wait for the old StorageClass is not an error")
+
+		Eventually(func(g Gomega) {
+			held := liveStorageClass(g, request)
+			held.Finalizers = nil
+			g.Expect(k8s.Update(ctx, held)).To(Succeed())
+		}).Should(Succeed())
+		Eventually(func(g Gomega) {
+			sc := liveStorageClass(g, request)
+			g.Expect(sc.UID).NotTo(Equal(old.UID))
+			g.Expect(sc.Parameters).To(HaveKeyWithValue("type", "io2"))
+		}).Should(Succeed())
+		waitReady(request)
+		Expect(reconcileErrors()).To(Equal(errorsBefore))
+	})
+
 	It("brings back a StorageClass that someone deleted", func() {
 		request := ebsRequest(newNamespace(), testKey, "", pluginsv1alpha1.DeletionPolicyDelete)
 		Expect(k8s.Create(ctx, request)).To(Succeed())
@@ -231,4 +265,27 @@ func gone(request *pluginsv1alpha1.PluginRequest) func() bool {
 		var current pluginsv1alpha1.PluginRequest
 		return apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKeyFromObject(request), &current))
 	}
+}
+
+// reconcileErrors returns how many reconciles of the plugin controller
+// returned an error, from the metrics of controller-runtime.
+func reconcileErrors() float64 {
+	GinkgoHelper()
+	families, err := metrics.Registry.Gather()
+	Expect(err).NotTo(HaveOccurred())
+
+	var total float64
+	for _, f := range families {
+		if f.GetName() != "controller_runtime_reconcile_errors_total" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "controller" && l.GetValue() == "aws-ebs" {
+					total += m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return total
 }
