@@ -62,12 +62,12 @@ helm install aws-ebs charts/aws-ebs --namespace camunda-operator-plugins
 | Parameter | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `type` | `gp3`, `gp2`, `io1`, `io2`, `st1`, `sc1` | `gp3` | The EBS volume type. |
-| `iops` | 100 or more | none | The IOPS of each volume. Only for `gp3`, `io1`, and `io2`. |
+| `iops` | 100 or more, 3000 or more for `gp3` | none | The IOPS of each volume. Only for `gp3`, `io1`, and `io2`. |
 | `throughput` | 125 or more | none | The throughput of each volume in MiB/s. Only for `gp3`. |
 | `fsType` | `ext4`, `xfs`, `ext3` | `ext4` | The file system of each volume. The StorageClass gets it as `csi.storage.k8s.io/fstype`. |
 | `reclaimPolicy` | `Delete`, `Retain` | `Delete` | What happens to an EBS volume when its PersistentVolumeClaim is deleted. |
 
-The schema refuses `throughput` with a `type` other than `gp3`, and `iops` with a `type` other than `gp3`, `io1`, or `io2`. A claim can change no parameter. The admin sets them in the `parameterValues` of the registration.
+The schema refuses `throughput` with a `type` other than `gp3`, `iops` with a `type` other than `gp3`, `io1`, or `io2`, and `iops` below 3000 for `gp3`, also when `type` is not set. A claim can change no parameter. The admin sets them in the `parameterValues` of the registration.
 
 Kubernetes does not let a StorageClass change its parameters, its provisioner, or its reclaim policy. When one of them changes in the `parameterValues` of the registration, or when the key of the claim changes, the plugin deletes the StorageClass and creates it again with the same name. It records the event `StorageClassReplaced`, which names the changed fields. The name does not change, so the clusters keep their StorageClass. Volumes that exist keep their old type, file system, and key. Only new volumes get the new values.
 
