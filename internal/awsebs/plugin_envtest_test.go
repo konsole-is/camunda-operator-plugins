@@ -85,7 +85,7 @@ var _ = Describe("the AWS EBS plugin", func() {
 			"encrypted":                 "true",
 			"kmsKeyId":                  testKey,
 		}))
-		Expect(sc.AllowVolumeExpansion).To(Equal(ptr.To(true)))
+		Expect(sc.AllowVolumeExpansion).To(Equal(new(true)))
 		Expect(sc.VolumeBindingMode).To(Equal(ptr.To(storagev1.VolumeBindingWaitForFirstConsumer)))
 		Expect(sc.ReclaimPolicy).To(Equal(ptr.To(corev1.PersistentVolumeReclaimDelete)))
 		for k, v := range pluginkit.ClusterScopedLabels(request) {

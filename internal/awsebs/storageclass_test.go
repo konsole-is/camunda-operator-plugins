@@ -38,7 +38,7 @@ func TestStorageClassEncryptsWithTheKeyAndTheDefaults(t *testing.T) {
 		"encrypted":                 "true",
 		"kmsKeyId":                  testKey,
 	}, sc.Parameters)
-	assert.Equal(t, ptr.To(true), sc.AllowVolumeExpansion)
+	assert.Equal(t, new(true), sc.AllowVolumeExpansion)
 	assert.Equal(t, ptr.To(storagev1.VolumeBindingWaitForFirstConsumer), sc.VolumeBindingMode)
 	assert.Equal(t, ptr.To(corev1.PersistentVolumeReclaimDelete), sc.ReclaimPolicy)
 }
@@ -96,7 +96,7 @@ func TestChangedImmutable(t *testing.T) {
 
 func TestChangedImmutableIgnoresTheMutableFields(t *testing.T) {
 	live := StorageClass("sc", Params{}, testKey)
-	live.AllowVolumeExpansion = ptr.To(false)
+	live.AllowVolumeExpansion = new(false)
 	live.Labels = map[string]string{"team": "a"}
 	live.MountOptions = []string{"noatime"}
 

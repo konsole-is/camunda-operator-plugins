@@ -101,7 +101,7 @@ func StorageClass(name string, p Params, keyARN string) *storagev1.StorageClass 
 		Provisioner:          Provisioner,
 		Parameters:           parameters,
 		ReclaimPolicy:        &reclaim,
-		AllowVolumeExpansion: ptr.To(true),
+		AllowVolumeExpansion: new(true),
 		VolumeBindingMode:    ptr.To(storagev1.VolumeBindingWaitForFirstConsumer),
 	}
 }
