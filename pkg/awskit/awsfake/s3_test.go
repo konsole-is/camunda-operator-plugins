@@ -431,18 +431,101 @@ func TestS3FailNextFailsTheNextCallOnly(t *testing.T) {
 	assert.Equal(t, []string{"CreateBucket", "CreateBucket"}, f.Calls())
 }
 
+// configure writes a public access block, a KMS encryption rule, and a
+// lifecycle rule to the bucket b1 of f, and returns the inputs it sent.
+func configure(t *testing.T, f *S3) (
+	*types.PublicAccessBlockConfiguration,
+	*types.ServerSideEncryptionConfiguration,
+	*types.BucketLifecycleConfiguration,
+) {
+	ctx := context.Background()
+	block := &types.PublicAccessBlockConfiguration{BlockPublicAcls: aws.Bool(true)}
+	encryption := &types.ServerSideEncryptionConfiguration{Rules: []types.ServerSideEncryptionRule{{
+		ApplyServerSideEncryptionByDefault: &types.ServerSideEncryptionByDefault{
+			SSEAlgorithm:   types.ServerSideEncryptionAwsKms,
+			KMSMasterKeyID: aws.String("k1"),
+		},
+		BucketKeyEnabled: aws.Bool(true),
+	}}}
+	lifecycle := &types.BucketLifecycleConfiguration{Rules: []types.LifecycleRule{{
+		ID:                             aws.String("r1"),
+		Status:                         types.ExpirationStatusEnabled,
+		AbortIncompleteMultipartUpload: &types.AbortIncompleteMultipartUpload{DaysAfterInitiation: aws.Int32(7)},
+	}}}
+
+	_, err := f.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{
+		Bucket:                         aws.String("b1"),
+		PublicAccessBlockConfiguration: block,
+	})
+	require.NoError(t, err)
+	_, err = f.PutBucketEncryption(ctx, &s3.PutBucketEncryptionInput{
+		Bucket:                            aws.String("b1"),
+		ServerSideEncryptionConfiguration: encryption,
+	})
+	require.NoError(t, err)
+	_, err = f.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+		Bucket:                 aws.String("b1"),
+		LifecycleConfiguration: lifecycle,
+	})
+	require.NoError(t, err)
+	return block, encryption, lifecycle
+}
+
+// assertConfigured asserts that the bucket b1 of f holds what configure wrote.
+func assertConfigured(t *testing.T, f *S3) {
+	b, _ := f.Bucket("b1")
+	assert.True(t, aws.ToBool(b.PublicAccessBlock.BlockPublicAcls))
+	assert.Equal(t, "k1", aws.ToString(b.Encryption.ApplyServerSideEncryptionByDefault.KMSMasterKeyID))
+	assert.True(t, aws.ToBool(b.Encryption.BucketKeyEnabled))
+	assert.Equal(t, "r1", aws.ToString(b.LifecycleRules[0].ID))
+	assert.Equal(t, int32(7), aws.ToInt32(b.LifecycleRules[0].AbortIncompleteMultipartUpload.DaysAfterInitiation))
+}
+
 func TestS3CopiesDoNotChangeTheStore(t *testing.T) {
 	f := NewS3()
 	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
 	f.PutObjects("b1", "k1")
+	configure(t, f)
+	ctx := context.Background()
 
 	b, _ := f.Bucket("b1")
 	b.Tags["x"] = "y"
 	b.Objects[0] = "changed"
-	b.PublicAccessBlock.BlockPublicAcls = aws.Bool(false)
+	*b.PublicAccessBlock.BlockPublicAcls = false
+	*b.Encryption.ApplyServerSideEncryptionByDefault.KMSMasterKeyID = "k2"
+	*b.Encryption.BucketKeyEnabled = false
+	*b.LifecycleRules[0].ID = "r2"
+	*b.LifecycleRules[0].AbortIncompleteMultipartUpload.DaysAfterInitiation = 1
+
+	block, err := f.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: aws.String("b1")})
+	require.NoError(t, err)
+	*block.PublicAccessBlockConfiguration.BlockPublicAcls = false
+	encryption, err := f.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: aws.String("b1")})
+	require.NoError(t, err)
+	*encryption.ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.KMSMasterKeyID = "k2"
+	lifecycle, err := f.GetBucketLifecycleConfiguration(
+		ctx,
+		&s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String("b1")},
+	)
+	require.NoError(t, err)
+	*lifecycle.Rules[0].AbortIncompleteMultipartUpload.DaysAfterInitiation = 1
 
 	again, _ := f.Bucket("b1")
 	assert.Empty(t, again.Tags)
 	assert.Equal(t, []string{"k1"}, again.Objects)
-	assert.True(t, aws.ToBool(again.PublicAccessBlock.BlockPublicAcls))
+	assertConfigured(t, f)
+}
+
+func TestS3KeepsNoReferenceToTheInputOfAPut(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "b1", "eu-west-1"))
+	block, encryption, lifecycle := configure(t, f)
+
+	*block.BlockPublicAcls = false
+	*encryption.Rules[0].ApplyServerSideEncryptionByDefault.KMSMasterKeyID = "k2"
+	*encryption.Rules[0].BucketKeyEnabled = false
+	*lifecycle.Rules[0].ID = "r2"
+	*lifecycle.Rules[0].AbortIncompleteMultipartUpload.DaysAfterInitiation = 1
+
+	assertConfigured(t, f)
 }

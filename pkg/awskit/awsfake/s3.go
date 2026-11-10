@@ -20,6 +20,7 @@ import (
 	"cmp"
 	"context"
 	"maps"
+	"reflect"
 	"slices"
 	"sync"
 
@@ -99,7 +100,7 @@ func (f *S3) Bucket(name string) (Bucket, bool) {
 	if !ok {
 		return Bucket{}, false
 	}
-	return b.clone(), true
+	return deepCopy(*b), true
 }
 
 // Buckets returns a copy of each bucket, of every account, sorted by name.
@@ -108,7 +109,7 @@ func (f *S3) Buckets() []Bucket {
 	defer f.mu.Unlock()
 	buckets := make([]Bucket, 0, len(f.buckets))
 	for _, name := range slices.Sorted(maps.Keys(f.buckets)) {
-		buckets = append(buckets, f.buckets[name].clone())
+		buckets = append(buckets, deepCopy(*f.buckets[name]))
 	}
 	return buckets
 }
@@ -164,30 +165,53 @@ func (f *S3) Calls() []string {
 	return slices.Clone(f.fail.calls)
 }
 
-func (b *Bucket) clone() Bucket {
-	c := *b
-	c.Tags = maps.Clone(b.Tags)
-	c.PublicAccessBlock = clonePointer(b.PublicAccessBlock)
-	c.Encryption = cloneRule(b.Encryption)
-	c.LifecycleRules = slices.Clone(b.LifecycleRules)
-	c.Objects = slices.Clone(b.Objects)
-	return c
+// deepCopy returns a copy of v that shares no pointer, slice, or map with v,
+// so that a change through the copy never changes the store.
+func deepCopy[T any](v T) T {
+	c := reflect.New(reflect.TypeFor[T]()).Elem()
+	copyValue(c, reflect.ValueOf(&v).Elem())
+	return c.Interface().(T)
 }
 
-func clonePointer[T any](p *T) *T {
-	if p == nil {
-		return nil
+func copyValue(dst, src reflect.Value) {
+	switch src.Kind() {
+	case reflect.Pointer:
+		if !src.IsNil() {
+			dst.Set(reflect.New(src.Elem().Type()))
+			copyValue(dst.Elem(), src.Elem())
+		}
+	case reflect.Struct:
+		dst.Set(src)
+		for i := range src.NumField() {
+			if dst.Field(i).CanSet() {
+				copyValue(dst.Field(i), src.Field(i))
+			}
+		}
+	case reflect.Slice:
+		if !src.IsNil() {
+			dst.Set(reflect.MakeSlice(src.Type(), src.Len(), src.Len()))
+			for i := range src.Len() {
+				copyValue(dst.Index(i), src.Index(i))
+			}
+		}
+	case reflect.Map:
+		if !src.IsNil() {
+			dst.Set(reflect.MakeMapWithSize(src.Type(), src.Len()))
+			for _, k := range src.MapKeys() {
+				v := reflect.New(src.Type().Elem()).Elem()
+				copyValue(v, src.MapIndex(k))
+				dst.SetMapIndex(k, v)
+			}
+		}
+	case reflect.Interface:
+		if !src.IsNil() {
+			v := reflect.New(src.Elem().Type()).Elem()
+			copyValue(v, src.Elem())
+			dst.Set(v)
+		}
+	default:
+		dst.Set(src)
 	}
-	c := *p
-	return &c
-}
-
-func cloneRule(r *types.ServerSideEncryptionRule) *types.ServerSideEncryptionRule {
-	c := clonePointer(r)
-	if c != nil {
-		c.ApplyServerSideEncryptionByDefault = clonePointer(r.ApplyServerSideEncryptionByDefault)
-	}
-	return c
 }
 
 // s3Region is the S3 API of one region of a fake. An empty region is the
@@ -482,7 +506,7 @@ func (r s3Region) GetPublicAccessBlock(
 			"The public access block configuration was not found",
 		)
 	}
-	return &s3.GetPublicAccessBlockOutput{PublicAccessBlockConfiguration: clonePointer(b.PublicAccessBlock)}, nil
+	return &s3.GetPublicAccessBlockOutput{PublicAccessBlockConfiguration: deepCopy(b.PublicAccessBlock)}, nil
 }
 
 // PutPublicAccessBlock replaces the public access block of a bucket.
@@ -505,7 +529,7 @@ func (r s3Region) PutPublicAccessBlock(
 	if in.PublicAccessBlockConfiguration == nil {
 		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
 	}
-	b.PublicAccessBlock = clonePointer(in.PublicAccessBlockConfiguration)
+	b.PublicAccessBlock = deepCopy(in.PublicAccessBlockConfiguration)
 	return &s3.PutPublicAccessBlockOutput{}, nil
 }
 
@@ -535,7 +559,7 @@ func (r s3Region) GetBucketEncryption(
 	}
 	return &s3.GetBucketEncryptionOutput{
 		ServerSideEncryptionConfiguration: &types.ServerSideEncryptionConfiguration{
-			Rules: []types.ServerSideEncryptionRule{*cloneRule(b.Encryption)},
+			Rules: []types.ServerSideEncryptionRule{deepCopy(*b.Encryption)},
 		},
 	}, nil
 }
@@ -561,7 +585,7 @@ func (r s3Region) PutBucketEncryption(
 	if in.ServerSideEncryptionConfiguration == nil || len(in.ServerSideEncryptionConfiguration.Rules) != 1 {
 		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
 	}
-	b.Encryption = cloneRule(&in.ServerSideEncryptionConfiguration.Rules[0])
+	b.Encryption = deepCopy(&in.ServerSideEncryptionConfiguration.Rules[0])
 	return &s3.PutBucketEncryptionOutput{}, nil
 }
 
@@ -586,7 +610,7 @@ func (r s3Region) GetBucketLifecycleConfiguration(
 	if len(b.LifecycleRules) == 0 {
 		return nil, apiError("NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist")
 	}
-	return &s3.GetBucketLifecycleConfigurationOutput{Rules: slices.Clone(b.LifecycleRules)}, nil
+	return &s3.GetBucketLifecycleConfigurationOutput{Rules: deepCopy(b.LifecycleRules)}, nil
 }
 
 // PutBucketLifecycleConfiguration replaces every lifecycle rule of a bucket.
@@ -609,7 +633,7 @@ func (r s3Region) PutBucketLifecycleConfiguration(
 	if in.LifecycleConfiguration == nil || len(in.LifecycleConfiguration.Rules) == 0 {
 		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
 	}
-	b.LifecycleRules = slices.Clone(in.LifecycleConfiguration.Rules)
+	b.LifecycleRules = deepCopy(in.LifecycleConfiguration.Rules)
 	return &s3.PutBucketLifecycleConfigurationOutput{}, nil
 }
 
