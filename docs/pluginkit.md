@@ -95,7 +95,7 @@ pluginkit serves each `PluginRequest` whose label `plugins.camunda.io/registrati
 
 1. It validates `spec.parameters` against the schema of the registration, as the Kubernetes API server validates a custom resource: the schema, the `x-kubernetes-validations` rules, the list types, and the checks of an embedded resource. It checks the stored value, before the template parameters render. The error names each failing field, for example `spec.parameters.size`, and the message of each broken rule.
 2. It renders each parameter whose schema has `"x-fleet-template": true`.
-3. It checks that each input that the registration marks `required` has a value in `spec.inputs`. An empty string is no value. Without one, `OutputsReady` and `Ready` are `False` with reason `MissingInput`, and the message names each such input. pluginkit does not call `Reconcile`, and adds no finalizer to a request that it never served. A served request keeps its finalizer and its outputs, and its delete runs as usual.
+3. It checks that each input that the registration marks `required` has a value in `spec.inputs`. An empty string is no value. Without one, `OutputsReady` and `Ready` are `False` with reason `MissingInput`, and the message names each such input. pluginkit does not call `Reconcile`, and adds no finalizer to a request that it never served. A served request keeps its finalizer, its outputs, and its Grants, and its delete runs as usual.
 4. It adds the finalizer `plugins.camunda.io/cleanup`. A request whose parameters never passed the schema has no finalizer, so its delete does not wait.
 5. It calls `Reconcile`.
 6. It renders the grant templates of the registration, and applies the objects and the Grants.
