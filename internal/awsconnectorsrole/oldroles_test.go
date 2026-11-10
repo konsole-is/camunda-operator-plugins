@@ -17,11 +17,18 @@ limitations under the License.
 package awsconnectorsrole
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
+
+	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 func TestOldRoleRowsKeepsTheIAMRoleRowsOfOtherNames(t *testing.T) {
@@ -39,4 +46,39 @@ func TestOldRoleRowsKeepsTheIAMRoleRowsOfOtherNames(t *testing.T) {
 		oldRoleRows(rows, "team-b-0123"),
 	)
 	assert.Len(t, oldRoleRows(rows, ""), 2, "no current name keeps each role once")
+}
+
+// A change of the role of the name in AWS sends no watch event, so the
+// request must check it again by itself.
+func TestReconcileRetriesARoleNameInUse(t *testing.T) {
+	fake := awsfake.NewIAM()
+	opts := validOptions()
+	opts.Clients.IAM = fake
+	p, err := newPlugin(opts)
+	require.NoError(t, err)
+	request := &pluginsv1alpha1.PluginRequest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "orders-identity", UID: "uid-1"},
+		Spec: pluginsv1alpha1.PluginRequestSpec{
+			Registration: RegistrationRole,
+			ClaimRef:     pluginsv1alpha1.ClaimRef{Name: "orders"},
+			Target: pluginsv1alpha1.TargetRef{
+				Kind:               "CamundaCluster",
+				Name:               "orders",
+				ServiceAccountName: "orders-connectors",
+			},
+		},
+	}
+	_, _, err = awskit.EnsureRole(context.Background(), fake, awskit.RoleSpec{
+		Name:        p.roleName(request),
+		TrustPolicy: []byte(`{}`),
+		Tags:        awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2"),
+	})
+	require.NoError(t, err)
+
+	res, err := p.Reconcile(context.Background(), pluginkit.Request[Params, map[string]string]{Object: request})
+
+	require.NoError(t, err)
+	require.NotNil(t, res.Pending)
+	assert.Equal(t, ReasonRoleNameInUse, res.Pending.Reason)
+	assert.Equal(t, roleInUseRequeue, res.RequeueAfter)
 }

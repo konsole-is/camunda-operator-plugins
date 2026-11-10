@@ -273,6 +273,63 @@ func TestDeleteRoleRefusesARoleWithoutAUID(t *testing.T) {
 	assert.False(t, deleted)
 }
 
+func TestOwnedRoleReturnsARoleOfTheUID(t *testing.T) {
+	f := awsfake.NewIAM()
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	require.NoError(t, err)
+	before := len(f.Calls())
+
+	role, err := awskit.OwnedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+
+	require.NoError(t, err)
+	assert.Equal(t, "arn:aws:iam::111122223333:role/"+roleSpec().Name, role.ARN)
+	assert.Equal(t, []string{"GetRole"}, f.Calls()[before:])
+}
+
+func TestOwnedRoleTakesARoleOfItsRequestWithoutAUID(t *testing.T) {
+	f := awsfake.NewIAM()
+	legacy := roleSpec()
+	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
+	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
+	require.NoError(t, err)
+
+	role, err := awskit.OwnedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+
+	require.NoError(t, err)
+	assert.Equal(t, roleSpec().Name, role.Name)
+	got, _ := f.Role(roleSpec().Name)
+	assert.Equal(t, "uid-1", got.Tags[awskit.TagRequestUID])
+}
+
+func TestOwnedRoleRefusesARoleOfAnotherRequest(t *testing.T) {
+	for name, tags := range map[string]map[string]string{
+		"another UID":                 awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2"),
+		"no UID, and another request": awskit.RequestTags("team-b", "orders", "orders-identity"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := awsfake.NewIAM()
+			made := roleSpec()
+			made.Tags = tags
+			_, _, err := awskit.EnsureRole(context.Background(), f, made)
+			require.NoError(t, err)
+
+			_, err = awskit.OwnedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+
+			var inUse awskit.RoleInUseError
+			require.ErrorAs(t, err, &inUse)
+			got, _ := f.Role(roleSpec().Name)
+			assert.Equal(t, tags, got.Tags, "a refused role keeps its tags")
+		})
+	}
+}
+
+func TestOwnedRoleOfAMissingRoleIsZero(t *testing.T) {
+	role, err := awskit.OwnedRole(context.Background(), awsfake.NewIAM(), "gone", roleSpec().Tags)
+
+	require.NoError(t, err)
+	assert.Equal(t, awskit.Role{}, role)
+}
+
 func TestReplacedRolesSkipsTheCurrentNameInAnyCase(t *testing.T) {
 	got := awskit.ReplacedRoles("team-b-0123", []string{"camunda-0123", "TEAM-B-0123", "Camunda-0123", "camunda-4567"})
 

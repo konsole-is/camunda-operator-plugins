@@ -31,6 +31,7 @@ import (
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/awsconnectorsrole"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
 )
@@ -83,12 +84,12 @@ func (s renameSetup) startNewManager() *connectors {
 	return c
 }
 
-// setParameters writes params into the request of s while no manager runs.
-func (s renameSetup) setParameters(params string) {
+// update changes the request of s with change while no manager runs.
+func (s renameSetup) update(change func(*pluginsv1alpha1.PluginRequest)) {
 	Eventually(func(g Gomega) {
 		got := &pluginsv1alpha1.PluginRequest{}
 		g.Expect(renameCluster.k8s.Get(ctx, client.ObjectKeyFromObject(s.request), got)).To(Succeed())
-		got.Spec.Parameters = raw(params)
+		change(got)
 		g.Expect(renameCluster.k8s.Update(ctx, got)).To(Succeed())
 	}, timeout).Should(Succeed())
 }
@@ -189,8 +190,10 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 	It("keeps the old role through a pass with invalid parameters", func() {
 		s := newRenameSetup(awskit.ModeIRSA)
 		valid := paramsOf(role)
-		s.setParameters(`{"inlinePolicy":{"Version":"2012-10-17","Statement":[{"Sid":"` +
-			strings.Repeat("a", 10300) + `","Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}]}}`)
+		s.update(func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(`{"inlinePolicy":{"Version":"2012-10-17","Statement":[{"Sid":"` +
+				strings.Repeat("a", 10300) + `","Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}]}}`)
+		})
 
 		c := s.startNewManager()
 
@@ -205,5 +208,38 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 		s.expectReadyOnTheNewRole(c, s.oldRole.Name)
 		_, ok = s.iam.Role(s.oldRole.Name)
 		Expect(ok).To(BeFalse(), "the old role is gone")
+	})
+
+	It("deletes an old role that an older version of the plugin made", func() {
+		s := newRenameSetup(awskit.ModeIRSA)
+		// An older version tagged its roles without the UID of the request.
+		Expect(s.iam.TagRole(ctx, &iam.TagRoleInput{
+			RoleName: aws.String(s.oldRole.Name),
+			Tags:     []iamtypes.Tag{{Key: aws.String(awskit.TagRequestUID), Value: aws.String("")}},
+		})).Error().NotTo(HaveOccurred())
+
+		c := s.startNewManager()
+
+		s.expectReadyOnTheNewRole(c, s.oldRole.Name)
+		_, ok := s.iam.Role(s.oldRole.Name)
+		Expect(ok).To(BeFalse(), "the old role is gone")
+	})
+
+	It("revokes the trust of the old role when the request names no ServiceAccount before the new role exists", func() {
+		s := newRenameSetup(awskit.ModeIRSA)
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+
+		c := s.startNewManager()
+
+		waitReason(c, s.request, pluginsv1alpha1.ConditionOutputsReady, awsconnectorsrole.ReasonMissingServiceAccount)
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.TrustPolicy).To(ContainSubstring(`"Effect":"Deny"`))
+			g.Expect(old.TrustPolicy).NotTo(ContainSubstring("orders-connectors"))
+			g.Expect(read(g, c, s.request).Status.Resources).To(ContainElement(HaveField("Name", s.oldRole.Name)))
+		}, timeout).Should(Succeed())
+		_, ok := s.iam.Role(c.roleName(s.namespace))
+		Expect(ok).To(BeFalse(), "no role of the new name")
 	})
 })

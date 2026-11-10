@@ -30,9 +30,15 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
-// oldRoleRequeue is the wait before the pass that deletes an old role, after
-// pluginkit wrote the outputs that name the new one.
-const oldRoleRequeue = 5 * time.Second
+const (
+	// oldRoleRequeue is the wait before the pass that deletes an old role,
+	// after pluginkit wrote the outputs that name the new one.
+	oldRoleRequeue = 5 * time.Second
+	// roleInUseRequeue is the wait before a request of RoleNameInUse checks
+	// the role of its name again. A change of that role in AWS sends no
+	// watch event.
+	roleInUseRequeue = 30 * time.Second
+)
 
 // retireOldRoles deletes the roles that the IAMRole rows of the status of
 // req name besides role, once the outputs of that status name role. It
@@ -81,6 +87,29 @@ func oldRoleRows(rows []pluginsv1alpha1.ResourceRef, current string) []pluginsv1
 	return old
 }
 
+// activeOldRole returns the old role of the status of req that its outputs
+// name, when the request owns it. It returns a zero Role when the outputs
+// name no old role, or when that role is gone or belongs to another request.
+func (p *Plugin) activeOldRole(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+	current string,
+) (awskit.Role, error) {
+	status := req.Object.Status
+	for _, row := range oldRoleRows(status.Resources, current) {
+		if row.ID == "" || row.ID != status.Outputs[awskit.OutputPrincipal] {
+			continue
+		}
+
+		role, err := awskit.OwnedRole(ctx, p.clients.IAM, row.Name, p.roleTags(req.Object))
+		if errors.As(err, new(awskit.RoleInUseError)) {
+			return awskit.Role{}, nil
+		}
+		return role, err
+	}
+	return awskit.Role{}, nil
+}
+
 // deleteNamedRole deletes the role name of req and records an event. A role
 // of another request UID stays, with a Warning event. successor, when not
 // empty, is the role that replaces it.
@@ -89,6 +118,13 @@ func (p *Plugin) deleteNamedRole(
 	req pluginkit.Request[Params, map[string]string],
 	name, successor string,
 ) error {
+	// OwnedRole tags a role that an older version of the plugin made, so that
+	// DeleteRole finds the UID of the request on it.
+	_, err := awskit.OwnedRole(ctx, p.clients.IAM, name, p.roleTags(req.Object))
+	if err != nil && !errors.As(err, new(awskit.RoleInUseError)) {
+		return err
+	}
+
 	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, name, string(req.Object.UID))
 	var inUse awskit.RoleInUseError
 	switch {

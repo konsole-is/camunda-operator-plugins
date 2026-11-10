@@ -212,6 +212,33 @@ func updateRole(
 	return updated, nil
 }
 
+// OwnedRole returns the role name when it belongs to the request of tags:
+// its TagRequestUID value is the one in tags, or EnsureRole would take it
+// over, and then OwnedRole writes tags on it first. It returns a
+// RoleInUseError for any other role, and a zero Role when the role does not
+// exist.
+func OwnedRole(ctx context.Context, c IAM, name string, tags map[string]string) (Role, error) {
+	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
+	if IsNotFound(err) {
+		return Role{}, nil
+	}
+	if err != nil {
+		return Role{}, fmt.Errorf("reading the IAM role %s: %w", name, err)
+	}
+
+	live := roleTags(out.Role)
+	if !ownedBy(live, tags) {
+		return Role{}, RoleInUseError{Name: name, Owner: ownerOf(live)}
+	}
+
+	if live[TagRequestUID] != tags[TagRequestUID] {
+		if _, err := c.TagRole(ctx, &iam.TagRoleInput{RoleName: aws.String(name), Tags: iamTags(tags)}); err != nil {
+			return Role{}, fmt.Errorf("tagging the IAM role %s: %w", name, err)
+		}
+	}
+	return Role{Name: name, ARN: aws.ToString(out.Role.Arn)}, nil
+}
+
 // DeleteRole deletes the role name with its inline policies and its managed
 // policy attachments, only when its TagRequestUID tag is uid. It reports
 // false, with no error, when the role does not exist, and a RoleInUseError

@@ -681,7 +681,9 @@ type renameSetup struct {
 	oldRole awsfake.Role
 }
 
-func newRenameSetup(mode awskit.Mode, registrationPrefix string) renameSetup {
+// newRenameSetup makes s. Each of before runs while the hub with the prefix
+// camunda serves the Ready request.
+func newRenameSetup(mode awskit.Mode, registrationPrefix string, before ...func(renameSetup)) renameSetup {
 	ns := newNamespace()
 	s := renameSetup{
 		mode:         mode,
@@ -694,10 +696,22 @@ func newRenameSetup(mode awskit.Mode, registrationPrefix string) renameSetup {
 	old, stop := startHub(mode, s.registration, "camunda", s.iam, s.eks)
 	s.request = hubRequest(s.registration, ns)
 	readyRequest(s.request)
+	for _, f := range before {
+		f(s)
+	}
 	stop()
 
 	s.oldRole = roleOf(Default, old, ns)
 	return s
+}
+
+// update changes the request of s with change while no hub runs.
+func (s renameSetup) update(change func(*pluginsv1alpha1.PluginRequest)) {
+	Eventually(func(g Gomega) {
+		got := read(g, s.request.DeepCopy())
+		change(got)
+		g.Expect(k8s.Update(ctx, got)).To(Succeed())
+	}, timeout).Should(Succeed())
 }
 
 // startNewHub starts the hub with the prefix team-b on the fakes of s, and
@@ -806,5 +820,74 @@ var _ = Describe("a change of the role name prefix", Serial, func() {
 		}, timeout).Should(Succeed())
 		_, ok := s.iam.Role(s.oldRole.Name)
 		Expect(ok).To(BeTrue(), "the old role stays")
+	})
+
+	It("deletes an old role that an older version of the plugin made", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		// An older version tagged its roles without the UID of the request.
+		_, err := awskit.DeleteRole(ctx, s.iam, s.oldRole.Name, string(s.request.UID))
+		Expect(err).NotTo(HaveOccurred())
+		_, _, err = awskit.EnsureRole(ctx, s.iam, awskit.RoleSpec{
+			Name:        s.oldRole.Name,
+			TrustPolicy: []byte(s.oldRole.TrustPolicy),
+			Tags:        awskit.RequestTags(s.namespace, "orders", s.request.Name),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		h := s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			_, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeFalse(), "the old role is gone")
+			role := roleOf(g, h, s.namespace)
+			g.Expect(eventNotes(g, s.namespace, "RoleDeleted")).To(ConsistOf(
+				And(ContainSubstring(s.oldRole.Name), ContainSubstring(role.Name)),
+			))
+		}, timeout).Should(Succeed())
+	})
+
+	It("removes the policy of a deleted grant from the old role while the new name is in use", func() {
+		var grant *pluginsv1alpha1.Grant
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant = grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		Expect(s.oldRole.InlinePolicies).To(HaveKey("grant-orders-backup-read"))
+		s.putRole(awskit.RoleName("team-b", issuer, s.namespace, "orders"), "another-uid")
+		Expect(k8s.Delete(ctx, grant)).To(Succeed())
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.InlinePolicies).To(BeEmpty())
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Reason).
+				To(Equal(awsidentity.ReasonRoleNameInUse))
+		}, timeout).Should(Succeed())
+	})
+
+	It("revokes the trust of the old role when the request names no ServiceAccount before the new role exists", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+
+		h := s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, pluginsv1alpha1.ConditionOutputsReady).Reason).
+				To(Equal(awsidentity.ReasonMissingServiceAccount))
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.TrustPolicy).To(ContainSubstring(`"Effect":"Deny"`))
+			g.Expect(old.TrustPolicy).NotTo(ContainSubstring("orders-camunda"))
+			g.Expect(got.Status.Resources).To(ContainElement(HaveField("Name", s.oldRole.Name)))
+		}, timeout).Should(Succeed())
+		_, ok := s.iam.Role(h.roleName(s.namespace))
+		Expect(ok).To(BeFalse(), "no role of the new name")
 	})
 })

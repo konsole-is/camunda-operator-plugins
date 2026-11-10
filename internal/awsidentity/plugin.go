@@ -112,9 +112,9 @@ func (p *Plugin) Reconcile(
 		return p.reconcileWithoutServiceAccounts(ctx, req)
 	}
 
-	role, err := p.ensureRole(ctx, req, sas)
-	if res, ok := roleNameInUse(err, request.Status.Resources); ok {
-		return res, nil
+	role, err := p.ensureRole(ctx, req, p.roleName(request), sas)
+	if res, ok, err := p.roleNameInUse(ctx, req, err); ok {
+		return res, err
 	}
 	if err != nil {
 		return pluginkit.Result{}, err
@@ -175,19 +175,36 @@ func (p *Plugin) Reconcile(
 	return res, nil
 }
 
-// roleNameInUse returns the Pending result of a request whose role belongs
-// to another request, when err is an awskit.RoleInUseError. The result keeps
-// the old roles of the rows of status.
-func roleNameInUse(err error, status []pluginsv1alpha1.ResourceRef) (pluginkit.Result, bool) {
+// roleNameInUse returns the Pending result of req when err is an
+// awskit.RoleInUseError for the role of its name. The result keeps the old
+// roles of the status. The outputs still name the old role, so it keeps the
+// Grants of that role in sync, and a deleted Grant loses its policy.
+func (p *Plugin) roleNameInUse(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+	err error,
+) (pluginkit.Result, bool, error) {
 	var inUse awskit.RoleInUseError
 	if !errors.As(err, &inUse) {
-		return pluginkit.Result{}, false
+		return pluginkit.Result{}, false, nil
 	}
 
-	return pluginkit.Result{
-		Pending:   &pluginkit.Waiting{Reason: ReasonRoleNameInUse, Message: inUse.Error()},
-		Resources: oldRoleRows(status, inUse.Name),
-	}, true
+	res := pluginkit.Result{
+		Pending:      &pluginkit.Waiting{Reason: ReasonRoleNameInUse, Message: inUse.Error()},
+		Resources:    oldRoleRows(req.Object.Status.Resources, inUse.Name),
+		RequeueAfter: roleInUseRequeue,
+	}
+
+	old, err := p.activeOldRole(ctx, req, inUse.Name)
+	if err != nil || old.ARN == "" {
+		return res, true, err
+	}
+
+	_, conflicted, err := p.syncGrants(ctx, req, old)
+	if conflicted {
+		res.RequeueAfter = conflictRequeue
+	}
+	return res, true, err
 }
 
 func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) pluginsv1alpha1.ResourceRef {
@@ -202,8 +219,9 @@ func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) plug
 
 // reconcileWithoutServiceAccounts makes the role of req, when it has one,
 // trust nobody, and keeps its Grants in sync, because credentials that STS
-// gave before stay valid. It keeps the old roles of the status and deletes
-// none, because the outputs can still name one.
+// gave before stay valid. Before the role of its current name exists, it does
+// this to the old role that the outputs name. It keeps the old roles of the
+// status and deletes none, because the outputs can still name one.
 func (p *Plugin) reconcileWithoutServiceAccounts(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -218,19 +236,27 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 		Resources: oldRoleRows(status, current),
 	}
 
+	name := current
 	arn, err := p.liveRoleARN(ctx, current)
 	if err != nil {
 		return res, err
 	}
 	if arn == "" {
-		// The associations of a role that someone deleted by hand still hold
-		// the ServiceAccounts.
-		return res, p.deleteAssociations(ctx, req, current)
+		old, err := p.activeOldRole(ctx, req, current)
+		if err != nil {
+			return res, err
+		}
+		if old.ARN == "" {
+			// The associations of a role that someone deleted by hand still
+			// hold the ServiceAccounts.
+			return res, p.deleteAssociations(ctx, req, current)
+		}
+		name = old.Name
 	}
 
-	role, err := p.ensureRole(ctx, req, nil)
-	if inUse, ok := roleNameInUse(err, status); ok {
-		return inUse, nil
+	role, err := p.ensureRole(ctx, req, name, nil)
+	if inUse, ok, err := p.roleNameInUse(ctx, req, err); ok {
+		return inUse, err
 	}
 	if err != nil {
 		return pluginkit.Result{}, err
@@ -248,7 +274,9 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 		return pluginkit.Result{}, err
 	}
 
-	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, res.Resources...)
+	res.Resources = append(
+		[]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)},
+		oldRoleRows(status, role.Name)...)
 	if conflicted {
 		res.RequeueAfter = conflictRequeue
 	}
@@ -267,12 +295,13 @@ func (p *Plugin) liveRoleARN(ctx context.Context, name string) (string, error) {
 	return aws.ToString(out.Role.Arn), nil
 }
 
-// ensureRole keeps the role of the claim of req, trusted by sas, or by nobody
-// when sas is empty, and records an event when it created or updated the
-// role.
+// ensureRole keeps the role name of the claim of req, trusted by sas, or by
+// nobody when sas is empty, and records an event when it created or updated
+// the role.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
+	name string,
 	sas []string,
 ) (awskit.Role, error) {
 	request := req.Object
@@ -282,7 +311,7 @@ func (p *Plugin) ensureRole(
 	}
 
 	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, awskit.RoleSpec{
-		Name:                p.roleName(request),
+		Name:                name,
 		Description:         "Camunda cluster " + request.Namespace + "/" + request.Spec.ClaimRef.Name,
 		TrustPolicy:         trust,
 		PermissionsBoundary: p.boundary,
