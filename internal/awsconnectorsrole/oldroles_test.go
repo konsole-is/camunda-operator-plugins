@@ -140,15 +140,59 @@ func TestRetireOldRolesKeepsARoleWhoseNewTagIsNotVisibleYet(t *testing.T) {
 		},
 	}
 
-	left, err := p.retireOldRoles(
+	left, again, err := p.retireOldRoles(
 		context.Background(),
 		pluginkit.Request[Params, map[string]string]{Object: request},
 		current,
 	)
 
 	require.NoError(t, err)
-	assert.Equal(t, []pluginsv1alpha1.ResourceRef{row}, left, "a later pass deletes the role")
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{row}, left)
+	assert.True(t, again, "a later pass deletes the role")
 	got, ok := fake.Role(old.Name)
 	require.True(t, ok, "the role stays")
 	assert.Equal(t, "uid-1", got.Tags[awskit.TagRequestUID])
+}
+
+func TestReconcileWithoutServiceAccountRetriesARoleWhoseNewTagIsNotVisibleYet(t *testing.T) {
+	fake := &staleIAM{IAM: awsfake.NewIAM()}
+	opts := validOptions()
+	opts.Clients.IAM = fake
+	p, err := newPlugin(opts)
+	require.NoError(t, err)
+	request := &pluginsv1alpha1.PluginRequest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "orders-connectors-permissions", UID: "uid-1"},
+		Spec: pluginsv1alpha1.PluginRequestSpec{
+			Registration: RegistrationRole,
+			ClaimRef:     pluginsv1alpha1.ClaimRef{Name: "orders"},
+		},
+	}
+	// The role of the current name trusts nobody already, so the pass changes
+	// nothing on it.
+	nobody, err := awskit.TrustPolicy(p.mode, p.provider, "team-a", nil)
+	require.NoError(t, err)
+	current, _, err := awskit.EnsureRole(context.Background(), fake, awskit.RoleSpec{
+		Name:                p.roleName(request),
+		TrustPolicy:         nobody,
+		PermissionsBoundary: p.boundary,
+		Tags:                p.roleTags(request),
+	})
+	require.NoError(t, err)
+	// A role of an older version of the plugin, without the UID tag.
+	old, _, err := awskit.EnsureRole(context.Background(), fake, awskit.RoleSpec{
+		Name:        "camunda-connectors-old",
+		TrustPolicy: []byte(`{}`),
+		Tags:        awskit.RequestTags("team-a", "orders", request.Name),
+	})
+	require.NoError(t, err)
+	request.Status = pluginsv1alpha1.PluginRequestStatus{
+		Outputs:   map[string]string{awskit.OutputPrincipal: current.ARN},
+		Resources: []pluginsv1alpha1.ResourceRef{{Kind: kindIAMRole, Name: old.Name, ID: old.ARN}},
+	}
+
+	res, err := p.Reconcile(context.Background(), pluginkit.Request[Params, map[string]string]{Object: request})
+
+	require.NoError(t, err)
+	assert.Equal(t, oldRoleRequeue, res.RequeueAfter, "a later pass deletes the old role")
+	assert.Contains(t, res.Resources, pluginsv1alpha1.ResourceRef{Kind: kindIAMRole, Name: old.Name, ID: old.ARN})
 }

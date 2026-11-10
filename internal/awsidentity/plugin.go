@@ -112,9 +112,17 @@ func (p *Plugin) Reconcile(
 		return p.reconcileWithoutServiceAccounts(ctx, req)
 	}
 
-	role, err := p.ensureRole(ctx, req, p.roleName(request), sas)
-	if res, ok := roleNameInUse(err, request.Status.Resources); ok {
-		return p.syncOldRoleGrants(ctx, req, res)
+	current := p.roleName(request)
+	role, err := p.ensureRole(ctx, req, current, sas)
+	pending, inUse := roleNameInUse(err, request.Status.Resources)
+	if inUse {
+		// The outputs still name the old role, so it serves the request until
+		// the name is free.
+		old, oldErr := p.activeOldRole(ctx, req, current)
+		if oldErr != nil || old.ARN == "" {
+			return pending, oldErr
+		}
+		role, err = p.ensureRole(ctx, req, old.Name, sas)
 	}
 	if err != nil {
 		return pluginkit.Result{}, err
@@ -124,11 +132,10 @@ func (p *Plugin) Reconcile(
 	if p.mode == awskit.ModePodIdentity {
 		associations, err := p.ensureAssociations(ctx, req, sas, role)
 		if err != nil {
-			// The ServiceAccounts that the role trusts keep their sessions, so
+			// The ServiceAccounts that a role trusts keep their sessions, so
 			// a Grant that is gone loses its policy also when an association
 			// fails.
-			_, _, syncErr := p.syncGrants(ctx, req, role)
-			return pluginkit.Result{}, errors.Join(err, syncErr)
+			return pluginkit.Result{}, errors.Join(err, p.syncGrantsOf(ctx, req, role, current))
 		}
 
 		for _, a := range associations {
@@ -148,7 +155,15 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{}, err
 	}
 
-	old, err := p.retireOldRoles(ctx, req, role)
+	if inUse {
+		pending.Resources = append(resources, oldRoleRows(request.Status.Resources, role.Name)...)
+		if conflicted {
+			pending.RequeueAfter = conflictRequeue
+		}
+		return pending, nil
+	}
+
+	old, _, err := p.retireOldRoles(ctx, req, role)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
@@ -191,25 +206,23 @@ func roleNameInUse(err error, status []pluginsv1alpha1.ResourceRef) (pluginkit.R
 	}, true
 }
 
-// syncOldRoleGrants keeps the Grants of the old role that the outputs of req
-// name in sync, so that a deleted Grant loses its policy while the role of
-// the current name cannot be used. It returns res, the Pending result of the
-// pass.
-func (p *Plugin) syncOldRoleGrants(
+// syncGrantsOf keeps the Grants of role in sync, and those of the old role
+// that the outputs of req name when it is another role, after a step of the
+// pass failed.
+func (p *Plugin) syncGrantsOf(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
-	res pluginkit.Result,
-) (pluginkit.Result, error) {
-	old, err := p.activeOldRole(ctx, req, p.roleName(req.Object))
-	if err != nil || old.ARN == "" {
-		return res, err
-	}
+	role awskit.Role,
+	current string,
+) error {
+	_, _, err := p.syncGrants(ctx, req, role)
 
-	_, conflicted, err := p.syncGrants(ctx, req, old)
-	if conflicted {
-		res.RequeueAfter = conflictRequeue
+	old, oldErr := p.activeOldRole(ctx, req, current)
+	if oldErr != nil || old.ARN == "" || old.Name == role.Name {
+		return errors.Join(err, oldErr)
 	}
-	return res, err
+	_, _, oldErr = p.syncGrants(ctx, req, old)
+	return errors.Join(err, oldErr)
 }
 
 func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) pluginsv1alpha1.ResourceRef {
@@ -274,12 +287,15 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 		return pluginkit.Result{}, err
 	}
 
-	left, err := p.retireOldRoles(ctx, req, role)
+	left, again, err := p.retireOldRoles(ctx, req, role)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
 
 	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, left...)
+	if again {
+		res.RequeueAfter = oldRoleRequeue
+	}
 	if conflicted {
 		res.RequeueAfter = conflictRequeue
 	}

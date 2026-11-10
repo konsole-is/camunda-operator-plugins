@@ -18,6 +18,7 @@ package awsidentity_test
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -910,4 +911,50 @@ var _ = Describe("a change of the role name prefix", Serial, func() {
 			}, timeout).Should(Succeed())
 		},
 	)
+
+	It("updates the trust of the old role while the new name is in use", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		s.putRole(awskit.RoleName("team-b", issuer, s.namespace, "orders"), "another-uid")
+		s.update(func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Target.AdditionalServiceAccounts = []string{"orders-es-es"}
+		})
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(subjects(g, old)).To(ConsistOf(
+				"system:serviceaccount:"+s.namespace+":orders-camunda",
+				"system:serviceaccount:"+s.namespace+":orders-es-es",
+			))
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Reason).
+				To(Equal(awsidentity.ReasonRoleNameInUse))
+		}, timeout).Should(Succeed())
+	})
+
+	It("removes the policy of a deleted grant from the old role while an association fails to move", func() {
+		var grant *pluginsv1alpha1.Grant
+		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant = grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		Expect(s.oldRole.InlinePolicies).To(HaveKey("grant-orders-backup-read"))
+		for range 1000 {
+			s.eks.FailNext("UpdatePodIdentityAssociation", errors.New("the association does not move"))
+		}
+		Expect(k8s.Delete(ctx, grant)).To(Succeed())
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.InlinePolicies).To(BeEmpty())
+		}, timeout).Should(Succeed())
+	})
 })

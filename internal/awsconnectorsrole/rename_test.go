@@ -272,4 +272,25 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 			}, timeout).Should(Succeed())
 		},
 	)
+
+	It("keeps the policies of the old role up to date while the new name is in use", func() {
+		s := newRenameSetup(awskit.ModeIRSA)
+		_, _, err := awskit.EnsureRole(ctx, s.iam, awskit.RoleSpec{
+			Name:        awskit.RoleName(newPrefix, issuer, s.namespace, "orders"),
+			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
+			Tags:        awskit.ExtraTags(nil).OwnerTags(s.namespace, "orders", s.request.Name, "another-uid"),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Parameters = raw(managedParams(policyB)) })
+
+		c := s.startNewManager()
+
+		waitReason(c, s.request, v1.ConditionReady, awsconnectorsrole.ReasonRoleNameInUse)
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.Attached).To(ConsistOf(policyB))
+			g.Expect(old.InlinePolicies).NotTo(HaveKey("connectors"))
+		}, timeout).Should(Succeed())
+	})
 })

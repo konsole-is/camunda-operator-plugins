@@ -62,9 +62,17 @@ func (p *Plugin) reconcileRole(
 		}, nil
 	}
 
-	role, err := p.ensureRole(ctx, req, p.roleName(request), sas)
-	if res, ok := roleNameInUse(err, status); ok {
-		return res, nil
+	current := p.roleName(request)
+	role, err := p.ensureRole(ctx, req, current, sas)
+	pending, inUse := roleNameInUse(err, status)
+	if inUse {
+		// The outputs still name the old role, so it serves the request until
+		// the name is free.
+		old, oldErr := p.activeOldRole(ctx, req, current)
+		if oldErr != nil || old.ARN == "" {
+			return pending, oldErr
+		}
+		role, err = p.ensureRole(ctx, req, old.Name, sas)
 	}
 	if err != nil {
 		return pluginkit.Result{}, err
@@ -86,11 +94,16 @@ func (p *Plugin) reconcileRole(
 		return pluginkit.Result{}, err
 	}
 
-	old, err := p.retireOldRoles(ctx, req, role)
+	resources := append([]pluginsv1alpha1.ResourceRef{roleResource(role, request)}, associations...)
+	if inUse {
+		pending.Resources = append(resources, oldRoleRows(status, role.Name)...)
+		return pending, nil
+	}
+
+	old, _, err := p.retireOldRoles(ctx, req, role)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
-	resources := append([]pluginsv1alpha1.ResourceRef{roleResource(role, request)}, associations...)
 	resources = append(resources, old...)
 
 	consoleURL, err := awskit.RoleConsoleURL(role.ARN)
@@ -176,11 +189,14 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 		return pluginkit.Result{}, err
 	}
 
-	left, err := p.retireOldRoles(ctx, req, role)
+	left, again, err := p.retireOldRoles(ctx, req, role)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
 	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, left...)
+	if again {
+		res.RequeueAfter = oldRoleRequeue
+	}
 	return res, nil
 }
 

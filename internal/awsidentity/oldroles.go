@@ -48,32 +48,33 @@ const (
 
 // retireOldRoles deletes the roles that the IAMRole rows of the status of
 // req name besides role, once the outputs of that status name role. It
-// returns the rows of the old roles that stay for a later pass. A role of
-// another request UID stays in IAM, and its row goes.
+// returns the rows of the old roles that stay for a later pass. It also
+// returns true when a row stays because IAM does not show the UID tag of the
+// request on the role yet. A role of another request UID stays in IAM, and
+// its row goes.
 func (p *Plugin) retireOldRoles(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	role awskit.Role,
-) ([]pluginsv1alpha1.ResourceRef, error) {
+) (left []pluginsv1alpha1.ResourceRef, again bool, err error) {
 	status := req.Object.Status
 	old := oldRoleRows(status.Resources, role.Name)
 	// Pods and other plugins read the role from the outputs, so the old role
 	// stays until pluginkit wrote the outputs of the new one.
 	if len(old) == 0 || status.Outputs[awskit.OutputPrincipal] != role.ARN {
-		return old, nil
+		return old, false, nil
 	}
 
-	var left []pluginsv1alpha1.ResourceRef
 	for _, row := range old {
 		err := p.deleteNamedRole(ctx, req, row.Name, role.Name)
 		switch {
 		case errors.Is(err, errTagNotVisible):
 			left = append(left, row)
 		case err != nil:
-			return nil, err
+			return nil, false, err
 		}
 	}
-	return left, nil
+	return left, len(left) > 0, nil
 }
 
 // oldRoleRows returns the IAMRole rows of rows whose names

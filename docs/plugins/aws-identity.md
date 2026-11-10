@@ -163,7 +163,7 @@ The change is complete when the event `RoleDeleted` or `RoleKept` shows on each 
 
 During the change, the controller role needs the permissions of the policy above for both the old and the new prefix. Keep `role/<old prefix>-*` in each `Resource`, next to `role/<new prefix>-*`, until no old role is left.
 
-When the new name belongs to another request, the request reports `RoleNameInUse`. The outputs then keep the old role, and the plugin keeps its Grants in sync. The plugin checks the name again every 30 seconds, and goes on with step 1 when the name is free.
+When the new name belongs to another request, the request reports `RoleNameInUse`. The outputs then keep the old role, and the plugin keeps its trust, its associations, and its Grants up to date. The plugin checks the name again every 30 seconds, and goes on with step 1 when the name is free.
 
 IAM compares role names without regard to case. A change of only the case of the prefix, such as `camunda` to `Camunda`, names the same roles, so the plugin creates and deletes nothing.
 

@@ -139,14 +139,15 @@ func TestRetireOldRolesKeepsARoleWhoseNewTagIsNotVisibleYet(t *testing.T) {
 		},
 	}
 
-	left, err := p.retireOldRoles(
+	left, again, err := p.retireOldRoles(
 		context.Background(),
 		pluginkit.Request[Params, map[string]string]{Object: request},
 		current,
 	)
 
 	require.NoError(t, err)
-	assert.Equal(t, []pluginsv1alpha1.ResourceRef{row}, left, "a later pass deletes the role")
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{row}, left)
+	assert.True(t, again, "a later pass deletes the role")
 	got, ok := fake.Role(old.Name)
 	require.True(t, ok, "the role stays")
 	assert.Equal(t, "uid-1", got.Tags[awskit.TagRequestUID])
