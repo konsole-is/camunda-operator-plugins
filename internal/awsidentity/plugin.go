@@ -139,15 +139,15 @@ func (p *Plugin) Reconcile(
 	// never holds the role without its policies.
 	counts, conflicted, err := p.syncGrants(ctx, req, role)
 	if err := errors.Join(leftErr, err); err != nil {
-		return pluginkit.Result{}, err
+		// The ServiceAccounts that the old role trusts keep their sessions, so
+		// a Grant that is gone loses its policy there also when a step fails.
+		return pluginkit.Result{}, errors.Join(err, p.syncOldRoleGrants(ctx, req, role, current))
 	}
 
 	resources := []pluginsv1alpha1.ResourceRef{roleResource(role, request)}
 	if p.mode == awskit.ModePodIdentity {
 		associations, err := p.ensureAssociations(ctx, req, sas, role)
 		if err != nil {
-			// The ServiceAccounts that the old role trusts keep their
-			// sessions, so a Grant that is gone loses its policy there too.
 			return pluginkit.Result{}, errors.Join(err, p.syncOldRoleGrants(ctx, req, role, current))
 		}
 

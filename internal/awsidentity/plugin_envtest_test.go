@@ -1012,6 +1012,28 @@ var _ = Describe("a change of the role name prefix", Serial, func() {
 		}, timeout).Should(Succeed())
 	})
 
+	It("removes the policy of a deleted grant from the old role while the Grants of the new role fail", func() {
+		var grant *pluginsv1alpha1.Grant
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant = grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		Expect(k8s.Delete(ctx, grant)).To(Succeed())
+
+		s.startNewHub(func(o *awsidentity.Options) {
+			o.Clients.IAM = &failingPolicyLists{IAM: s.iam, prefix: "team-b-"}
+		})
+
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.InlinePolicies).To(BeEmpty())
+		}, timeout).Should(Succeed())
+	})
+
 	It("puts the Grants on the new role before it moves an association to it", func() {
 		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-", func(s renameSetup) {
 			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
@@ -1064,4 +1086,22 @@ func (m *policiesAtMove) seen() []map[string]string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Clone(m.policies)
+}
+
+// failingPolicyLists refuses to list the inline policies of each role whose
+// name starts with prefix.
+type failingPolicyLists struct {
+	*awsfake.IAM
+	prefix string
+}
+
+func (f *failingPolicyLists) ListRolePolicies(
+	ctx context.Context,
+	in *iam.ListRolePoliciesInput,
+	opts ...func(*iam.Options),
+) (*iam.ListRolePoliciesOutput, error) {
+	if strings.HasPrefix(aws.ToString(in.RoleName), f.prefix) {
+		return nil, errors.New("the policies of the new role cannot be listed")
+	}
+	return f.IAM.ListRolePolicies(ctx, in, opts...)
 }
