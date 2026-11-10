@@ -18,8 +18,11 @@ package awskit_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -205,10 +208,300 @@ func TestDeleteAssociationsKeepsOtherRoles(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	deleted, err := awskit.DeleteAssociations(context.Background(), f, "eks", "team-a", roleA)
+	deleted, err := awskit.DeleteAssociations(context.Background(), f, "eks", "team-a", roleA, hubTags())
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"orders-camunda", "orders-es-es"}, deleted)
 	require.Len(t, f.Associations(), 1)
 	assert.Equal(t, roleB, f.Associations()[0].RoleARN)
+}
+
+func billingTags() map[string]string {
+	return awskit.RequestTags("team-a", "billing", "billing-connectors")
+}
+
+// Two claims of one namespace can share one role that an admin made.
+func TestEnsureAssociationsKeepsTheAssociationOfAnotherClaimOfTheRole(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-connectors")
+
+	_, change, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"billing-connectors"},
+		roleA,
+		billingTags(),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, change.Deleted)
+
+	change = ensure(t, f, roleA, "orders-connectors")
+
+	assert.Equal(t, awskit.AssociationChange{}, change)
+	sas := make([]string, 0, len(f.Associations()))
+	for _, a := range f.Associations() {
+		sas = append(sas, a.ServiceAccount)
+	}
+	assert.ElementsMatch(t, []string{"orders-connectors", "billing-connectors"}, sas)
+}
+
+func TestEnsureAssociationsKeepsAnAssociationOfItsRoleThatCarriesNoClaimTags(t *testing.T) {
+	f := awsfake.NewEKS()
+	_, err := f.CreatePodIdentityAssociation(context.Background(), &eks.CreatePodIdentityAssociationInput{
+		ClusterName:    aws.String("eks"),
+		Namespace:      aws.String("team-a"),
+		ServiceAccount: aws.String("by-hand"),
+		RoleArn:        aws.String(roleA),
+	})
+	require.NoError(t, err)
+
+	change := ensure(t, f, roleA, "orders-camunda")
+
+	assert.Empty(t, change.Deleted)
+	assert.Len(t, f.Associations(), 2)
+}
+
+func TestDeleteAssociationsDeletesOnlyTheAssociationsOfTheClaim(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-connectors")
+	_, _, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"billing-connectors"},
+		roleA,
+		billingTags(),
+	)
+	require.NoError(t, err)
+
+	deleted, err := awskit.DeleteAssociations(context.Background(), f, "eks", "team-a", roleA, hubTags())
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"orders-connectors"}, deleted)
+	require.Len(t, f.Associations(), 1)
+	assert.Equal(t, "billing-connectors", f.Associations()[0].ServiceAccount)
+}
+
+func createAssociation(t *testing.T, f *awsfake.EKS, sa, role string, tags map[string]string) {
+	_, err := f.CreatePodIdentityAssociation(context.Background(), &eks.CreatePodIdentityAssociationInput{
+		ClusterName:    aws.String("eks"),
+		Namespace:      aws.String("team-a"),
+		ServiceAccount: aws.String(sa),
+		RoleArn:        aws.String(role),
+		Tags:           tags,
+	})
+	require.NoError(t, err)
+}
+
+func TestDeleteRequestAssociationsDeletesEachAssociationOfTheRequestButThoseOfTheKeptServiceAccounts(t *testing.T) {
+	f := awsfake.NewEKS()
+	f.PageSize = 1
+	request := awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
+	createAssociation(t, f, "orders-connectors", roleA, request)
+	createAssociation(t, f, "old-on-a", roleA, request)
+	createAssociation(t, f, "old-on-b", roleB, request)
+	// Another request of the same claim, such as the cloud identity.
+	createAssociation(t, f, "orders-camunda", roleB, awskit.RequestTags("team-a", "orders", "orders-identity"))
+	createAssociation(t, f, "by-hand", roleA, nil)
+
+	deleted, err := awskit.DeleteRequestAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		request,
+		[]string{"orders-connectors"},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"old-on-a", "old-on-b"}, deleted)
+	sas := make([]string, 0, len(f.Associations()))
+	for _, a := range f.Associations() {
+		sas = append(sas, a.ServiceAccount)
+	}
+	assert.ElementsMatch(t, []string{"orders-connectors", "orders-camunda", "by-hand"}, sas)
+}
+
+func TestDeleteRequestAssociationsWithoutKeepDeletesEachOfTheRequest(t *testing.T) {
+	f := awsfake.NewEKS()
+	request := awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
+	createAssociation(t, f, "orders-connectors", roleA, request)
+	createAssociation(t, f, "orders-camunda", roleB, awskit.RequestTags("team-a", "orders", "orders-identity"))
+
+	deleted, err := awskit.DeleteRequestAssociations(context.Background(), f, "eks", "team-a", request, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"orders-connectors"}, deleted)
+	require.Len(t, f.Associations(), 1)
+	assert.Equal(t, "orders-camunda", f.Associations()[0].ServiceAccount)
+}
+
+func connectorsTags() map[string]string {
+	return awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
+}
+
+func TestEnsureAssociationsLeavesTheAssociationsOfAnotherRequestOfTheClaimOnTheRole(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-camunda")
+
+	_, change, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-connectors"},
+		roleA,
+		connectorsTags(),
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, change.Deleted)
+	assert.Len(t, f.Associations(), 2)
+}
+
+func TestEnsureAssociationsRefusesTheAssociationOfAnotherRequestOfTheClaim(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleB, "orders-connectors")
+
+	_, _, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-connectors"},
+		roleA,
+		connectorsTags(),
+	)
+
+	require.ErrorContains(t, err, "orders-connectors")
+	assert.Equal(t, roleB, f.Associations()[0].RoleARN)
+	assert.Equal(t, hubTags(), f.Associations()[0].Tags)
+}
+
+func TestEnsureAssociationsRefusesAnAssociationOfItsRoleThatTheRequestDidNotMake(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-connectors")
+
+	_, _, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-connectors"},
+		roleA,
+		connectorsTags(),
+	)
+
+	require.ErrorContains(t, err, "orders-connectors")
+	assert.Equal(t, hubTags(), f.Associations()[0].Tags)
+}
+
+func TestEnsureAssociationsTagsItsAssociationWithChangedTags(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-camunda")
+	tags := hubTags()
+	tags["cost-center"] = "1234"
+
+	_, change, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-camunda"},
+		roleA,
+		tags,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"orders-camunda"}, change.Tagged)
+	assert.Equal(t, tags, f.Associations()[0].Tags)
+}
+
+func TestDeleteAssociationsLeavesTheAssociationsOfAnotherRequestOfTheClaim(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-camunda")
+
+	deleted, err := awskit.DeleteAssociations(context.Background(), f, "eks", "team-a", roleA, connectorsTags())
+
+	require.NoError(t, err)
+	assert.Empty(t, deleted)
+	assert.Len(t, f.Associations(), 1)
+}
+
+func TestDeleteRequestAssociationsKeepsTheKeptServiceAccountsOnAnyRole(t *testing.T) {
+	f := awsfake.NewEKS()
+	createAssociation(t, f, "orders-connectors", roleB, connectorsTags())
+	createAssociation(t, f, "old", roleA, connectorsTags())
+
+	deleted, err := awskit.DeleteRequestAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		connectorsTags(),
+		[]string{"orders-connectors"},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"old"}, deleted)
+	require.Len(t, f.Associations(), 1)
+	assert.Equal(t, roleB, f.Associations()[0].RoleARN)
+}
+
+func TestEnsureAssociationsDeletesAnUnlistedServiceAccountOfTheRequestOnAnotherRole(t *testing.T) {
+	f := awsfake.NewEKS()
+	createAssociation(t, f, "old", roleB, hubTags())
+
+	_, change, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-camunda"},
+		roleA,
+		hubTags(),
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"old"}, change.Deleted)
+	require.Len(t, f.Associations(), 1)
+	assert.Equal(t, "orders-camunda", f.Associations()[0].ServiceAccount)
+}
+
+func TestEnsureAssociationsDeletesAnUnlistedServiceAccountBeforeACreateFails(t *testing.T) {
+	f := awsfake.NewEKS()
+	createAssociation(t, f, "old", roleB, hubTags())
+	f.FailNext("CreatePodIdentityAssociation", errors.New("denied"))
+
+	_, _, err := awskit.EnsureAssociations(
+		context.Background(),
+		f,
+		"eks",
+		"team-a",
+		[]string{"orders-camunda"},
+		roleA,
+		hubTags(),
+	)
+
+	require.ErrorContains(t, err, "denied")
+	assert.Empty(t, f.Associations())
+}
+
+func TestEnsureAssociationsReadsTheAssociationsOnce(t *testing.T) {
+	f := awsfake.NewEKS()
+	ensure(t, f, roleA, "orders-camunda", "orders-es-es")
+	before := len(f.Calls())
+
+	ensure(t, f, roleA, "orders-camunda", "orders-es-es")
+
+	lists := 0
+	for _, c := range f.Calls()[before:] {
+		if c == "ListPodIdentityAssociations" {
+			lists++
+		}
+	}
+	assert.Equal(t, 1, lists)
 }

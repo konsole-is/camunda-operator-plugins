@@ -46,6 +46,9 @@ with the limit Alias prefix added to its limits.
 {{- define "aws-kms.extraTags" -}}
 {{- $items := list }}
 {{- range $key, $value := .Values.extraTags }}
+{{- if contains "=" $key }}
+{{- fail (printf "extraTags: the key %q has a \"=\", which the flag -extra-tags cannot carry" $key) }}
+{{- end }}
 {{- $items = append $items (printf "%s=%v" $key $value) }}
 {{- end }}
 {{- join "," $items }}

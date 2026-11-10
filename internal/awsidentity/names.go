@@ -35,10 +35,6 @@ const (
 	policyPrefix = "grant-"
 	// maxPolicyName is the longest name of an inline policy in IAM.
 	maxPolicyName = 128
-
-	outputPrincipal   = "principal"
-	outputAnnotations = "serviceAccountAnnotations"
-	annotationRoleARN = "eks.amazonaws.com/role-arn"
 )
 
 // policyName returns the name of the inline policy of the Grant grant. It

@@ -74,7 +74,8 @@ func DecodePolicy(encoded string) ([]byte, error) {
 }
 
 // SamePolicy reports whether a and b are the same JSON value. Numbers compare
-// by their digits. A document that is not JSON is the same as nothing.
+// by their digits, and an array of one item is the same as the item, because
+// IAM stores it so. A document that is not JSON is the same as nothing.
 func SamePolicy(a, b []byte) bool {
 	va, errA := decodeJSON(a)
 	vb, errB := decodeJSON(b)
@@ -89,5 +90,22 @@ func decodeJSON(doc []byte) (any, error) {
 	if err := decoder.Decode(&v); err != nil {
 		return nil, err
 	}
-	return v, nil
+	return unwrapSingletons(v), nil
+}
+
+func unwrapSingletons(v any) any {
+	switch t := v.(type) {
+	case []any:
+		if len(t) == 1 {
+			return unwrapSingletons(t[0])
+		}
+		for i := range t {
+			t[i] = unwrapSingletons(t[i])
+		}
+	case map[string]any:
+		for k := range t {
+			t[k] = unwrapSingletons(t[k])
+		}
+	}
+	return v
 }
