@@ -21,6 +21,7 @@ package e2e
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -133,6 +134,9 @@ var _ = Describe("the bare-metal journey", Ordered, Label(labelBareMetal), func(
 	})
 
 	It("completes a backup into the bucket of the rustfs-bucket plugin", func() {
+		before, err := bucketKeys(bucket)
+		Expect(err).NotTo(HaveOccurred())
+
 		createAll(&v1.LogicalBackupElasticsearch{
 			ObjectMeta: metav1.ObjectMeta{Name: backupName, Namespace: bareMetal},
 			Spec:       v1.LogicalBackupElasticsearchSpec{ClusterRef: v1.ClusterRef{Name: cluster.Name}},
@@ -146,9 +150,10 @@ var _ = Describe("the bare-metal journey", Ordered, Label(labelBareMetal), func(
 			g.Expect(b.Status.Phase).To(Equal(v1.LogicalBackupCompleted), "%v", b.Status.Conditions)
 		}, backupTimeout, 10*time.Second).Should(Succeed())
 
-		keys, err := bucketKeys(bucket)
+		after, err := bucketKeys(bucket)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(keys).NotTo(BeEmpty(), "the backup wrote nothing into the bucket %s", bucket)
+		written := slices.DeleteFunc(after, func(key string) bool { return slices.Contains(before, key) })
+		Expect(written).NotTo(BeEmpty(), "the backup wrote nothing into the bucket %s", bucket)
 	})
 
 	// The backup stays until the end: its deletion removes its snapshots,

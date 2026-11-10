@@ -10,7 +10,7 @@ on:
       - cmd/gateway-access/**
       - internal/gatewayaccess/**
       - charts/gateway-access/**
-      - pkg/pluginkit/**
+      - pkg/**
       - test/e2e/**
       - test/kind/**
       - Dockerfile

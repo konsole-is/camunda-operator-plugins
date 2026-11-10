@@ -46,5 +46,7 @@ cd "$repo"
 
 echo "==> Running the $journey journey"
 mkdir -p "$(dirname "$REPORT")"
-JOURNEY=$journey go test -tags e2e -count=1 -timeout 60m -run '^TestJourneys$' ./test/e2e/ \
+# go test prints the output of a test that passes only with -v, and the CI
+# log shows each spec and the count of the specs that ran.
+JOURNEY=$journey go test -tags e2e -count=1 -v -timeout 60m -run '^TestJourneys$' ./test/e2e/ \
   -ginkgo.v -ginkgo.junit-report="$REPORT"
