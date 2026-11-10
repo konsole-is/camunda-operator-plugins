@@ -55,7 +55,7 @@ registrations:
     sections: [access]
     label: Access through the edge Gateway
     mode: Optional
-    deletionPolicies: [Delete]
+    deletionPolicies: [Delete, Orphan]
     outputs:
       - key: externalUrl
       - key: grpcHost
@@ -128,7 +128,7 @@ The plugin writes no grants.
 
 ## Deletion
 
-The registrations offer the deletion policy `Delete` only. When a claim is deleted, the plugin deletes every route of its request. A route to a Service that is gone never stays.
+The registrations offer the deletion policies `Delete` and `Orphan`. Both delete every route of the request when a claim is deleted, because a route sends traffic to Services that go with the cluster. The plugin creates nothing outside the cluster, so `Orphan` keeps nothing of this plugin. The registrations offer `Orphan` so that a claim can keep the resources of its other plugins. A route to a Service that is gone never stays.
 
 ## Troubleshooting
 

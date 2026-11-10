@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Installs Envoy Gateway with the Gateway gateway-system/public, and the
 # targets of config.yaml: a CamundaCluster and a CamundaManagementCluster
-# with the Services of their endpoints. No Camunda pod runs. The operator
-# does not reconcile the paused cluster, and it cannot resolve the
-# references of the plane, so the endpoints that this script writes stay.
+# for each deletion policy, with the Services of their endpoints. No Camunda
+# pod runs. The operator does not reconcile the paused clusters, and it
+# cannot resolve the references of the planes, so the endpoints that this
+# script writes stay.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -16,8 +17,10 @@ kubectl create namespace "$namespace" --dry-run=client -o yaml | kubectl apply -
 kubectl apply -n "$namespace" -f "$here/targets.yaml"
 # The plane writes its first status before the endpoints go in. Each later
 # status write of the operator reads the endpoints first.
-kubectl wait -n "$namespace" camundamanagementcluster/conf-plane --for=condition=Ready=False --timeout=120s
-kubectl patch -n "$namespace" camundacluster/conf-cluster --subresource=status --type=merge \
-  --patch-file "$here/cluster-endpoints.yaml"
-kubectl patch -n "$namespace" camundamanagementcluster/conf-plane --subresource=status --type=merge \
-  --patch-file "$here/plane-endpoints.yaml"
+for policy in delete orphan; do
+  kubectl wait -n "$namespace" "camundamanagementcluster/conf-plane-$policy" --for=condition=Ready=False --timeout=120s
+  kubectl patch -n "$namespace" "camundacluster/conf-cluster-$policy" --subresource=status --type=merge \
+    --patch-file "$here/cluster-endpoints.yaml"
+  kubectl patch -n "$namespace" "camundamanagementcluster/conf-plane-$policy" --subresource=status --type=merge \
+    --patch-file "$here/plane-endpoints.yaml"
+done

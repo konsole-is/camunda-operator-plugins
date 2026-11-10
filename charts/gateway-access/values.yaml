@@ -21,7 +21,7 @@ registrations:
     description: Gives the cluster or the management plane a host name on the public Gateway and routes it there.
     docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/gateway-access.md
     mode: Optional
-    deletionPolicies: [Delete]
+    deletionPolicies: [Delete, Orphan]
     outputs: &outputs
       - key: externalUrl
         description: The URL of the web applications and the REST API of a cluster.
@@ -63,7 +63,7 @@ registrations:
     description: Gives the cluster or the management plane a host name on the internal Gateway and routes it there.
     docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/gateway-access.md
     mode: Optional
-    deletionPolicies: [Delete]
+    deletionPolicies: [Delete, Orphan]
     outputs: *outputs
     parameters: *parameters
     parameterValues:

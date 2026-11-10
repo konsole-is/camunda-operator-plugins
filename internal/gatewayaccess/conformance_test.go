@@ -68,12 +68,17 @@ var _ = Describe("the conformance suite", func() {
 		acceptRegistration("gateway-public")
 
 		Expect(k8s.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
-		cluster := newCluster(ns, "conf-cluster")
-		Expect(k8s.Create(ctx, cluster)).To(Succeed())
-		Expect(publishEndpoints(ctx, k8s, cluster, standaloneEndpoints("conf-cluster"))).To(Succeed())
-		plane := newPlane(ns, "conf-plane")
-		Expect(k8s.Create(ctx, plane)).To(Succeed())
-		Expect(publishEndpoints(ctx, k8s, plane, planeEndpoints("conf-plane"))).To(Succeed())
+		// The registration offers two deletion policies, so the suite runs
+		// each case once for each policy, against the target of the case
+		// with the policy as a suffix.
+		for _, policy := range []string{"delete", "orphan"} {
+			cluster := newCluster(ns, "conf-cluster-"+policy)
+			Expect(k8s.Create(ctx, cluster)).To(Succeed())
+			Expect(publishEndpoints(ctx, k8s, cluster, standaloneEndpoints("conf-cluster"))).To(Succeed())
+			plane := newPlane(ns, "conf-plane-"+policy)
+			Expect(k8s.Create(ctx, plane)).To(Succeed())
+			Expect(publishEndpoints(ctx, k8s, plane, planeEndpoints("conf-plane"))).To(Succeed())
+		}
 
 		// Every request of a run names the claim conformance, so both cases
 		// render the same hosts, on routes of their own.
@@ -108,13 +113,11 @@ var _ = Describe("the conformance suite", func() {
 				skipped = append(skipped, r.ID)
 			}
 		}
-		// DELETE-ORPHAN skips itself: the registration offers Delete only.
 		// The grant checks skip themselves: the registration has no grant
 		// templates.
 		Expect(skipped).To(ConsistOf(
 			conformance.ReqLogs,
 			conformance.OrderRegistrationFirst,
-			conformance.DeleteOrphan,
 			conformance.GrantMatch,
 			conformance.GrantRequires,
 			conformance.GrantAdmission,
@@ -122,6 +125,10 @@ var _ = Describe("the conformance suite", func() {
 		))
 		Expect(results).To(ContainElement(And(
 			HaveField("ID", conformance.DeleteRoutes),
+			HaveField("Outcome", conformance.OutcomePassed),
+		)))
+		Expect(results).To(ContainElement(And(
+			HaveField("ID", conformance.DeleteOrphan),
 			HaveField("Outcome", conformance.OutcomePassed),
 		)))
 	})
