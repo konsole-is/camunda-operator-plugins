@@ -1,0 +1,6 @@
+# The chart values of the gateway-access release of the journey. The default
+# registrations name the Gateway gateway-system/public of
+# test/kind/envoy-gateway.sh, with hosts under example.com.
+certificateSecrets:
+  - namespace: gateway-system
+    name: public-tls
