@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package awskit is the AWS layer of the official AWS plugins. It holds the
 // AWS clients behind small interfaces, and the names, ARNs, errors, policy
-// documents, roles, and Pod Identity associations that more than one plugin
-// uses. Package awsfake holds in-memory clients for tests. A new AWS plugin
+// documents, roles, Pod Identity associations, and bucket helpers that more
+// than one plugin uses. Package awsfake holds in-memory clients for tests. A new AWS plugin
 // adds its client interface to Clients and its fake to awsfake.
 package awskit

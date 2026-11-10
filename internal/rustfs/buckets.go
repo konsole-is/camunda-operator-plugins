@@ -20,45 +20,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+
+	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 )
 
-// s3API is the part of the S3 client that bucketClient calls.
-type s3API interface {
-	HeadBucket(ctx context.Context, in *s3.HeadBucketInput, opts ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
-	CreateBucket(
-		ctx context.Context,
-		in *s3.CreateBucketInput,
-		opts ...func(*s3.Options),
-	) (*s3.CreateBucketOutput, error)
-	ListObjectsV2(
-		ctx context.Context,
-		in *s3.ListObjectsV2Input,
-		opts ...func(*s3.Options),
-	) (*s3.ListObjectsV2Output, error)
-	DeleteObjects(
-		ctx context.Context,
-		in *s3.DeleteObjectsInput,
-		opts ...func(*s3.Options),
-	) (*s3.DeleteObjectsOutput, error)
-	DeleteBucket(
-		ctx context.Context,
-		in *s3.DeleteBucketInput,
-		opts ...func(*s3.Options),
-	) (*s3.DeleteBucketOutput, error)
-}
-
-// deleteBatch is the most keys that one DeleteObjects call takes.
-const deleteBatch = 1000
-
 // bucketClient creates and deletes buckets through the S3 API of RustFS.
-type bucketClient struct{ api s3API }
+type bucketClient struct{ api awskit.S3 }
 
 // newBucketClient returns a client of the S3 API at endpoint that signs with
 // the access key pair.
@@ -109,7 +82,7 @@ func (c *bucketClient) DeleteBucket(ctx context.Context, name string) (bool, err
 		return false, err
 	}
 
-	if err := emptyBucket(ctx, c.api, name); err != nil {
+	if err := awskit.EmptyBucket(ctx, c.api, name); err != nil {
 		return false, err
 	}
 
@@ -129,43 +102,4 @@ func (c *bucketClient) exists(ctx context.Context, name string) (bool, error) {
 		return false, fmt.Errorf("reading the bucket %q: %w", name, err)
 	}
 	return true, nil
-}
-
-// emptyBucket deletes every object of the bucket name. A key that RustFS
-// refuses to delete is an error. Versioning stays off on the buckets of the
-// plugin, so no object version is left behind.
-func emptyBucket(ctx context.Context, api s3API, name string) error {
-	for {
-		page, err := api.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:  aws.String(name),
-			MaxKeys: aws.Int32(deleteBatch),
-		})
-		if err != nil {
-			return fmt.Errorf("listing the objects of the bucket %q: %w", name, err)
-		}
-
-		if len(page.Contents) == 0 {
-			return nil
-		}
-
-		objects := make([]types.ObjectIdentifier, 0, len(page.Contents))
-		for _, o := range page.Contents {
-			objects = append(objects, types.ObjectIdentifier{Key: o.Key})
-		}
-		out, err := api.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: aws.String(name),
-			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
-		})
-		if err != nil {
-			return fmt.Errorf("deleting the objects of the bucket %q: %w", name, err)
-		}
-
-		if len(out.Errors) > 0 {
-			failed := make([]string, 0, len(out.Errors))
-			for _, e := range out.Errors {
-				failed = append(failed, aws.ToString(e.Key)+": "+aws.ToString(e.Code))
-			}
-			return fmt.Errorf("deleting the objects of the bucket %q: %s", name, strings.Join(failed, ", "))
-		}
-	}
 }
