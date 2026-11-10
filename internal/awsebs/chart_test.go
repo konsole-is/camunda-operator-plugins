@@ -27,6 +27,12 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
+// The messages of two rules of the chart schema.
+const (
+	tooManyIOPS       = "iops is at most 80000 for gp3, 64000 for io1, and 256000 for io2"
+	tooMuchThroughput = "throughput of gp3 is at most iops / 4, and 750 without iops"
+)
+
 func TestChartParameters(t *testing.T) {
 	registrations, err := chartRegistrations(t.TempDir())
 	require.NoError(t, err)
@@ -41,6 +47,17 @@ func TestChartParameters(t *testing.T) {
 		{"io2 with iops", `{"type":"io2","iops":6000}`, ""},
 		{"io1 with the least iops", `{"type":"io1","iops":100}`, ""},
 		{"io1 without iops", `{"type":"io1"}`, "iops is required for the volume types io1 and io2"},
+		{"gp3 with the most iops", `{"type":"gp3","iops":80000}`, ""},
+		{"gp3 above its most iops", `{"iops":80001}`, tooManyIOPS},
+		{"io1 above its most iops", `{"type":"io1","iops":64001}`, tooManyIOPS},
+		{"io2 with the most iops", `{"type":"io2","iops":256000}`, ""},
+		{"io2 above its most iops", `{"type":"io2","iops":256001}`, tooManyIOPS},
+		{"the throughput of the default 3000 iops", `{"throughput":750}`, ""},
+		{"more throughput than the default 3000 iops allow", `{"throughput":1000}`, tooMuchThroughput},
+		{"more throughput with more iops", `{"iops":4000,"throughput":1000}`, ""},
+		{"more throughput than its iops allow", `{"iops":3999,"throughput":1000}`, tooMuchThroughput},
+		{"the most throughput", `{"iops":8000,"throughput":2000}`, ""},
+		{"above the most throughput", `{"iops":80000,"throughput":2001}`, "spec.parameters.throughput"},
 		{"io2 without iops", `{"type":"io2"}`, "iops is required for the volume types io1 and io2"},
 		{"gp3 with the least iops", `{"type":"gp3","iops":3000}`, ""},
 		{"gp3 below its least iops", `{"type":"gp3","iops":2999}`, "iops of gp3 is at least 3000"},

@@ -37,11 +37,12 @@ registrations:
         iops:
           type: integer
           minimum: 100
-          description: The IOPS of each volume. Only for gp3, io1, and io2, and required for io1 and io2. At least 3000 for gp3.
+          description: The IOPS of each volume. Only for gp3, io1, and io2, and required for io1 and io2. 3000 to 80000 for gp3, 100 to 64000 for io1, and 100 to 256000 for io2.
         throughput:
           type: integer
           minimum: 125
-          description: The throughput of each volume in MiB/s. Only for gp3.
+          maximum: 2000
+          description: The throughput of each volume in MiB/s. Only for gp3. At most iops / 4, and 750 without iops.
         fsType:
           type: string
           enum: [ext4, xfs, ext3]
@@ -61,6 +62,10 @@ registrations:
           message: iops of gp3 is at least 3000
         - rule: "!has(self.type) || !(self.type in ['io1', 'io2']) || has(self.iops)"
           message: iops is required for the volume types io1 and io2
+        - rule: "!has(self.iops) || self.iops <= ((!has(self.type) || self.type == 'gp3') ? 80000 : (self.type == 'io1' ? 64000 : 256000))"
+          message: iops is at most 80000 for gp3, 64000 for io1, and 256000 for io2
+        - rule: "!has(self.throughput) || self.throughput * 4 <= (has(self.iops) ? self.iops : 3000)"
+          message: throughput of gp3 is at most iops / 4, and 750 without iops
 
 # resync is the time after which the controller reconciles each request
 # again, also when nothing in the cluster changed. It brings back a
