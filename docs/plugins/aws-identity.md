@@ -11,12 +11,14 @@ The chart installs one registration, by the chart value `mode`:
 
 For each request, the plugin creates one IAM role:
 
-- The name is `camunda-<hash>`, with 16 hex digits of a hash of the EKS cluster (its OIDC issuer with IRSA, its name with Pod Identity), the namespace, and the claim. Two claims never share a role. Two EKS clusters in one AWS account get two roles for the same namespace and claim, unless they use Pod Identity and have the same name in two regions.
+- The name is `<roleNamePrefix>-<hash>`, with the chart value `roleNamePrefix` (`camunda` by default) and 16 hex digits of a hash of the EKS cluster (its OIDC issuer with IRSA, its name with Pod Identity), the namespace, and the claim. Two claims never share a role. Two EKS clusters in one AWS account get two roles for the same namespace and claim, unless they use Pod Identity and have the same name in two regions.
 - The permissions boundary is the chart value `permissionsBoundaryArn`, on every role.
-- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request.
+- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the request. The tags of the chart value `extraTags` go on the role too.
 - The role trusts `spec.target.serviceAccountName` of the request (the ServiceAccount of the cluster, `<claim>-camunda`) and each name in `spec.target.additionalServiceAccounts` (for example `<claim>-es-es` of the built-in Elasticsearch). It trusts no other ServiceAccount. The claim controller fills both fields. The plugin does not add names itself.
 - With IRSA, the trust policy names the OIDC provider of the EKS cluster, with one `sub` value for each ServiceAccount.
-- With Pod Identity, the trust policy names `pods.eks.amazonaws.com` with `sts:AssumeRole` and `sts:TagSession`. The plugin creates one Pod Identity association for each ServiceAccount, with the same tags.
+- With Pod Identity, the trust policy names `pods.eks.amazonaws.com` with `sts:AssumeRole` and `sts:TagSession`. The plugin creates one Pod Identity association for each ServiceAccount, with the tags of the request and of `extraTags`, but without `camunda.io/request-uid`.
+
+The plugin uses, changes, and deletes only a role whose `camunda.io/request-uid` is the UID of its request. A role that has no `camunda.io/request-uid` tag, and whose `camunda.io/namespace` and `camunda.io/request` name the request, is a role that an older version of the plugin made. The plugin takes it over once and adds the UID tag. For any other role with the name, the request reports `RoleNameInUse` (see [Troubleshooting](#troubleshooting)).
 
 When a ServiceAccount leaves the request, the plugin removes it from the trust policy, and with Pod Identity it deletes its association. The plugin deletes only an association that carries the tags of the request. It keeps an association that someone made by hand for the role. It does not use an association of one of its ServiceAccounts that it did not create, and the request reports the error.
 
@@ -41,7 +43,7 @@ Before you install the chart, make sure that you have:
 5. A list of the IAM actions of that boundary, as patterns such as `s3:*` or `kms:Decrypt`, for the chart value `allowedActions`.
 6. An IAM role for the controller itself, with the permissions below. Give it to the controller through `serviceAccount.annotations` (IRSA) or a Pod Identity association of the ServiceAccount of the release.
 
-The controller role needs this policy. Replace the account, the region, the EKS cluster, and the boundary ARN. Remove the last two statements with IRSA.
+The controller role needs this policy. Replace the account, the region, the EKS cluster, and the boundary ARN. Replace `camunda` in each `role/camunda-*` with your `roleNamePrefix`. Remove the last two statements with IRSA.
 
 ```json
 {
@@ -109,6 +111,8 @@ The condition on the boundary makes sure that the controller cannot create a rol
 | --- | --- | --- |
 | `mode` | `irsa` | `irsa` or `podIdentity`. The chart refuses another value. |
 | `permissionsBoundaryArn` | `""` | Required. The managed policy that bounds every role. The registration shows it as a limit. |
+| `roleNamePrefix` | `camunda` | The start of the name of each role, at most 47 characters of `A-Z`, `a-z`, `0-9`, and `+=,.@_-`. It must differ from the role name prefix of aws-connectors-role, `camunda-connectors` by default. The controller refuses only `camunda-connectors`, in any case, because it does not know the value of aws-connectors-role. When aws-connectors-role uses this prefix too, the second plugin finds a role of the other one, and its request reports `RoleNameInUse`. To change it on a running install, see [Change the role name prefix](#change-the-role-name-prefix). |
+| `extraTags` | `{}` | Tags that go on each role and association, next to the tags of the request, for example `cost-center: platform`. At most 46 tags: AWS allows 50 tags on a role, and the plugin puts four `camunda.io/` tags on it. A key cannot start with `aws:` or `camunda.io/`, and cannot hold a `=`. |
 | `allowedActions` | `[]` | Required. The IAM action patterns that a Grant may hold, such as `s3:*`. `*` and `?` are wildcards. The registration shows them as a limit. |
 | `oidcProviderArn` | `""` | Required with IRSA. The IAM OIDC provider of the EKS cluster. |
 | `eksClusterName` | `""` | Required with Pod Identity. The EKS cluster of the associations. |
@@ -141,6 +145,27 @@ helm install aws-identity charts/aws-identity --namespace camunda-operator-plugi
   --set 'allowedActions={s3:*,kms:Decrypt,kms:GenerateDataKey}' \
   --set eksClusterName=my-eks
 ```
+
+## Change the role name prefix
+
+A change of `roleNamePrefix` gives each request a role with a new name. When the controller restarts with the new value, it does these steps for each request:
+
+1. It creates the role with the new name, with the same trust, tags, and Grants.
+2. With Pod Identity, it moves each association to the new role.
+3. It writes the new role into the outputs. The claim controller then puts the new role ARN on the ServiceAccounts of the cluster.
+4. In the next reconcile, a few seconds later, it deletes the old role and records the event `RoleDeleted`, which names the old role and the new one.
+
+Until step 4, the request lists the old role in `status.resources`.
+
+A pod keeps the role that it started with: with IRSA it reads the role ARN when it starts, and with Pod Identity the credentials that it already holds are for the old role. These credentials stop working when the plugin deletes the old role, so restart the pods of each cluster, also the pods of its built-in storage after the change, for example with `kubectl rollout restart`. With IRSA, restart a pod only after the annotation `eks.amazonaws.com/role-arn` of its ServiceAccount names the new role. With Pod Identity, restart it once the output `principal` of the request names the new role. Between the delete of the old role and the restart, a pod has no AWS access.
+
+The change is complete when the event `RoleDeleted` or `RoleKept` shows on each request, and no request lists a role with the old prefix in `status.resources`. A role that the plugin kept is not its own, so the controller does not need the old prefix for it.
+
+During the change, the controller role needs the permissions of the policy above for both the old and the new prefix. Keep `role/<old prefix>-*` in each `Resource`, next to `role/<new prefix>-*`, until no old role is left.
+
+IAM compares role names without regard to case. A change of only the case of the prefix, such as `camunda` to `Camunda`, names the same roles, so the plugin creates and deletes nothing.
+
+The plugin deletes an old role only when its `camunda.io/request-uid` is the UID of the request. It keeps any other old role, and records the Warning event `RoleKept`, which names the role and its owner.
 
 ## Parameters
 
@@ -181,16 +206,21 @@ The registrations offer the deletion policies `Delete` and `Orphan`.
 
 | Policy | IRSA | Pod Identity |
 | --- | --- | --- |
-| `Delete` | Deletes the inline policies and the role. | Deletes the associations, the inline policies, and the role. |
+| `Delete` | Deletes the inline policies and each role of the request. | Deletes the associations, the inline policies, and each role of the request. |
 | `Orphan` | Keeps the role and its inline policies. | Keeps the role and its inline policies, and deletes the associations, because they name a namespace that goes away. |
 
+The roles of a request are the role of the current `roleNamePrefix` and each role in `status.resources` of the request, such as an old role after a change of the prefix. `Delete` deletes a role only when its `camunda.io/request-uid` is the UID of the request. It keeps any other role, and records the Warning event `RoleKept`.
+
 `Delete` also deletes the inline policies that an admin added to the role by hand, and detaches the managed policies that an admin attached. An orphaned role keeps its tags, so you can find it by the namespace and the claim.
+
+A claim that you make again after an `Orphan` deletion gets a request with a new UID. Its role name is the same, so the new request reports `RoleNameInUse` until you delete the orphaned role or remove its tag `camunda.io/request-uid`. After you remove the tag, the plugin takes the role over, because its other tags name the request.
 
 ## Troubleshooting
 
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `MissingServiceAccount` | `OutputsReady` and `Ready` of the request | The request names no ServiceAccount in `spec.target`. A role that the request already has then trusts nobody, and with Pod Identity it loses its associations. The claim controller sets the ServiceAccounts. Check the claim and the operator version. |
+| `RoleNameInUse` | `OutputsReady` and `Ready` of the request | A role with the name of the request belongs to another request, or has no tag `camunda.io/request-uid` and names no request of this namespace. Examples are a claim made again after an `Orphan` deletion, a role that a person made, and a second plugin with the same `roleNamePrefix`. The message names the role and its owner. Delete that role, or change `roleNamePrefix`. When the tags `camunda.io/namespace` and `camunda.io/request` of the role name this request, you can also remove its tag `camunda.io/request-uid`, and the plugin takes the role over. |
 | `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, for example `AccessDenied` when the controller role lacks a permission above. With Pod Identity, the message can say that a ServiceAccount has an association for a role of another claim: the plugin does not move it. Delete that association, or rename the ServiceAccount. pluginkit tries again. |
 | `DeleteFailed` | `Ready` of a deleted request | The plugin could not delete the role or an association. The message gives the AWS error. The finalizer stays, and pluginkit tries again. |
 | `Unhealthy` | `Ready` of the registration | The controller cannot call STS with its credentials, or it cannot read the permissions boundary. The message gives the error. Check the controller role and `permissionsBoundaryArn`. |
@@ -199,4 +229,4 @@ The registrations offer the deletion policies `Delete` and `Orphan`.
 | `Rejected` | `Applied` and `Ready` of a Grant | The fragment is not one IAM statement that the plugin can check, its format is not `aws-iam-statement`, or IAM refused the policy. The message says which. Correct the grant template of the other plugin. |
 | `TemplateChanged` | `MatchesTemplate` and `Ready` of a Grant | The fragment of the Grant is not its template filled in now, for example after a registration change. The role keeps the statement. The plugin of the Grant writes it again on its next reconcile. |
 
-When the controller Pod does not get ready, read its log. The controller stops when a required chart value is missing or not valid, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
+When the controller Pod does not get ready, read its log. The controller stops when a required chart value is missing or not valid, when `roleNamePrefix` is not valid or is `camunda-connectors` in any case, when `extraTags` has more than 46 tags, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.

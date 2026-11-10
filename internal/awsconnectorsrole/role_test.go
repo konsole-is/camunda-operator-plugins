@@ -298,6 +298,18 @@ var _ = Describe("the aws-connectors-role registration", func() {
 		}, timeout).Should(Succeed())
 	})
 
+	It("says in both registrations when an AWS connector uses the role", func() {
+		registrations := chartRegistrations()
+
+		Expect(registrations).To(HaveLen(2))
+		for _, r := range registrations {
+			Expect(r.Spec.Description).To(
+				HaveSuffix("An AWS connector uses the role when it signs in with the default credentials chain."),
+				r.Name,
+			)
+		}
+	})
+
 	It("refuses a role of its name that another request owns", func() {
 		ns := newNamespace(role)
 		name := role.roleName(ns)
