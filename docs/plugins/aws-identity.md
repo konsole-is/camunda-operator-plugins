@@ -13,10 +13,10 @@ For each request, the plugin creates one IAM role:
 
 - The name is `<roleNamePrefix>-<hash>`, with the chart value `roleNamePrefix` (`camunda` by default) and 16 hex digits of a hash of the EKS cluster (its OIDC issuer with IRSA, its name with Pod Identity), the namespace, and the claim. Two claims never share a role. Two EKS clusters in one AWS account get two roles for the same namespace and claim, unless they use Pod Identity and have the same name in two regions.
 - The permissions boundary is the chart value `permissionsBoundaryArn`, on every role.
-- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the request. The tags of the chart value `extraTags` go on the role too.
+- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the request. The tag `camunda.io/desired` holds a hash of the role as the plugin last applied it (see [Drift](#drift)). The tags of the chart value `extraTags` go on the role too.
 - The role trusts `spec.target.serviceAccountName` of the request (the ServiceAccount of the cluster, `<claim>-camunda`) and each name in `spec.target.additionalServiceAccounts` (for example `<claim>-es-es` of the built-in Elasticsearch). It trusts no other ServiceAccount. The claim controller fills both fields. The plugin does not add names itself.
 - With IRSA, the trust policy names the OIDC provider of the EKS cluster, with one `sub` value for each ServiceAccount.
-- With Pod Identity, the trust policy names `pods.eks.amazonaws.com` with `sts:AssumeRole` and `sts:TagSession`. The plugin creates one Pod Identity association for each ServiceAccount, with the tags of the request and of `extraTags`, but without `camunda.io/request-uid`.
+- With Pod Identity, the trust policy names `pods.eks.amazonaws.com` with `sts:AssumeRole` and `sts:TagSession`. The plugin creates one Pod Identity association for each ServiceAccount, with the tags of the request and of `extraTags`, but without `camunda.io/request-uid` and `camunda.io/desired`.
 
 The plugin uses, changes, and deletes only a role whose `camunda.io/request-uid` is the UID of its request. A role that has no `camunda.io/request-uid` tag, and whose `camunda.io/namespace` and `camunda.io/request` name the request, is a role that an older version of the plugin made. The plugin takes it over once and adds the UID tag. For any other role with the name, the request reports `RoleNameInUse` (see [Troubleshooting](#troubleshooting)).
 
@@ -112,10 +112,11 @@ The condition on the boundary makes sure that the controller cannot create a rol
 | `mode` | `irsa` | `irsa` or `podIdentity`. The chart refuses another value. |
 | `permissionsBoundaryArn` | `""` | Required. The managed policy that bounds every role. The registration shows it as a limit. |
 | `roleNamePrefix` | `camunda` | The start of the name of each role, at most 47 characters of `A-Z`, `a-z`, `0-9`, and `+=,.@_-`. It must differ from the role name prefix of aws-connectors-role, `camunda-connectors` by default. The controller refuses only `camunda-connectors`, in any case, because it does not know the value of aws-connectors-role. When aws-connectors-role uses this prefix too, the second plugin finds a role of the other one, and its request reports `RoleNameInUse`. To change it on a running install, see [Change the role name prefix](#change-the-role-name-prefix). |
-| `extraTags` | `{}` | Tags that go on each role and association, next to the tags of the request, for example `cost-center: platform`. At most 46 tags: AWS allows 50 tags on a role, and the plugin puts four `camunda.io/` tags on it. A key cannot start with `aws:` or `camunda.io/`, and cannot hold a `=`. |
+| `extraTags` | `{}` | Tags that go on each role and association, next to the tags of the request, for example `cost-center: platform`. At most 45 tags: AWS allows 50 tags on a role, and the plugin puts five `camunda.io/` tags on it. A key cannot start with `aws:` or `camunda.io/`, and cannot hold a `=`. |
 | `allowedActions` | `[]` | Required. The IAM action patterns that a Grant may hold, such as `s3:*`. `*` and `?` are wildcards. The registration shows them as a limit. |
 | `oidcProviderArn` | `""` | Required with IRSA. The IAM OIDC provider of the EKS cluster. |
 | `eksClusterName` | `""` | Required with Pod Identity. The EKS cluster of the associations. |
+| `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It repairs a role, a Grant policy, or an association that someone changed in AWS (see [Drift](#drift)). A Go duration such as `30m`. `0` turns it off, and then a change in AWS stays until something else reconciles the request. |
 | `region` | `""` | The AWS region. Empty takes the region of the pod, such as `AWS_REGION`. |
 | `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |
 | `serviceAccount.annotations` | `{}` | The annotations of the ServiceAccount of the controller, for example `eks.amazonaws.com/role-arn` of the controller role. |
@@ -202,6 +203,26 @@ The plugin writes three conditions on each Grant:
 
 A request whose Grant has `Ready=False` gets `Ready=False` with the reason `GrantRejected`. Its outputs stay ready.
 
+## Drift
+
+The plugin repairs a change that someone made in AWS to an object of a request:
+
+- the trust policy, the permissions boundary, and the tags of the role,
+- the inline policy of each applied Grant,
+- with Pod Identity, the associations.
+
+It repairs on each reconcile: after a change in the cluster, and at the latest after the chart value `resync`, `1h` by default. It does not remove a tag or an inline policy without the prefix `grant-` that someone added to the role.
+
+For each reconcile that repaired drift, the plugin records the event `DriftCorrected` on the request. Its note names each object, for example `Corrected drift outside the cluster: the inline policy grant-orders-backup-read of the IAM role camunda-0123456789abcdef`. The summary item `Last drift corrected` of the request shows the time of the last repair. Find the events with:
+
+```sh
+kubectl get events -n <namespace> --field-selector reason=DriftCorrected
+```
+
+A change of the request, of a Grant, or of a chart value is not drift. The plugin applies it with its usual events, such as `RoleUpdated` and `PolicyApplied`, and records no `DriftCorrected`, also when it needs a retry. A new role, for example after a change of `roleNamePrefix`, is not drift either.
+
+To tell drift from a change, the plugin keeps the tag `camunda.io/desired` on the role, a hash of the role as the plugin last applied it in full. A repair of the role or of an association counts as drift only while the tag matches the request. A repair of a Grant policy counts as drift only when the Grant had `Applied=True` for its current spec. Do not change or delete the tag. Without it, the next repair counts as a change, and the plugin then writes the tag again.
+
 ## Deletion
 
 The registrations offer the deletion policies `Delete` and `Orphan`.
@@ -232,4 +253,4 @@ A claim that you make again after an `Orphan` deletion gets a request with a new
 | `Rejected` | `Applied` and `Ready` of a Grant | The fragment is not one IAM statement that the plugin can check, its format is not `aws-iam-statement`, or IAM refused the policy. The message says which. Correct the grant template of the other plugin. |
 | `TemplateChanged` | `MatchesTemplate` and `Ready` of a Grant | The fragment of the Grant is not its template filled in now, for example after a registration change. The role keeps the statement. The plugin of the Grant writes it again on its next reconcile. |
 
-When the controller Pod does not get ready, read its log. The controller stops when a required chart value is missing or not valid, when `roleNamePrefix` is not valid or is `camunda-connectors` in any case, when `extraTags` has more than 46 tags, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
+When the controller Pod does not get ready, read its log. The controller stops when a required chart value is missing or not valid, when `roleNamePrefix` is not valid or is `camunda-connectors` in any case, when `extraTags` has more than 45 tags, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.

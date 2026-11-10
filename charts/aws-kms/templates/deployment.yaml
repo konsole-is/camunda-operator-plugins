@@ -41,6 +41,7 @@ spec:
             - {{ printf "-extra-tags=%s" (include "aws-kms.extraTags" .) | quote }}
             - -key-administrator-arns={{ join "," .Values.keyAdministratorArns }}
             - -csi-driver-role-arn={{ .Values.csiDriverRoleArn }}
+            - -resync={{ .Values.resync }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

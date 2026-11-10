@@ -28,6 +28,12 @@ keyAdministratorArns: []
 # it encrypt and decrypt with each key, and create grants for EBS volumes.
 csiDriverRoleArn: ""
 
+# resync is the time after which the controller reconciles each request
+# again, and repairs the tags, the key policy, or the rotation of a key that
+# was changed outside the cluster.
+# 0 turns the resync off.
+resync: 10m
+
 # endpointURL, when set, sends every AWS call to this endpoint instead of the
 # endpoints of AWS.
 endpointURL: ""

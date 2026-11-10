@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -83,6 +84,12 @@ func main() {
 		"csi-driver-role-arn",
 		"",
 		"The IAM role of the EBS CSI driver, which may use each key.",
+	)
+	flag.DurationVar(
+		&opts.Resync,
+		"resync",
+		10*time.Minute,
+		"The time after which the controller reconciles each request again. 0 turns it off.",
 	)
 	registrations := flag.String(
 		"registrations",

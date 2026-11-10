@@ -20,6 +20,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -83,7 +84,8 @@ var _ = BeforeSuite(func() {
 			AliasPrefix: "camunda",
 			ExtraTags:   awskit.ExtraTags{"team": "platform"},
 		},
-		KMS: fake.In,
+		KMS:    fake.In,
+		Resync: 10 * time.Minute,
 	})
 	Expect(err).NotTo(HaveOccurred())
 
