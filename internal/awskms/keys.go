@@ -63,11 +63,6 @@ type keys struct {
 	kms      func(region string) awskit.KMS
 }
 
-// tagRequestUID binds a key to the PluginRequest that created it. Request
-// names do not name the Kubernetes cluster, so two clusters in one account
-// and region can have a request of the same namespace and name.
-const tagRequestUID = "camunda.io/request-uid"
-
 // keyRef names the key of one request.
 type keyRef struct {
 	Namespace, Claim, Request, UID string
@@ -323,7 +318,7 @@ func listTags(ctx context.Context, c awskit.KMS, keyID string) (map[string]strin
 
 // owns reports whether a key with tags belongs to the request of ref.
 func owns(tags map[string]string, ref keyRef) bool {
-	uid, ok := tags[tagRequestUID]
+	uid, ok := tags[awskit.TagRequestUID]
 	return ok && uid == ref.UID
 }
 
@@ -334,7 +329,7 @@ func owner(tags map[string]string) string {
 		return "no request"
 	}
 	owner := "the request " + tags[awskit.TagNamespace] + "/" + request
-	if uid, ok := tags[tagRequestUID]; ok {
+	if uid, ok := tags[awskit.TagRequestUID]; ok {
 		owner += " with the UID " + uid
 	}
 	return owner
@@ -649,7 +644,7 @@ func (k keys) release(ctx context.Context, ref keyRef) ([]action, error) {
 	for _, u := range untag {
 		_, err := k.kms(u.Region).UntagResource(ctx, &kms.UntagResourceInput{
 			KeyId:   aws.String(u.ARN),
-			TagKeys: []string{awskit.TagNamespace, awskit.TagClaim, awskit.TagRequest, tagRequestUID},
+			TagKeys: []string{awskit.TagNamespace, awskit.TagClaim, awskit.TagRequest, awskit.TagRequestUID},
 		})
 		if err != nil && !awskit.IsNotFound(err) {
 			return nil, fmt.Errorf("removing the request tags of the KMS key %s: %w", u.ARN, err)

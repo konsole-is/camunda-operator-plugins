@@ -95,11 +95,11 @@ func TestEnsureCreatesARotatingKeyWithItsAlias(t *testing.T) {
 	assert.True(t, key.DefaultPolicy)
 	assert.False(t, key.MultiRegion)
 	assert.Equal(t, map[string]string{
-		awskit.TagNamespace: "team-a",
-		awskit.TagClaim:     "orders",
-		awskit.TagRequest:   "orders-encryption-key",
-		tagRequestUID:       "uid-a",
-		"cpo-ci-run":        "cpo-ci-test",
+		awskit.TagNamespace:  "team-a",
+		awskit.TagClaim:      "orders",
+		awskit.TagRequest:    "orders-encryption-key",
+		awskit.TagRequestUID: "uid-a",
+		"cpo-ci-run":         "cpo-ci-test",
 	}, key.Tags)
 	target, _ := fake.AliasTarget(home, wantAlias)
 	assert.Equal(t, status.ID, target)
