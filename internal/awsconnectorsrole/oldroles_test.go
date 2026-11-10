@@ -20,6 +20,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,4 +83,72 @@ func TestReconcileRetriesARoleNameInUse(t *testing.T) {
 	require.NotNil(t, res.Pending)
 	assert.Equal(t, ReasonRoleNameInUse, res.Pending.Reason)
 	assert.Equal(t, roleInUseRequeue, res.RequeueAfter)
+}
+
+// staleIAM answers the GetRole after a TagRole once with the role as it was
+// before the TagRole, as IAM can while a change propagates.
+type staleIAM struct {
+	*awsfake.IAM
+	stale *iam.GetRoleOutput
+}
+
+func (s *staleIAM) TagRole(
+	ctx context.Context,
+	in *iam.TagRoleInput,
+	opts ...func(*iam.Options),
+) (*iam.TagRoleOutput, error) {
+	before, err := s.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: in.RoleName})
+	if err == nil {
+		s.stale = before
+	}
+	return s.IAM.TagRole(ctx, in, opts...)
+}
+
+func (s *staleIAM) GetRole(
+	ctx context.Context,
+	in *iam.GetRoleInput,
+	opts ...func(*iam.Options),
+) (*iam.GetRoleOutput, error) {
+	if out := s.stale; out != nil {
+		s.stale = nil
+		return out, nil
+	}
+	return s.IAM.GetRole(ctx, in, opts...)
+}
+
+func TestRetireOldRolesKeepsARoleWhoseNewTagIsNotVisibleYet(t *testing.T) {
+	fake := &staleIAM{IAM: awsfake.NewIAM()}
+	opts := validOptions()
+	opts.Clients.IAM = fake
+	p, err := newPlugin(opts)
+	require.NoError(t, err)
+	// A role of an older version of the plugin, without the UID tag.
+	old, _, err := awskit.EnsureRole(context.Background(), fake, awskit.RoleSpec{
+		Name:        "camunda-old",
+		TrustPolicy: []byte(`{}`),
+		Tags:        awskit.RequestTags("team-a", "orders", "orders-identity"),
+	})
+	require.NoError(t, err)
+	row := pluginsv1alpha1.ResourceRef{Kind: kindIAMRole, Name: old.Name, ID: old.ARN}
+	current := awskit.Role{Name: "camunda-new", ARN: "arn:aws:iam::111122223333:role/camunda-new"}
+	request := &pluginsv1alpha1.PluginRequest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "orders-identity", UID: "uid-1"},
+		Spec:       pluginsv1alpha1.PluginRequestSpec{ClaimRef: pluginsv1alpha1.ClaimRef{Name: "orders"}},
+		Status: pluginsv1alpha1.PluginRequestStatus{
+			Outputs:   map[string]string{awskit.OutputPrincipal: current.ARN},
+			Resources: []pluginsv1alpha1.ResourceRef{row},
+		},
+	}
+
+	left, err := p.retireOldRoles(
+		context.Background(),
+		pluginkit.Request[Params, map[string]string]{Object: request},
+		current,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{row}, left, "a later pass deletes the role")
+	got, ok := fake.Role(old.Name)
+	require.True(t, ok, "the role stays")
+	assert.Equal(t, "uid-1", got.Tags[awskit.TagRequestUID])
 }

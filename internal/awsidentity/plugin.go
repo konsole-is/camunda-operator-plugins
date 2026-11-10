@@ -113,8 +113,8 @@ func (p *Plugin) Reconcile(
 	}
 
 	role, err := p.ensureRole(ctx, req, p.roleName(request), sas)
-	if res, ok, err := p.roleNameInUse(ctx, req, err); ok {
-		return res, err
+	if res, ok := roleNameInUse(err, request.Status.Resources); ok {
+		return p.syncOldRoleGrants(ctx, req, res)
 	}
 	if err != nil {
 		return pluginkit.Result{}, err
@@ -175,36 +175,41 @@ func (p *Plugin) Reconcile(
 	return res, nil
 }
 
-// roleNameInUse returns the Pending result of req when err is an
-// awskit.RoleInUseError for the role of its name. The result keeps the old
-// roles of the status. The outputs still name the old role, so it keeps the
-// Grants of that role in sync, and a deleted Grant loses its policy.
-func (p *Plugin) roleNameInUse(
-	ctx context.Context,
-	req pluginkit.Request[Params, map[string]string],
-	err error,
-) (pluginkit.Result, bool, error) {
+// roleNameInUse returns the Pending result of a request whose role name
+// belongs to another request, when err is an awskit.RoleInUseError. The
+// result keeps the old roles of the rows of status.
+func roleNameInUse(err error, status []pluginsv1alpha1.ResourceRef) (pluginkit.Result, bool) {
 	var inUse awskit.RoleInUseError
 	if !errors.As(err, &inUse) {
-		return pluginkit.Result{}, false, nil
+		return pluginkit.Result{}, false
 	}
 
-	res := pluginkit.Result{
+	return pluginkit.Result{
 		Pending:      &pluginkit.Waiting{Reason: ReasonRoleNameInUse, Message: inUse.Error()},
-		Resources:    oldRoleRows(req.Object.Status.Resources, inUse.Name),
+		Resources:    oldRoleRows(status, inUse.Name),
 		RequeueAfter: roleInUseRequeue,
-	}
+	}, true
+}
 
-	old, err := p.activeOldRole(ctx, req, inUse.Name)
+// syncOldRoleGrants keeps the Grants of the old role that the outputs of req
+// name in sync, so that a deleted Grant loses its policy while the role of
+// the current name cannot be used. It returns res, the Pending result of the
+// pass.
+func (p *Plugin) syncOldRoleGrants(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+	res pluginkit.Result,
+) (pluginkit.Result, error) {
+	old, err := p.activeOldRole(ctx, req, p.roleName(req.Object))
 	if err != nil || old.ARN == "" {
-		return res, true, err
+		return res, err
 	}
 
 	_, conflicted, err := p.syncGrants(ctx, req, old)
 	if conflicted {
 		res.RequeueAfter = conflictRequeue
 	}
-	return res, true, err
+	return res, err
 }
 
 func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) pluginsv1alpha1.ResourceRef {
@@ -218,10 +223,10 @@ func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) plug
 }
 
 // reconcileWithoutServiceAccounts makes the role of req, when it has one,
-// trust nobody, and keeps its Grants in sync, because credentials that STS
-// gave before stay valid. Before the role of its current name exists, it does
-// this to the old role that the outputs name. It keeps the old roles of the
-// status and deletes none, because the outputs can still name one.
+// and the old role that the outputs name trust nobody, and keeps their Grants
+// in sync, because credentials that STS gave before stay valid. It deletes the
+// other old roles of the status only once the outputs name the role of its
+// current name.
 func (p *Plugin) reconcileWithoutServiceAccounts(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -236,51 +241,72 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 		Resources: oldRoleRows(status, current),
 	}
 
-	name := current
+	old, err := p.activeOldRole(ctx, req, current)
+	if err != nil {
+		return res, err
+	}
+	if old.ARN != "" {
+		if _, conflicted, err := p.trustNobody(ctx, req, old.Name); err != nil {
+			return pluginkit.Result{}, err
+		} else if conflicted {
+			res.RequeueAfter = conflictRequeue
+		}
+	}
+
 	arn, err := p.liveRoleARN(ctx, current)
 	if err != nil {
 		return res, err
 	}
 	if arn == "" {
-		old, err := p.activeOldRole(ctx, req, current)
-		if err != nil {
-			return res, err
+		if old.ARN != "" {
+			return res, nil
 		}
-		if old.ARN == "" {
-			// The associations of a role that someone deleted by hand still
-			// hold the ServiceAccounts.
-			return res, p.deleteAssociations(ctx, req, current)
-		}
-		name = old.Name
+		// The associations of a role that someone deleted by hand still hold
+		// the ServiceAccounts.
+		return res, p.deleteAssociations(ctx, req, current)
 	}
 
-	role, err := p.ensureRole(ctx, req, name, nil)
-	if inUse, ok, err := p.roleNameInUse(ctx, req, err); ok {
-		return inUse, err
+	role, conflicted, err := p.trustNobody(ctx, req, current)
+	if inUse, ok := roleNameInUse(err, status); ok {
+		return inUse, nil
 	}
 	if err != nil {
 		return pluginkit.Result{}, err
+	}
+
+	left, err := p.retireOldRoles(ctx, req, role)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+
+	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, left...)
+	if conflicted {
+		res.RequeueAfter = conflictRequeue
+	}
+	return res, nil
+}
+
+// trustNobody makes the role name of req trust nobody, deletes its
+// associations, and keeps its Grants in sync.
+func (p *Plugin) trustNobody(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+	name string,
+) (awskit.Role, bool, error) {
+	role, err := p.ensureRole(ctx, req, name, nil)
+	if err != nil {
+		return awskit.Role{}, false, err
 	}
 
 	if p.mode == awskit.ModePodIdentity {
 		if _, err := p.ensureAssociations(ctx, req, nil, role); err != nil {
 			_, _, syncErr := p.syncGrants(ctx, req, role)
-			return pluginkit.Result{}, errors.Join(err, syncErr)
+			return awskit.Role{}, false, errors.Join(err, syncErr)
 		}
 	}
 
 	_, conflicted, err := p.syncGrants(ctx, req, role)
-	if err != nil {
-		return pluginkit.Result{}, err
-	}
-
-	res.Resources = append(
-		[]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)},
-		oldRoleRows(status, role.Name)...)
-	if conflicted {
-		res.RequeueAfter = conflictRequeue
-	}
-	return res, nil
+	return role, conflicted, err
 }
 
 // liveRoleARN returns the ARN of the role name, or "" when it does not exist.

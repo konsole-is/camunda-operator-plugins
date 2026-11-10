@@ -242,4 +242,34 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 		_, ok := s.iam.Role(c.roleName(s.namespace))
 		Expect(ok).To(BeFalse(), "no role of the new name")
 	})
+
+	It(
+		"revokes the trust of both roles when the request names no ServiceAccount during a change of the prefix",
+		func() {
+			s := newRenameSetup(awskit.ModeIRSA)
+			newName := awskit.RoleName(newPrefix, issuer, s.namespace, "orders")
+			_, _, err := awskit.EnsureRole(ctx, s.iam, awskit.RoleSpec{
+				Name:        newName,
+				TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
+				Tags: awskit.ExtraTags(nil).OwnerTags(
+					s.namespace,
+					"orders",
+					s.request.Name,
+					string(s.request.UID),
+				),
+			})
+			Expect(err).NotTo(HaveOccurred())
+			s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+
+			s.startNewManager()
+
+			Eventually(func(g Gomega) {
+				for _, name := range []string{s.oldRole.Name, newName} {
+					role, ok := s.iam.Role(name)
+					g.Expect(ok).To(BeTrue(), "the role %s stays", name)
+					g.Expect(role.TrustPolicy).To(ContainSubstring(`"Effect":"Deny"`), name)
+				}
+			}, timeout).Should(Succeed())
+		},
+	)
 })

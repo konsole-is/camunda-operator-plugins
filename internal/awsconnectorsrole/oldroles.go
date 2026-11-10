@@ -19,6 +19,7 @@ package awsconnectorsrole
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -29,6 +30,11 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
+
+// errTagNotVisible means that a read of IAM did not show the UID tag that
+// awskit.OwnedRole wrote just before. IAM is eventually consistent, so a later
+// pass deletes the role.
+var errTagNotVisible = errors.New("IAM does not show the UID tag of the request on the role yet")
 
 const (
 	// oldRoleRequeue is the wait before the pass that deletes an old role,
@@ -57,12 +63,17 @@ func (p *Plugin) retireOldRoles(
 		return old, nil
 	}
 
+	var left []pluginsv1alpha1.ResourceRef
 	for _, row := range old {
-		if err := p.deleteNamedRole(ctx, req, row.Name, role.Name); err != nil {
+		err := p.deleteNamedRole(ctx, req, row.Name, role.Name)
+		switch {
+		case errors.Is(err, errTagNotVisible):
+			left = append(left, row)
+		case err != nil:
 			return nil, err
 		}
 	}
-	return nil, nil
+	return left, nil
 }
 
 // oldRoleRows returns the IAMRole rows of rows whose names
@@ -112,7 +123,8 @@ func (p *Plugin) activeOldRole(
 
 // deleteNamedRole deletes the role name of req and records an event. A role
 // of another request UID stays, with a Warning event. successor, when not
-// empty, is the role that replaces it.
+// empty, is the role that replaces it. It returns errTagNotVisible when IAM
+// does not show the UID tag of the request on the role yet.
 func (p *Plugin) deleteNamedRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -121,14 +133,8 @@ func (p *Plugin) deleteNamedRole(
 	// OwnedRole tags a role that an older version of the plugin made, so that
 	// DeleteRole finds the UID of the request on it.
 	_, err := awskit.OwnedRole(ctx, p.clients.IAM, name, p.roleTags(req.Object))
-	if err != nil && !errors.As(err, new(awskit.RoleInUseError)) {
-		return err
-	}
-
-	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, name, string(req.Object.UID))
 	var inUse awskit.RoleInUseError
-	switch {
-	case errors.As(err, &inUse):
+	if errors.As(err, &inUse) {
 		req.Event(
 			corev1.EventTypeWarning,
 			eventReasonRoleKept,
@@ -137,6 +143,17 @@ func (p *Plugin) deleteNamedRole(
 			name,
 			inUse.Owner,
 		)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, name, string(req.Object.UID))
+	switch {
+	case errors.As(err, &inUse):
+		// OwnedRole found the UID of the request, or wrote it.
+		return fmt.Errorf("deleting the IAM role %s: %w", name, errTagNotVisible)
 	case err != nil:
 		return err
 	case deleted && successor != "":

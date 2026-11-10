@@ -137,48 +137,50 @@ func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) plug
 }
 
 // reconcileRoleWithoutServiceAccount makes the role of the claim of req, when
-// it exists, trust nobody, and deletes the associations of the request.
-// Before the role of its current name exists, it does this to the old role
-// that the outputs name. It creates no role and deletes no old role, because
-// the outputs can still name one. The Pending result keeps the role and the
-// old roles of the status.
+// it exists, and the old role that the outputs name trust nobody, and deletes
+// the associations of the request. It creates no role, and deletes the other
+// old roles of the status only once the outputs name the role of its current
+// name. The Pending result keeps the role and the old roles that stay.
 func (p *Plugin) reconcileRoleWithoutServiceAccount(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 ) (pluginkit.Result, error) {
 	current := p.roleName(req.Object)
 	status := req.Object.Status.Resources
-	arn, err := p.liveRoleARN(ctx, current)
+	res := pluginkit.Result{Pending: missingServiceAccount(), Resources: oldRoleRows(status, current)}
+
+	old, err := p.activeOldRole(ctx, req, current)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
-
-	name := current
-	if arn == "" {
-		old, err := p.activeOldRole(ctx, req, current)
-		if err != nil {
+	if old.ARN != "" {
+		if _, err := p.ensureRole(ctx, req, old.Name, nil); err != nil {
 			return pluginkit.Result{}, err
 		}
-		name, arn = old.Name, old.ARN
-	}
-
-	res := pluginkit.Result{Pending: missingServiceAccount(), Resources: oldRoleRows(status, current)}
-	if arn != "" {
-		role, err := p.ensureRole(ctx, req, name, nil)
-		if inUse, ok := roleNameInUse(err, status); ok {
-			return inUse, nil
-		}
-		if err != nil {
-			return pluginkit.Result{}, err
-		}
-		res.Resources = append(
-			[]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)},
-			oldRoleRows(status, role.Name)...)
 	}
 
 	if err := p.deleteAssociations(ctx, req); err != nil {
 		return pluginkit.Result{}, err
 	}
+
+	arn, err := p.liveRoleARN(ctx, current)
+	if err != nil || arn == "" {
+		return res, err
+	}
+
+	role, err := p.ensureRole(ctx, req, current, nil)
+	if inUse, ok := roleNameInUse(err, status); ok {
+		return inUse, nil
+	}
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+
+	left, err := p.retireOldRoles(ctx, req, role)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, left...)
 	return res, nil
 }
 
