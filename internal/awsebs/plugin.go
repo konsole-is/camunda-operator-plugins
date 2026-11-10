@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -45,6 +46,10 @@ const (
 // kindStorageClass is the kind of the row of status.resources.
 const kindStorageClass = "StorageClass"
 
+// deletingRequeue is the wait before a request looks again at its old
+// StorageClass that is still deleting. No watch reports that it is gone.
+const deletingRequeue = 5 * time.Second
+
 // Plugin serves volume encryption requests. Each request gets one
 // StorageClass of the EBS CSI driver that encrypts with the key of the
 // request. The plugin makes no AWS call.
@@ -55,10 +60,12 @@ type Plugin struct {
 
 // Reconcile returns the StorageClass of the request and publishes its name.
 // It is Pending with the reason InvalidKey when the input key is not the ARN
-// of a KMS key, and with StorageClassNameTaken when a StorageClass of its name
-// is not of the request. When a parameter that a StorageClass cannot change
+// of a KMS key, with StorageClassNameTaken when a StorageClass of its name is
+// not of the request, and with StorageClassDeleting while its old StorageClass
+// is still deleting. When a parameter that a StorageClass cannot change
 // differs, it deletes the StorageClass and creates it again under the same
-// name. Volumes that exist keep their parameters.
+// name, and returns an error when a StorageClass of that name still exists.
+// Volumes that exist keep their parameters.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -93,7 +100,13 @@ func (p *Plugin) Reconcile(
 			),
 		}}, nil
 	case !live.DeletionTimestamp.IsZero():
-		return pluginkit.Result{}, fmt.Errorf("waiting for the old StorageClass %s to be gone", name)
+		return pluginkit.Result{
+			Pending: &pluginkit.Waiting{
+				Reason:  ReasonStorageClassDeleting,
+				Message: fmt.Sprintf("waiting for the old StorageClass %s to be gone", name),
+			},
+			RequeueAfter: deletingRequeue,
+		}, nil
 	default:
 		if replaced, err = p.deleteChanged(ctx, req, &live, desired); err != nil {
 			return pluginkit.Result{}, err

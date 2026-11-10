@@ -18,6 +18,7 @@ package awsebs
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,4 +63,34 @@ func TestReconcileLeavesAStorageClassThatAnotherActorCreatedAfterTheReadAlone(t 
 	require.NoError(t, writer.Get(t.Context(), client.ObjectKey{Name: name}, &current))
 	assert.Equal(t, "example.com/other", current.Provisioner)
 	assert.Empty(t, current.Labels)
+}
+
+func TestReconcileWaitsWithoutAnErrorForTheOldStorageClassToBeGone(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	request := &pluginsv1alpha1.PluginRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "orders-volume-encryption", Namespace: "team-a"},
+		Spec: pluginsv1alpha1.PluginRequestSpec{
+			Registration: "aws-ebs-encrypted",
+			ClaimRef:     pluginsv1alpha1.ClaimRef{Name: "orders"},
+		},
+	}
+	deleting := StorageClass(StorageClassName("team-a", "orders", "orders-volume-encryption"), Params{}, testKey)
+	deleting.Labels = pluginkit.ClusterScopedLabels(request)
+	deleting.Finalizers = []string{"example.com/hold"}
+	deleting.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deleting).Build()
+	plugin := &Plugin{client: c, reader: c}
+
+	res, err := plugin.Reconcile(t.Context(), pluginkit.Request[Params, map[string]string]{
+		Object: request,
+		Inputs: map[string]string{InputKey: testKey},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, res.Pending)
+	assert.Equal(t, ReasonStorageClassDeleting, res.Pending.Reason)
+	assert.Contains(t, res.Pending.Message, deleting.Name)
+	assert.Positive(t, res.RequeueAfter)
+	assert.Empty(t, res.Objects)
 }

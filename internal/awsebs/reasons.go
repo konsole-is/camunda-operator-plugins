@@ -25,4 +25,9 @@ const (
 	// the request exists and is not of the request. The plugin never changes
 	// or deletes it, and the outputs are not ready.
 	ReasonStorageClassNameTaken = "StorageClassNameTaken"
+	// ReasonStorageClassDeleting means that the old StorageClass of the
+	// request is still deleting, for example while a finalizer holds it. The
+	// plugin creates the new one when it is gone, and the outputs are not
+	// ready.
+	ReasonStorageClassDeleting = "StorageClassDeleting"
 )
