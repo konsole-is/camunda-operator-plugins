@@ -29,16 +29,17 @@ import (
 
 // ensureAssociations keeps, with Pod Identity, one association of roleARN
 // for each of sas, deletes each other association of the request, records an
-// event for each change, and returns the resources of the associations. With
-// IRSA it does nothing.
+// event for each change, and returns the resources of the associations and
+// the changes, which it also returns with an error. With IRSA it does
+// nothing.
 func (p *Plugin) ensureAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	sas []string,
 	roleARN string,
-) ([]pluginsv1alpha1.ResourceRef, error) {
+) ([]pluginsv1alpha1.ResourceRef, awskit.AssociationChange, error) {
 	if p.mode != awskit.ModePodIdentity {
-		return nil, nil
+		return nil, awskit.AssociationChange{}, nil
 	}
 
 	request := req.Object
@@ -73,7 +74,7 @@ func (p *Plugin) ensureAssociations(
 	}
 	p.associationsDeleted(req, change.Deleted)
 	if err != nil {
-		return nil, err
+		return nil, change, err
 	}
 
 	resources := make([]pluginsv1alpha1.ResourceRef, 0, len(associations))
@@ -87,7 +88,7 @@ func (p *Plugin) ensureAssociations(
 			OnOrphan: pluginsv1alpha1.OnOrphanDeleted,
 		})
 	}
-	return resources, nil
+	return resources, change, nil
 }
 
 // deleteAssociations deletes, with Pod Identity, each association of the

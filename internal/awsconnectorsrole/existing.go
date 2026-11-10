@@ -49,7 +49,7 @@ func (p *Plugin) reconcileExisting(
 		}}, nil
 	}
 
-	resources, err := p.ensureAssociations(ctx, req, sas, roleARN)
+	resources, _, err := p.ensureAssociations(ctx, req, sas, roleARN)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
