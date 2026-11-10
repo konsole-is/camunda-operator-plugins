@@ -15,7 +15,7 @@ type Plugin[P, I any] interface {
 ```
 
 - `Reconcile` brings the resources of a request to their desired state. It returns a `Result`: the outputs, the Kubernetes objects to apply, and the status fields. pluginkit calls it only for a request whose parameters pass the schema of the registration, and whose required inputs have a value.
-- `Delete` deletes what pluginkit does not delete itself: each resource outside the cluster, and each cluster-scoped object, by name. It must succeed when the resources are already gone. Two requests in two namespaces can have the same name. A plugin that finds its cluster-scoped objects by label must match all three labels: `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/request-namespace`.
+- `Delete` deletes what pluginkit does not delete itself: each resource outside the cluster, and each cluster-scoped object. It must succeed when the resources are already gone. Two requests in two namespaces can have the same name. A plugin deletes its cluster-scoped objects with `pluginkit.DeleteClusterScoped`, which matches all three labels: `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/request-namespace`.
 - `Orphan` releases the resources of a request with the deletion policy `Orphan`, for example the tags that tie a cloud resource to the request.
 
 `Request.Object` is a copy of the `PluginRequest`. `Request.Log` is a logger with the key `request`, whose value holds the `name` and the `namespace` of the request. pluginkit writes one line with this key each time the status or the reason of `Ready` of the request changes. Call `Request.Event` once for each external action, such as the create of a bucket.
@@ -163,6 +163,8 @@ When a request is deleted, pluginkit calls `Delete` or `Orphan`, by `spec.deleti
 
 - `Delete`: pluginkit deletes each Grant with the label `plugins.camunda.io/request: <request>` in the namespace of the request. It does not rely on the owner reference, because a user can remove it. The garbage collector deletes the namespaced objects.
 - `Orphan`: pluginkit removes the owner references to the request from the Grants and from the namespaced objects of `Owns`. They keep their labels. A cluster-scoped object has no owner reference, so it stays as it is.
+
+`pluginkit.DeleteClusterScoped(ctx, reader, writer, request, list)` lists the objects of one kind from the API server by the three labels of the request, deletes them, and returns the deleted objects, so the plugin records one event for each. It returns an error while one of them still exists, for example while a finalizer holds it, so the finalizer of the request stays.
 
 The finalizer stays until the method of the plugin returns nil and each Grant is gone. When the method returns an error, `Ready` is `False` with reason `DeleteFailed`, and pluginkit calls the method again with the backoff of controller-runtime. A Grant can hold a finalizer of the identity extension, and pluginkit waits for it.
 

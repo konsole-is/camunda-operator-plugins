@@ -44,11 +44,11 @@ type Plugin[P, I any] interface {
 	Reconcile(ctx context.Context, req Request[P, I]) (Result, error)
 	// Delete deletes the resources of a request with the deletion policy
 	// Delete that pluginkit does not delete itself: each resource outside the
-	// cluster, and each cluster-scoped object, by name. pluginkit deletes the
-	// Grants of the request, and the garbage collector deletes the namespaced
-	// objects. The finalizer stays until Delete returns nil, so Delete must
-	// succeed for resources that are already gone. A plugin that finds its
-	// cluster-scoped objects by label matches the labels registration,
+	// cluster, and each cluster-scoped object. pluginkit deletes the Grants of
+	// the request, and the garbage collector deletes the namespaced objects.
+	// The finalizer stays until Delete returns nil, so Delete must succeed for
+	// resources that are already gone. A plugin deletes its cluster-scoped
+	// objects with DeleteClusterScoped, which matches the labels registration,
 	// request, and request-namespace.
 	Delete(ctx context.Context, req Request[P, I]) error
 	// Orphan releases the resources of a request with the deletion policy
