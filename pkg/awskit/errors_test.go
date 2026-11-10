@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"testing"
 
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 )
@@ -32,6 +33,7 @@ func TestErrorsMatchTheCodesOfEachService(t *testing.T) {
 		"IsLimitExceeded":   IsLimitExceeded,
 		"IsMalformedPolicy": IsMalformedPolicy,
 		"IsAccessDenied":    IsAccessDenied,
+		"IsNotConfigured":   IsNotConfigured,
 	}
 	codes := map[string][]string{
 		"IsNotFound": {
@@ -39,11 +41,19 @@ func TestErrorsMatchTheCodesOfEachService(t *testing.T) {
 			"NoSuchEntityException",
 			"ResourceNotFoundException",
 			"NotFoundException",
+			"NoSuchBucket",
+			"NotFound",
 		},
 		"IsAlreadyExists":   {"EntityAlreadyExists", "ResourceInUseException", "AlreadyExistsException"},
 		"IsLimitExceeded":   {"LimitExceeded", "LimitExceededException"},
 		"IsMalformedPolicy": {"MalformedPolicyDocument", "MalformedPolicyDocumentException"},
-		"IsAccessDenied":    {"AccessDenied", "AccessDeniedException"},
+		"IsAccessDenied":    {"AccessDenied", "AccessDeniedException", "Forbidden"},
+		"IsNotConfigured": {
+			"NoSuchTagSet",
+			"NoSuchPublicAccessBlockConfiguration",
+			"ServerSideEncryptionConfigurationNotFoundError",
+			"NoSuchLifecycleConfiguration",
+		},
 	}
 
 	for name, check := range checks {
@@ -56,6 +66,12 @@ func TestErrorsMatchTheCodesOfEachService(t *testing.T) {
 		}
 		assert.False(t, check(errors.New("NoSuchEntity")), name)
 		assert.False(t, check(nil), name)
+	}
+}
+
+func TestIsNotFoundMatchesTheS3Codes(t *testing.T) {
+	for _, err := range []error{&s3types.NotFound{}, &s3types.NoSuchBucket{}} {
+		assert.True(t, IsNotFound(fmt.Errorf("wrapped: %w", err)), "%T", err)
 	}
 }
 
