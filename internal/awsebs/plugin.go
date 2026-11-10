@@ -57,8 +57,8 @@ type Plugin struct {
 // It is Pending with the reason InvalidKey when the input key is not the ARN
 // of a KMS key, and with StorageClassNameTaken when a StorageClass of its name
 // is not of the request. When a parameter that a StorageClass cannot change
-// differs, it deletes the StorageClass, so that pluginkit creates it again
-// under the same name. Volumes that exist keep their parameters.
+// differs, it deletes the StorageClass and creates it again under the same
+// name. Volumes that exist keep their parameters.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -78,15 +78,10 @@ func (p *Plugin) Reconcile(
 	// The cache can still hold a StorageClass that the last pass deleted.
 	var live storagev1.StorageClass
 	err = p.reader.Get(ctx, client.ObjectKey{Name: name}, &live)
+	notFound := apierrors.IsNotFound(err)
+	replaced := false
 	switch {
-	case apierrors.IsNotFound(err):
-		req.Event(
-			corev1.EventTypeNormal,
-			eventReasonStorageClassCreated,
-			eventActionCreate,
-			"Applying the StorageClass %s",
-			name,
-		)
+	case notFound:
 	case err != nil:
 		return pluginkit.Result{}, fmt.Errorf("reading the StorageClass %s: %w", name, err)
 	case !ofRequest(&live, req.Object):
@@ -100,9 +95,26 @@ func (p *Plugin) Reconcile(
 	case !live.DeletionTimestamp.IsZero():
 		return pluginkit.Result{}, fmt.Errorf("waiting for the old StorageClass %s to be gone", name)
 	default:
-		if err := p.replaceChanged(ctx, req, &live, desired); err != nil {
+		if replaced, err = p.deleteChanged(ctx, req, &live, desired); err != nil {
 			return pluginkit.Result{}, err
 		}
+	}
+
+	// The forced apply of pluginkit would take over a StorageClass that
+	// another actor created after the read, so a missing one is created first.
+	if notFound || replaced {
+		if err := p.create(ctx, req.Object, desired); err != nil {
+			return pluginkit.Result{}, err
+		}
+	}
+	if notFound {
+		req.Event(
+			corev1.EventTypeNormal,
+			eventReasonStorageClassCreated,
+			eventActionCreate,
+			"Created the StorageClass %s",
+			name,
+		)
 	}
 
 	return pluginkit.Result{
@@ -134,21 +146,22 @@ func ofRequest(sc *storagev1.StorageClass, request *pluginsv1alpha1.PluginReques
 	return true
 }
 
-// replaceChanged deletes live when a field that a StorageClass cannot change
-// differs from desired, and records one event that names the fields.
-func (p *Plugin) replaceChanged(
+// deleteChanged deletes live when a field that a StorageClass cannot change
+// differs from desired, records one event that names the fields, and reports
+// whether it deleted live.
+func (p *Plugin) deleteChanged(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	live, desired *storagev1.StorageClass,
-) error {
+) (bool, error) {
 	changed := ChangedImmutable(live, desired)
 	if len(changed) == 0 {
-		return nil
+		return false, nil
 	}
 
 	uid := live.UID
 	if err := p.client.Delete(ctx, live, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("deleting the StorageClass %s to replace it: %w", live.Name, err)
+		return false, fmt.Errorf("deleting the StorageClass %s to replace it: %w", live.Name, err)
 	}
 	req.Event(
 		corev1.EventTypeNormal,
@@ -158,6 +171,18 @@ func (p *Plugin) replaceChanged(
 		live.Name,
 		strings.Join(changed, ", "),
 	)
+	return true, nil
+}
+
+// create creates sc with the ClusterScopedLabels of request. It returns an
+// error when a StorageClass of its name exists, so that the next pass reads
+// that StorageClass.
+func (p *Plugin) create(ctx context.Context, request *pluginsv1alpha1.PluginRequest, sc *storagev1.StorageClass) error {
+	obj := sc.DeepCopy()
+	obj.Labels = pluginkit.ClusterScopedLabels(request)
+	if err := p.client.Create(ctx, obj); err != nil {
+		return fmt.Errorf("creating the StorageClass %s: %w", sc.Name, err)
+	}
 	return nil
 }
 
