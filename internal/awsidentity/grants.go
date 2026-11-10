@@ -147,7 +147,7 @@ func (p *Plugin) syncGrants(
 // policyCorrections names each policy of policies on role, for
 // pluginkit.Result.Corrected.
 func policyCorrections(role awskit.Role, policies []string) []string {
-	var out []string
+	out := make([]string, 0, len(policies))
 	for _, policy := range policies {
 		out = append(out, "the inline policy "+policy+" of the IAM role "+role.Name)
 	}

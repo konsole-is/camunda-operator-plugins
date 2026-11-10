@@ -40,8 +40,9 @@ type AssociationChange struct {
 // Corrections names the association of each ServiceAccount of c, for
 // pluginkit.Result.Corrected.
 func (c AssociationChange) Corrections() []string {
-	var out []string
-	for _, sa := range slices.Concat(c.Created, c.Updated, c.Tagged, c.Deleted) {
+	sas := slices.Concat(c.Created, c.Updated, c.Tagged, c.Deleted)
+	out := make([]string, 0, len(sas))
+	for _, sa := range sas {
 		out = append(out, "the Pod Identity association of the ServiceAccount "+sa)
 	}
 	return out

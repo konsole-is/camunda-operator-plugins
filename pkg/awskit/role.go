@@ -97,7 +97,7 @@ type RoleChange struct {
 // Corrections names each part of the role name that c updated, such as "the
 // trust policy of the IAM role camunda-0123", for pluginkit.Result.Corrected.
 func (c RoleChange) Corrections(name string) []string {
-	var out []string
+	out := make([]string, 0, len(c.Updated))
 	for _, part := range c.Updated {
 		out = append(out, "the "+part+" of the IAM role "+name)
 	}
@@ -409,8 +409,9 @@ type PolicyChange struct {
 // Corrections names each managed policy of the role name that c attached or
 // detached, for pluginkit.Result.Corrected.
 func (c PolicyChange) Corrections(name string) []string {
-	var out []string
-	for _, arn := range slices.Concat(c.Attached, c.Detached) {
+	arns := slices.Concat(c.Attached, c.Detached)
+	out := make([]string, 0, len(arns))
+	for _, arn := range arns {
 		out = append(out, "the managed policy "+arn+" of the IAM role "+name)
 	}
 	return out
