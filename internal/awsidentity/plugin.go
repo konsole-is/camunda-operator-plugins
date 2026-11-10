@@ -459,10 +459,11 @@ func (p *Plugin) ensureAssociations(
 	return associations, err
 }
 
-// Delete deletes each role of the request: the role of its current name and
-// the roles of its status.resources, each only with the UID of the request,
-// with their associations and inline policies. A role of another request UID
-// stays, with a Warning event. A role that is gone is not an error.
+// Delete deletes the associations of the current role of the request and of
+// each role of its status.resources. It then deletes each of those roles with
+// its inline policies, only when the role has the UID of the request. A role
+// of another request UID stays, with a Warning event. A role that is gone is
+// not an error.
 func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	current := p.roleName(req.Object)
 	old := oldRoleRows(req.Object.Status.Resources, current)

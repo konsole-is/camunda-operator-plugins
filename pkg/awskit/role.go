@@ -212,11 +212,11 @@ func updateRole(
 	return updated, nil
 }
 
-// OwnedRole returns the role name when it belongs to the request of tags:
-// its TagRequestUID value is the one in tags, or EnsureRole would take it
-// over, and then OwnedRole writes tags on it first. It returns a
-// RoleInUseError for any other role, and a zero Role when the role does not
-// exist.
+// OwnedRole returns the Role of name when it belongs to the request of tags,
+// and a zero Role when the role does not exist. A role belongs to the request
+// when its TagRequestUID value is the one in tags, or when EnsureRole would
+// take it over. In the second case OwnedRole writes tags on the role. It
+// returns a RoleInUseError for any other role.
 func OwnedRole(ctx context.Context, c IAM, name string, tags map[string]string) (Role, error) {
 	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
 	if IsNotFound(err) {
@@ -240,9 +240,9 @@ func OwnedRole(ctx context.Context, c IAM, name string, tags map[string]string) 
 }
 
 // DeleteRole deletes the role name with its inline policies and its managed
-// policy attachments, only when its TagRequestUID tag is uid. It reports
-// false, with no error, when the role does not exist, and a RoleInUseError
-// when the tag is another value or absent.
+// policy attachments, only when its TagRequestUID tag is uid. An absent tag
+// is the empty value. It reports false, with no error, when the role does not
+// exist, and a RoleInUseError when the tag differs from uid.
 func DeleteRole(ctx context.Context, c IAM, name, uid string) (bool, error) {
 	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
 	if IsNotFound(err) {
