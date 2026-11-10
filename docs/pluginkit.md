@@ -14,7 +14,7 @@ type Plugin[P, I any] interface {
 }
 ```
 
-- `Reconcile` brings the resources of a request to their desired state. It returns a `Result`: the outputs, the Kubernetes objects to apply, and the status fields. pluginkit calls it only for a request whose parameters pass the schema of the registration.
+- `Reconcile` brings the resources of a request to their desired state. It returns a `Result`: the outputs, the Kubernetes objects to apply, and the status fields. pluginkit calls it only for a request whose parameters pass the schema of the registration, and whose required inputs have a value.
 - `Delete` deletes what pluginkit does not delete itself: each resource outside the cluster, and each cluster-scoped object, by name. It must succeed when the resources are already gone. Two requests in two namespaces can have the same name. A plugin that finds its cluster-scoped objects by label must match all three labels: `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/request-namespace`.
 - `Orphan` releases the resources of a request with the deletion policy `Orphan`, for example the tags that tie a cloud resource to the request.
 
@@ -95,17 +95,18 @@ pluginkit serves each `PluginRequest` whose label `plugins.camunda.io/registrati
 
 1. It validates `spec.parameters` against the schema of the registration, as the Kubernetes API server validates a custom resource: the schema, the `x-kubernetes-validations` rules, the list types, and the checks of an embedded resource. It checks the stored value, before the template parameters render. The error names each failing field, for example `spec.parameters.size`, and the message of each broken rule.
 2. It renders each parameter whose schema has `"x-fleet-template": true`.
-3. It adds the finalizer `plugins.camunda.io/cleanup`. A request whose parameters never passed the schema has no finalizer, so its delete does not wait.
-4. It calls `Reconcile`.
-5. It renders the grant templates of the registration, and applies the objects and the Grants.
-6. It deletes each Grant of the request that it no longer renders.
-7. It writes the status of the request, once.
+3. It checks that each input that the registration marks `required` has a value in `spec.inputs`. An empty string is no value. Without one, `OutputsReady` and `Ready` are `False` with reason `MissingInput`, and the message names each such input. pluginkit does not call `Reconcile`, and adds no finalizer to a request that it never served. A served request keeps its finalizer and its outputs, and its delete runs as usual.
+4. It adds the finalizer `plugins.camunda.io/cleanup`. A request whose parameters never passed the schema has no finalizer, so its delete does not wait.
+5. It calls `Reconcile`.
+6. It renders the grant templates of the registration, and applies the objects and the Grants.
+7. It deletes each Grant of the request that it no longer renders.
+8. It writes the status of the request, once.
 
 ### Resync
 
 A change outside the cluster starts no reconcile. Someone can delete a bucket policy in the console of the cloud, and the request still reports `Ready=True`. When `Config.Resync` is not zero, pluginkit reconciles each served request again after that time, also when nothing in the cluster changed. Your `Reconcile` reads the resources outside the cluster, compares them with the desired state, and repairs each difference.
 
-After each reconcile, pluginkit adds a new random part of up to 10% to the time: with a `Resync` of one hour, the next reconcile comes after 60 to 66 minutes. Because of this, the requests of a fleet do not all call the cloud API at the same time. When `Result.RequeueAfter` is shorter than this time, `RequeueAfter` wins. A request whose parameters do not pass the schema, and a deleted request, get no resync. `Setup` returns an error for a negative `Resync`.
+After each reconcile, pluginkit adds a new random part of up to 10% to the time: with a `Resync` of one hour, the next reconcile comes after 60 to 66 minutes. Because of this, the requests of a fleet do not all call the cloud API at the same time. When `Result.RequeueAfter` is shorter than this time, `RequeueAfter` wins. A request whose parameters do not pass the schema, a request without a required input, and a deleted request get no resync. `Setup` returns an error for a negative `Resync`.
 
 Put each repair in `Result.Corrected`. When a step after a repair fails, return the `Corrected` list with the error: the retry finds the resource repaired and corrects nothing, so the repair is reported only now. With an error, pluginkit reads no other field of `Result`. For each reconcile with a `Corrected` list, pluginkit records one event on the request:
 
@@ -172,6 +173,7 @@ pluginkit uses the reasons of the api module, and adds these reasons of its own:
 | Reason | Condition | Meaning |
 | --- | --- | --- |
 | `InvalidParameters` | `OutputsReady`, `Ready` | The parameters do not pass the schema or its rules, or a template parameter does not render. The message names the field or the rule. |
+| `MissingInput` | `OutputsReady`, `Ready` | A required input of the registration has no value. The message names each such input. |
 | `ReconcileError` | `Ready` | `Reconcile` returned an error, or an output key that the registration does not declare. |
 | `GrantTemplateInvalid` | `Ready` | A grant template does not render for the request. |
 | `DeleteFailed` | `Ready` | `Delete` or `Orphan` returned an error. The finalizer stays. |
