@@ -337,7 +337,7 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 		return err
 	}
 
-	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, roleName)
+	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, roleName, "")
 	if err != nil {
 		return err
 	}

@@ -42,7 +42,7 @@ func roleSpec() awskit.RoleSpec {
 			`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole"}]}`,
 		),
 		PermissionsBoundary: boundary,
-		Tags:                awskit.RequestTags("team-a", "orders", "orders-identity"),
+		Tags:                awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-1"),
 	}
 }
 
@@ -85,7 +85,7 @@ func TestEnsureRoleUpdatesTheTrustBoundaryAndTags(t *testing.T) {
 	spec := roleSpec()
 	spec.TrustPolicy = []byte(`{"Version":"2012-10-17","Statement":[]}`)
 	spec.PermissionsBoundary = otherBoundary
-	spec.Tags = awskit.RequestTags("team-a", "orders", "orders-identity-2")
+	spec.Tags = awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity-2", "uid-1")
 
 	_, change, err := awskit.EnsureRole(context.Background(), f, spec)
 
@@ -100,7 +100,12 @@ func TestEnsureRoleUpdatesTheTrustBoundaryAndTags(t *testing.T) {
 func TestEnsureRoleKeepsATagThatTheSpecDoesNotName(t *testing.T) {
 	f := awsfake.NewIAM()
 	spec := roleSpec()
-	spec.Tags = map[string]string{"owner": "admin", awskit.TagClaim: "orders"}
+	spec.Tags = map[string]string{
+		"owner":              "admin",
+		awskit.TagNamespace:  "team-a",
+		awskit.TagRequest:    "orders-identity",
+		awskit.TagRequestUID: "uid-1",
+	}
 	_, _, err := awskit.EnsureRole(context.Background(), f, spec)
 	require.NoError(t, err)
 
@@ -135,6 +140,76 @@ func TestEnsureRoleReturnsAFailedCall(t *testing.T) {
 	assert.ErrorIs(t, err, boom)
 }
 
+func TestEnsureRoleRefusesARoleOfAnotherRequest(t *testing.T) {
+	f := awsfake.NewIAM()
+	other := roleSpec()
+	other.Tags = awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2")
+	_, _, err := awskit.EnsureRole(context.Background(), f, other)
+	require.NoError(t, err)
+	before := len(f.Calls())
+
+	_, _, err = awskit.EnsureRole(context.Background(), f, roleSpec())
+
+	var inUse awskit.RoleInUseError
+	require.ErrorAs(t, err, &inUse)
+	assert.Equal(t, roleSpec().Name, inUse.Name)
+	assert.Equal(t, "the request team-a/orders-identity with the UID uid-2", inUse.Owner)
+	assert.Equal(t, []string{"GetRole"}, f.Calls()[before:], "a refused role gets no change")
+}
+
+func TestEnsureRoleTakesARoleOfItsRequestWithoutAUID(t *testing.T) {
+	// A role that the plugin made before it wrote the UID tag.
+	f := awsfake.NewIAM()
+	legacy := roleSpec()
+	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
+	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
+	require.NoError(t, err)
+
+	_, change, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tags"}, change.Updated)
+	got, _ := f.Role(roleSpec().Name)
+	assert.Equal(t, "uid-1", got.Tags[awskit.TagRequestUID])
+}
+
+func TestEnsureRoleRefusesARoleWithoutAUIDOfAnotherRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tags  map[string]string
+		owner string
+	}{
+		{"another request", awskit.RequestTags("team-b", "orders", "orders-identity"), "the request team-b/orders-identity"},
+		{"no request", map[string]string{"owner": "admin"}, "no request"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := awsfake.NewIAM()
+			made := roleSpec()
+			made.Tags = tc.tags
+			_, _, err := awskit.EnsureRole(context.Background(), f, made)
+			require.NoError(t, err)
+
+			_, _, err = awskit.EnsureRole(context.Background(), f, roleSpec())
+
+			var inUse awskit.RoleInUseError
+			require.ErrorAs(t, err, &inUse)
+			assert.Equal(t, tc.owner, inUse.Owner)
+			got, _ := f.Role(roleSpec().Name)
+			assert.Equal(t, tc.tags, got.Tags, "a refused role keeps its tags")
+		})
+	}
+}
+
+func TestRoleInUseErrorNamesTheRoleAndItsOwner(t *testing.T) {
+	err := awskit.RoleInUseError{Name: "camunda-0123", Owner: "no request"}
+
+	assert.Equal(
+		t,
+		"The IAM role camunda-0123 belongs to no request. Delete the role, or change the role name prefix",
+		err.Error(),
+	)
+}
+
 func TestDeleteRoleDeletesEveryPage(t *testing.T) {
 	f := awsfake.NewIAM()
 	f.PageSize = 1
@@ -148,7 +223,7 @@ func TestDeleteRoleDeletesEveryPage(t *testing.T) {
 		f.AttachPolicy(roleSpec().Name, arn)
 	}
 
-	deleted, err := awskit.DeleteRole(context.Background(), f, roleSpec().Name)
+	deleted, err := awskit.DeleteRole(context.Background(), f, roleSpec().Name, "uid-1")
 
 	require.NoError(t, err)
 	assert.True(t, deleted)
@@ -156,10 +231,52 @@ func TestDeleteRoleDeletesEveryPage(t *testing.T) {
 }
 
 func TestDeleteRoleOfAMissingRoleReportsFalse(t *testing.T) {
-	deleted, err := awskit.DeleteRole(context.Background(), awsfake.NewIAM(), "gone")
+	deleted, err := awskit.DeleteRole(context.Background(), awsfake.NewIAM(), "gone", "uid-1")
 
 	require.NoError(t, err)
 	assert.False(t, deleted)
+}
+
+func TestDeleteRoleDeletesOnlyARoleOfTheUID(t *testing.T) {
+	f := awsfake.NewIAM()
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	require.NoError(t, err)
+
+	for _, uid := range []string{"uid-2", ""} {
+		deleted, err := awskit.DeleteRole(context.Background(), f, roleSpec().Name, uid)
+
+		var inUse awskit.RoleInUseError
+		require.ErrorAs(t, err, &inUse, uid)
+		assert.False(t, deleted, uid)
+	}
+	_, ok := f.Role(roleSpec().Name)
+	assert.True(t, ok, "the role of another UID stays")
+	assert.NotContains(t, f.Calls(), "DeleteRolePolicy")
+
+	deleted, err := awskit.DeleteRole(context.Background(), f, roleSpec().Name, "uid-1")
+	require.NoError(t, err)
+	assert.True(t, deleted)
+}
+
+func TestDeleteRoleRefusesARoleWithoutAUID(t *testing.T) {
+	f := awsfake.NewIAM()
+	made := roleSpec()
+	made.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
+	_, _, err := awskit.EnsureRole(context.Background(), f, made)
+	require.NoError(t, err)
+
+	deleted, err := awskit.DeleteRole(context.Background(), f, roleSpec().Name, "uid-1")
+
+	var inUse awskit.RoleInUseError
+	require.ErrorAs(t, err, &inUse)
+	assert.Equal(t, "the request team-a/orders-identity", inUse.Owner)
+	assert.False(t, deleted)
+}
+
+func TestReplacedRolesSkipsTheCurrentNameInAnyCase(t *testing.T) {
+	got := awskit.ReplacedRoles("team-b-0123", []string{"camunda-0123", "TEAM-B-0123", "Camunda-0123", "camunda-4567"})
+
+	assert.Equal(t, []string{"camunda-0123", "camunda-4567"}, got)
 }
 
 func TestInlinePoliciesReadsEveryPage(t *testing.T) {
