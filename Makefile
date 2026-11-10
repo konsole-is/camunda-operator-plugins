@@ -28,18 +28,21 @@ fmt: golangci-lint ## Format the code with the formatters of .golangci.yml.
 	"$(GOLANGCI_LINT)" fmt
 
 .PHONY: vet
-vet: ## Run go vet against the code.
+vet: ## Run go vet against the code, and against the journeys behind the e2e build tag.
 	go vet ./...
+	go vet -tags e2e ./test/e2e/
 
 .PHONY: tidy
 tidy: ## Run go mod tidy.
 	go mod tidy
 
 .PHONY: test
-test: fmt vet setup-envtest envtest-crds ## Run the unit tests and the envtest suites.
+test: fmt vet setup-envtest envtest-crds ## Run the unit tests, the envtest suites, and the helper tests of the journeys.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" \
 	ENVTEST_CRDS="$(ENVTEST_CRDS_DIR)" \
 		go test $$(go list ./... | grep -v /test/e2e) -coverprofile cover.out
+	@# An empty JOURNEY skips the journeys, so this runs no spec against the cluster of the kubeconfig.
+	JOURNEY= go test -tags e2e -count=1 ./test/e2e/
 
 .PHONY: test-api-ref
 test-api-ref: ## Check that a pseudo-version and a tag of the api module map to the operator ref of their CRD bases.
