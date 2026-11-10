@@ -79,7 +79,8 @@ var _ = Describe("the conformance suite", func() {
 			conformance.GrantReady,
 		))
 		for _, id := range []conformance.CheckID{conformance.DeleteDelete, conformance.DeleteOrphan} {
-			Expect(results).To(ContainElement(And(HaveField("ID", id), HaveField("Outcome", conformance.OutcomePassed))))
+			passed := And(HaveField("ID", id), HaveField("Outcome", conformance.OutcomePassed))
+			Expect(results).To(ContainElement(passed))
 		}
 	})
 })

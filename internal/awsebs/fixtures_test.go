@@ -217,9 +217,12 @@ func ebsRequest(namespace, key, params string, policy pluginsv1alpha1.DeletionPo
 			},
 		},
 		Spec: pluginsv1alpha1.PluginRequestSpec{
-			Section:        sectionName,
-			Registration:   registration,
-			ClaimRef:       pluginsv1alpha1.ClaimRef{Kind: pluginsv1alpha1.ClaimKindCamundaClusterClaim, Name: claimName},
+			Section:      sectionName,
+			Registration: registration,
+			ClaimRef: pluginsv1alpha1.ClaimRef{
+				Kind: pluginsv1alpha1.ClaimKindCamundaClusterClaim,
+				Name: claimName,
+			},
 			Target:         pluginsv1alpha1.TargetRef{Kind: "CamundaCluster", Name: claimName},
 			DeletionPolicy: policy,
 		},
