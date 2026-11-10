@@ -128,14 +128,20 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{}, err
 	}
 
+	// The Grants reach the role before an association moves to it, so a pod
+	// never holds the role without its policies.
+	counts, conflicted, err := p.syncGrants(ctx, req, role)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+
 	resources := []pluginsv1alpha1.ResourceRef{roleResource(role, request)}
 	if p.mode == awskit.ModePodIdentity {
 		associations, err := p.ensureAssociations(ctx, req, sas, role)
 		if err != nil {
-			// The ServiceAccounts that a role trusts keep their sessions, so
-			// a Grant that is gone loses its policy also when an association
-			// fails.
-			return pluginkit.Result{}, errors.Join(err, p.syncGrantsOf(ctx, req, role, current))
+			// The ServiceAccounts that the old role trusts keep their
+			// sessions, so a Grant that is gone loses its policy there too.
+			return pluginkit.Result{}, errors.Join(err, p.syncOldRoleGrants(ctx, req, role, current))
 		}
 
 		for _, a := range associations {
@@ -148,11 +154,6 @@ func (p *Plugin) Reconcile(
 				OnOrphan: pluginsv1alpha1.OnOrphanDeleted,
 			})
 		}
-	}
-
-	counts, conflicted, err := p.syncGrants(ctx, req, role)
-	if err != nil {
-		return pluginkit.Result{}, err
 	}
 
 	if inUse {
@@ -206,23 +207,21 @@ func roleNameInUse(err error, status []pluginsv1alpha1.ResourceRef) (pluginkit.R
 	}, true
 }
 
-// syncGrantsOf keeps the Grants of role in sync, and those of the old role
-// that the outputs of req name when it is another role, after a step of the
-// pass failed.
-func (p *Plugin) syncGrantsOf(
+// syncOldRoleGrants keeps the Grants of the old role that the outputs of req
+// name in sync, when it is not role.
+func (p *Plugin) syncOldRoleGrants(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	role awskit.Role,
 	current string,
 ) error {
-	_, _, err := p.syncGrants(ctx, req, role)
-
-	old, oldErr := p.activeOldRole(ctx, req, current)
-	if oldErr != nil || old.ARN == "" || old.Name == role.Name {
-		return errors.Join(err, oldErr)
+	old, err := p.activeOldRole(ctx, req, current)
+	if err != nil || old.ARN == "" || old.Name == role.Name {
+		return err
 	}
-	_, _, oldErr = p.syncGrants(ctx, req, old)
-	return errors.Join(err, oldErr)
+
+	_, _, err = p.syncGrants(ctx, req, old)
+	return err
 }
 
 func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) pluginsv1alpha1.ResourceRef {

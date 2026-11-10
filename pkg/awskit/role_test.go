@@ -21,6 +21,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -273,27 +274,27 @@ func TestDeleteRoleRefusesARoleWithoutAUID(t *testing.T) {
 	assert.False(t, deleted)
 }
 
-func TestOwnedRoleReturnsARoleOfTheUID(t *testing.T) {
+func TestClaimRoleReturnsARoleOfTheUID(t *testing.T) {
 	f := awsfake.NewIAM()
 	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
 	require.NoError(t, err)
 	before := len(f.Calls())
 
-	role, err := awskit.OwnedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+	role, err := awskit.ClaimRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
 
 	require.NoError(t, err)
 	assert.Equal(t, "arn:aws:iam::111122223333:role/"+roleSpec().Name, role.ARN)
 	assert.Equal(t, []string{"GetRole"}, f.Calls()[before:])
 }
 
-func TestOwnedRoleTakesARoleOfItsRequestWithoutAUID(t *testing.T) {
+func TestClaimRoleTakesARoleOfItsRequestWithoutAUID(t *testing.T) {
 	f := awsfake.NewIAM()
 	legacy := roleSpec()
 	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
 	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
 	require.NoError(t, err)
 
-	role, err := awskit.OwnedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+	role, err := awskit.ClaimRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
 
 	require.NoError(t, err)
 	assert.Equal(t, roleSpec().Name, role.Name)
@@ -301,7 +302,7 @@ func TestOwnedRoleTakesARoleOfItsRequestWithoutAUID(t *testing.T) {
 	assert.Equal(t, "uid-1", got.Tags[awskit.TagRequestUID])
 }
 
-func TestOwnedRoleRefusesARoleOfAnotherRequest(t *testing.T) {
+func TestClaimRoleRefusesARoleOfAnotherRequest(t *testing.T) {
 	for name, tags := range map[string]map[string]string{
 		"another UID":                 awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2"),
 		"no UID, and another request": awskit.RequestTags("team-b", "orders", "orders-identity"),
@@ -313,7 +314,7 @@ func TestOwnedRoleRefusesARoleOfAnotherRequest(t *testing.T) {
 			_, _, err := awskit.EnsureRole(context.Background(), f, made)
 			require.NoError(t, err)
 
-			_, err = awskit.OwnedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+			_, err = awskit.ClaimRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
 
 			var inUse awskit.RoleInUseError
 			require.ErrorAs(t, err, &inUse)
@@ -323,11 +324,101 @@ func TestOwnedRoleRefusesARoleOfAnotherRequest(t *testing.T) {
 	}
 }
 
-func TestOwnedRoleOfAMissingRoleIsZero(t *testing.T) {
-	role, err := awskit.OwnedRole(context.Background(), awsfake.NewIAM(), "gone", roleSpec().Tags)
+func TestClaimRoleOfAMissingRoleIsZero(t *testing.T) {
+	role, err := awskit.ClaimRole(context.Background(), awsfake.NewIAM(), "gone", roleSpec().Tags)
 
 	require.NoError(t, err)
 	assert.Equal(t, awskit.Role{}, role)
+}
+
+// staleIAM answers the GetRole after a TagRole once with the role as it was
+// before the TagRole, as IAM can while a change propagates.
+type staleIAM struct {
+	*awsfake.IAM
+	stale *iam.GetRoleOutput
+}
+
+func (s *staleIAM) TagRole(
+	ctx context.Context,
+	in *iam.TagRoleInput,
+	opts ...func(*iam.Options),
+) (*iam.TagRoleOutput, error) {
+	before, err := s.IAM.GetRole(ctx, &iam.GetRoleInput{RoleName: in.RoleName})
+	if err == nil {
+		s.stale = before
+	}
+	return s.IAM.TagRole(ctx, in, opts...)
+}
+
+func (s *staleIAM) GetRole(
+	ctx context.Context,
+	in *iam.GetRoleInput,
+	opts ...func(*iam.Options),
+) (*iam.GetRoleOutput, error) {
+	if out := s.stale; out != nil {
+		s.stale = nil
+		return out, nil
+	}
+	return s.IAM.GetRole(ctx, in, opts...)
+}
+
+func TestDeleteClaimedRoleDeletesARoleOfItsRequestWithoutAUID(t *testing.T) {
+	f := awsfake.NewIAM()
+	legacy := roleSpec()
+	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
+	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
+	require.NoError(t, err)
+
+	deleted, err := awskit.DeleteClaimedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	assert.Empty(t, f.Roles())
+}
+
+func TestDeleteClaimedRoleReportsAUIDTagThatIAMDoesNotShowYet(t *testing.T) {
+	f := &staleIAM{IAM: awsfake.NewIAM()}
+	legacy := roleSpec()
+	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
+	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
+	require.NoError(t, err)
+
+	deleted, err := awskit.DeleteClaimedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+
+	assert.ErrorIs(t, err, awskit.ErrTagNotVisible)
+	assert.False(t, deleted)
+	got, ok := f.Role(roleSpec().Name)
+	require.True(t, ok, "a later call deletes the role")
+	assert.Equal(t, "uid-1", got.Tags[awskit.TagRequestUID])
+}
+
+func TestDeleteClaimedRoleKeepsARoleOfAnotherRequest(t *testing.T) {
+	f := awsfake.NewIAM()
+	other := roleSpec()
+	other.Tags = awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2")
+	_, _, err := awskit.EnsureRole(context.Background(), f, other)
+	require.NoError(t, err)
+
+	deleted, err := awskit.DeleteClaimedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+
+	var inUse awskit.RoleInUseError
+	require.ErrorAs(t, err, &inUse)
+	assert.False(t, deleted)
+	assert.Len(t, f.Roles(), 1)
+}
+
+func TestDeleteRoleNamesTheInstanceProfileThatUsesTheRole(t *testing.T) {
+	f := awsfake.NewIAM()
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	require.NoError(t, err)
+	f.AddRoleToInstanceProfile(roleSpec().Name, "nodes")
+
+	deleted, err := awskit.DeleteRole(context.Background(), f, roleSpec().Name, "uid-1")
+
+	require.Error(t, err)
+	assert.False(t, deleted)
+	assert.Contains(t, err.Error(), roleSpec().Name)
+	assert.Contains(t, err.Error(), "an instance profile uses it")
 }
 
 func TestReplacedRolesSkipsTheCurrentNameInAnyCase(t *testing.T) {

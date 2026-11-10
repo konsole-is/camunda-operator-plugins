@@ -52,6 +52,8 @@ type IAM struct {
 	policies map[string]bool
 	fail     failures
 	byRole   map[string][]string
+	// profiles maps a role name to the instance profiles that use it.
+	profiles map[string][]string
 }
 
 // Role is a role of the fake, with its documents decoded.
@@ -85,6 +87,17 @@ func (f *IAM) AttachPolicy(name, arn string) {
 	if r, ok := f.roles[name]; ok {
 		r.Attached = append(r.Attached, arn)
 	}
+}
+
+// AddRoleToInstanceProfile puts the role name into the instance profile
+// profile, as an admin does by hand. DeleteRole then refuses the role.
+func (f *IAM) AddRoleToInstanceProfile(name, profile string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.profiles == nil {
+		f.profiles = map[string][]string{}
+	}
+	f.profiles[name] = append(f.profiles[name], profile)
 }
 
 // Role returns a copy of the role name.
@@ -298,7 +311,7 @@ func (f *IAM) TagRole(_ context.Context, in *iam.TagRoleInput, _ ...func(*iam.Op
 }
 
 // DeleteRole deletes a role. It refuses a role that has an inline or an
-// attached policy, with DeleteConflict.
+// attached policy, or that an instance profile uses, with DeleteConflict.
 func (f *IAM) DeleteRole(
 	_ context.Context,
 	in *iam.DeleteRoleInput,
@@ -317,6 +330,9 @@ func (f *IAM) DeleteRole(
 
 	if len(r.InlinePolicies) > 0 || len(r.Attached) > 0 {
 		return nil, apiError("DeleteConflict", "Cannot delete entity, must delete policies first.")
+	}
+	if len(f.profiles[r.Name]) > 0 {
+		return nil, apiError("DeleteConflict", "Cannot delete entity, must remove roles from instance profile first.")
 	}
 
 	delete(f.roles, r.Name)

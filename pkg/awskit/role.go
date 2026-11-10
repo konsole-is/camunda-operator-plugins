@@ -18,6 +18,7 @@ package awskit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -212,12 +213,12 @@ func updateRole(
 	return updated, nil
 }
 
-// OwnedRole returns the Role of name when it belongs to the request of tags,
+// ClaimRole returns the Role of name when it belongs to the request of tags,
 // and a zero Role when the role does not exist. A role belongs to the request
 // when its TagRequestUID value is the one in tags, or when EnsureRole would
-// take it over. In the second case OwnedRole writes tags on the role. It
+// take it over. In the second case ClaimRole writes tags on the role. It
 // returns a RoleInUseError for any other role.
-func OwnedRole(ctx context.Context, c IAM, name string, tags map[string]string) (Role, error) {
+func ClaimRole(ctx context.Context, c IAM, name string, tags map[string]string) (Role, error) {
 	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
 	if IsNotFound(err) {
 		return Role{}, nil
@@ -237,6 +238,29 @@ func OwnedRole(ctx context.Context, c IAM, name string, tags map[string]string) 
 		}
 	}
 	return Role{Name: name, ARN: aws.ToString(out.Role.Arn)}, nil
+}
+
+// ErrTagNotVisible means that a read of IAM did not show the TagRequestUID
+// tag that ClaimRole wrote just before. IAM is eventually consistent, so a
+// later call deletes the role.
+var ErrTagNotVisible = errors.New("IAM does not show the UID tag of the request on the role yet")
+
+// DeleteClaimedRole claims the role name for the request of tags with
+// ClaimRole, then deletes it with DeleteRole. It reports false, with no
+// error, when the role does not exist, a RoleInUseError for a role of another
+// request, and ErrTagNotVisible when IAM does not show the UID tag that it
+// wrote yet.
+func DeleteClaimedRole(ctx context.Context, c IAM, name string, tags map[string]string) (bool, error) {
+	if _, err := ClaimRole(ctx, c, name, tags); err != nil {
+		return false, err
+	}
+
+	deleted, err := DeleteRole(ctx, c, name, tags[TagRequestUID])
+	if errors.As(err, new(RoleInUseError)) {
+		// ClaimRole found the UID of the request on the role, or wrote it.
+		return false, fmt.Errorf("deleting the IAM role %s: %w", name, ErrTagNotVisible)
+	}
+	return deleted, err
 }
 
 // DeleteRole deletes the role name with its inline policies and its managed
@@ -288,6 +312,15 @@ func DeleteRole(ctx context.Context, c IAM, name, uid string) (bool, error) {
 	_, err = c.DeleteRole(ctx, &iam.DeleteRoleInput{RoleName: aws.String(name)})
 	if IsNotFound(err) {
 		return false, nil
+	}
+	// The plugins never put a role into an instance profile, so they leave
+	// removing it to the admin.
+	if hasCode(err, "DeleteConflict") && strings.Contains(strings.ToLower(Message(err)), "instance profile") {
+		return false, fmt.Errorf(
+			"deleting the IAM role %s: an instance profile uses it. Remove the role from the instance profile: %w",
+			name,
+			err,
+		)
 	}
 	if err != nil {
 		return false, fmt.Errorf("deleting the IAM role %s: %w", name, err)

@@ -17,9 +17,12 @@ limitations under the License.
 package awsidentity_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -40,6 +43,7 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/internal/awsidentity"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 const timeout = 30 * time.Second
@@ -717,8 +721,8 @@ func (s renameSetup) update(change func(*pluginsv1alpha1.PluginRequest)) {
 
 // startNewHub starts the hub with the prefix team-b on the fakes of s, and
 // stops it at the end of the spec.
-func (s renameSetup) startNewHub() *hub {
-	h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks)
+func (s renameSetup) startNewHub(edits ...func(*awsidentity.Options)) *hub {
+	h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks, edits...)
 	DeferCleanup(stop)
 	return h
 }
@@ -957,4 +961,82 @@ var _ = Describe("a change of the role name prefix", Serial, func() {
 			g.Expect(old.InlinePolicies).To(BeEmpty())
 		}, timeout).Should(Succeed())
 	})
+
+	It("says that an instance profile uses a role that it cannot delete", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		s.iam.AddRoleToInstanceProfile(s.oldRole.Name, "nodes")
+		Expect(k8s.Delete(ctx, s.request)).To(Succeed())
+		DeferCleanup(func() {
+			// The fake keeps the role in the instance profile, so the spec
+			// releases the request itself.
+			Eventually(func(g Gomega) {
+				got := read(g, s.request.DeepCopy())
+				got.Finalizers = nil
+				g.Expect(k8s.Update(ctx, got)).To(Succeed())
+			}, timeout).Should(Succeed())
+		})
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			c := conditionOf(got.Status.Conditions, v1.ConditionReady)
+			g.Expect(c.Reason).To(Equal(pluginkit.ReasonDeleteFailed))
+			g.Expect(c.Message).To(ContainSubstring(s.oldRole.Name))
+			g.Expect(c.Message).To(ContainSubstring("an instance profile uses it"))
+		}, timeout).Should(Succeed())
+	})
+
+	It("puts the Grants on the new role before it moves an association to it", func() {
+		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant := grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		moves := &policiesAtMove{EKS: s.eks, iam: s.iam}
+
+		s.startNewHub(func(o *awsidentity.Options) { o.Clients.EKS = moves })
+
+		Eventually(func(g Gomega) {
+			_, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeFalse(), "the old role is gone")
+		}, timeout).Should(Succeed())
+		Expect(moves.seen()).NotTo(BeEmpty())
+		for _, policies := range moves.seen() {
+			Expect(
+				policies,
+			).To(HaveKey("grant-orders-backup-read"), "the role had its Grants when the association moved")
+		}
+	})
 })
+
+// policiesAtMove records the inline policies of the target role of each
+// UpdatePodIdentityAssociation call.
+type policiesAtMove struct {
+	*awsfake.EKS
+	iam *awsfake.IAM
+
+	mu       sync.Mutex
+	policies []map[string]string
+}
+
+func (m *policiesAtMove) UpdatePodIdentityAssociation(
+	ctx context.Context,
+	in *eks.UpdatePodIdentityAssociationInput,
+	opts ...func(*eks.Options),
+) (*eks.UpdatePodIdentityAssociationOutput, error) {
+	arn := aws.ToString(in.RoleArn)
+	role, _ := m.iam.Role(arn[strings.LastIndex(arn, "/")+1:])
+	m.mu.Lock()
+	m.policies = append(m.policies, role.InlinePolicies)
+	m.mu.Unlock()
+	return m.EKS.UpdatePodIdentityAssociation(ctx, in, opts...)
+}
+
+func (m *policiesAtMove) seen() []map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.policies)
+}

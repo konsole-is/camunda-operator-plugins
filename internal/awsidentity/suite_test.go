@@ -113,9 +113,15 @@ func newHub(mode awskit.Mode, registration string) *hub {
 }
 
 // newHubWith returns a manager of mode that serves the registration name
-// with the role name prefix, on the fakes iam and eks. It adds the boundary
-// to iam.
-func newHubWith(mode awskit.Mode, registration, prefix string, iam *awsfake.IAM, eks *awsfake.EKS) *hub {
+// with the role name prefix, on the fakes iam and eks, and with the options
+// that each of edits changes. It adds the boundary to iam.
+func newHubWith(
+	mode awskit.Mode,
+	registration, prefix string,
+	iam *awsfake.IAM,
+	eks *awsfake.EKS,
+	edits ...func(*awsidentity.Options),
+) *hub {
 	h := &hub{
 		registration:   registration,
 		prefix:         prefix,
@@ -129,8 +135,7 @@ func newHubWith(mode awskit.Mode, registration, prefix string, iam *awsfake.IAM,
 		h.scope = eksCluster
 	}
 
-	var err error
-	h.mgr, err = awsidentity.NewManager(restConfig, awsidentity.Options{
+	opts := awsidentity.Options{
 		// Controller names are unique in the process.
 		Name:                   "aws-identity-" + registration + "-" + prefix,
 		HealthProbeAddress:     "0",
@@ -145,7 +150,13 @@ func newHubWith(mode awskit.Mode, registration, prefix string, iam *awsfake.IAM,
 		OIDCProviderARN:        providerARN,
 		EKSClusterName:         eksCluster,
 		Clients:                awskit.Clients{IAM: h.iam, EKS: h.eks, STS: awsfake.NewSTS()},
-	})
+	}
+	for _, edit := range edits {
+		edit(&opts)
+	}
+
+	var err error
+	h.mgr, err = awsidentity.NewManager(restConfig, opts)
 	Expect(err).NotTo(HaveOccurred())
 
 	return h
@@ -153,8 +164,14 @@ func newHubWith(mode awskit.Mode, registration, prefix string, iam *awsfake.IAM,
 
 // startHub starts a hub that a spec stops again, as an admin who changes a
 // chart value restarts the controller. stop returns after the manager ended.
-func startHub(mode awskit.Mode, registration, prefix string, iam *awsfake.IAM, eks *awsfake.EKS) (*hub, func()) {
-	h := newHubWith(mode, registration, prefix, iam, eks)
+func startHub(
+	mode awskit.Mode,
+	registration, prefix string,
+	iam *awsfake.IAM,
+	eks *awsfake.EKS,
+	edits ...func(*awsidentity.Options),
+) (*hub, func()) {
+	h := newHubWith(mode, registration, prefix, iam, eks, edits...)
 	// The hubs of one registration share its ServiceAccount and its RBAC.
 	Expect(client.IgnoreAlreadyExists(installRBAC(ctx, k8s, h.serviceAccount, registration))).To(Succeed())
 
