@@ -35,9 +35,15 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
-// ReasonMissingServiceAccount means that a request names no ServiceAccount
-// in spec.target, so its role would trust nobody.
-const ReasonMissingServiceAccount = "MissingServiceAccount"
+// The reasons of OutputsReady and Ready of a request that waits.
+const (
+	// ReasonMissingServiceAccount means that a request names no
+	// ServiceAccount in spec.target, so its role would trust nobody.
+	ReasonMissingServiceAccount = "MissingServiceAccount"
+	// ReasonRoleNameInUse means that the IAM role of the name of a request
+	// belongs to another request, or to none. The plugin does not change it.
+	ReasonRoleNameInUse = "RoleNameInUse"
+)
 
 // The events that the hub records on a request.
 const (
@@ -74,6 +80,8 @@ type Plugin struct {
 	mode       awskit.Mode
 	provider   awskit.OIDCProvider
 	boundary   string
+	prefix     string
+	extraTags  awskit.ExtraTags
 	ceiling    Ceiling
 	eksCluster string
 	clients    awskit.Clients
@@ -87,9 +95,10 @@ type Plugin struct {
 // Reconcile keeps the role of the request, its trust, and with Pod Identity
 // its associations, then puts the allowed Grants of the cluster on the role
 // and writes their conditions. It is Pending with the reason
-// MissingServiceAccount when spec.target names no ServiceAccount. A failed
-// AWS call is an error, except a policy document that IAM refuses, which
-// sets Applied=False on its Grant.
+// MissingServiceAccount when spec.target names no ServiceAccount, and with
+// the reason RoleNameInUse when the role of its name belongs to another
+// request. A failed AWS call is an error, except a policy document that IAM
+// refuses, which sets Applied=False on its Grant.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -101,6 +110,9 @@ func (p *Plugin) Reconcile(
 	}
 
 	role, err := p.ensureRole(ctx, req, sas)
+	if res, ok := roleNameInUse(err); ok {
+		return res, nil
+	}
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
@@ -151,6 +163,17 @@ func (p *Plugin) Reconcile(
 	return res, nil
 }
 
+// roleNameInUse returns the Pending result of a request whose role belongs
+// to another request, when err is an awskit.RoleInUseError.
+func roleNameInUse(err error) (pluginkit.Result, bool) {
+	var inUse awskit.RoleInUseError
+	if !errors.As(err, &inUse) {
+		return pluginkit.Result{}, false
+	}
+
+	return pluginkit.Result{Pending: &pluginkit.Waiting{Reason: ReasonRoleNameInUse, Message: inUse.Error()}}, true
+}
+
 func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) pluginsv1alpha1.ResourceRef {
 	return pluginsv1alpha1.ResourceRef{
 		Kind:     kindIAMRole,
@@ -184,6 +207,9 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 	}
 
 	role, err := p.ensureRole(ctx, req, nil)
+	if inUse, ok := roleNameInUse(err); ok {
+		return inUse, nil
+	}
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
@@ -238,7 +264,7 @@ func (p *Plugin) ensureRole(
 		Description:         "Camunda cluster " + request.Namespace + "/" + request.Spec.ClaimRef.Name,
 		TrustPolicy:         trust,
 		PermissionsBoundary: p.boundary,
-		Tags:                awskit.RequestTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name),
+		Tags:                p.roleTags(request),
 	})
 	if err != nil {
 		return awskit.Role{}, err
@@ -274,7 +300,18 @@ func (p *Plugin) roleName(request *pluginsv1alpha1.PluginRequest) string {
 	if p.mode == awskit.ModePodIdentity {
 		scope = p.eksCluster
 	}
-	return awskit.RoleName(rolePrefix, scope, request.Namespace, request.Spec.ClaimRef.Name)
+	return awskit.RoleName(p.prefix, scope, request.Namespace, request.Spec.ClaimRef.Name)
+}
+
+// tags returns the tags of each AWS object of request.
+func (p *Plugin) tags(request *pluginsv1alpha1.PluginRequest) map[string]string {
+	return p.extraTags.RequestTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name)
+}
+
+// roleTags returns the tags of the role of request, which bind it to the UID
+// of request.
+func (p *Plugin) roleTags(request *pluginsv1alpha1.PluginRequest) map[string]string {
+	return p.extraTags.OwnerTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name, string(request.UID))
 }
 
 // ensureAssociations keeps one Pod Identity association of role for each of
@@ -293,7 +330,7 @@ func (p *Plugin) ensureAssociations(
 		request.Namespace,
 		sas,
 		role.ARN,
-		awskit.RequestTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name),
+		p.tags(request),
 	)
 
 	for _, e := range []struct {
@@ -337,7 +374,7 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 		return err
 	}
 
-	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, roleName, "")
+	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, roleName, string(req.Object.UID))
 	if err != nil {
 		return err
 	}
@@ -392,7 +429,7 @@ func (p *Plugin) deleteAssociations(
 		p.eksCluster,
 		request.Namespace,
 		arn,
-		awskit.RequestTags(request.Namespace, request.Spec.ClaimRef.Name, request.Name),
+		p.tags(request),
 	)
 	for _, sa := range deleted {
 		req.Event(

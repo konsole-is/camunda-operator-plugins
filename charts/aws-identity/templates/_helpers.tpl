@@ -28,6 +28,21 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- end -}}
 
 {{/*
+aws-identity.extraTags is the value of the flag -extra-tags: the extraTags
+of the values as key=value items, sorted by key, joined by ",".
+*/}}
+{{- define "aws-identity.extraTags" -}}
+{{- $items := list }}
+{{- range $key, $value := .Values.extraTags }}
+{{- if contains "=" $key }}
+{{- fail (printf "extraTags: the key %q has a \"=\", which the flag -extra-tags cannot carry" $key) }}
+{{- end }}
+{{- $items = append $items (printf "%s=%v" $key $value) }}
+{{- end }}
+{{- join "," $items -}}
+{{- end -}}
+
+{{/*
 aws-identity.registrations is the list of the registrations of the values,
 each merged over the defaults of the mode. It fails on an unknown mode, and
 on a registration with the default name of the other mode.

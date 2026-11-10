@@ -42,6 +42,7 @@ import (
 // hub is one manager of the suite, with its AWS fakes.
 type hub struct {
 	registration string
+	prefix       string
 	// scope is the EKS cluster identity that role names hash.
 	scope          string
 	serviceAccount pluginsv1alpha1.ServiceAccountRef
@@ -102,7 +103,7 @@ var _ = AfterSuite(func() {
 
 // roleName is the name of the role of the claim orders in namespace.
 func (h *hub) roleName(namespace string) string {
-	return awskit.RoleName("camunda", h.scope, namespace, "orders")
+	return awskit.RoleName(h.prefix, h.scope, namespace, "orders")
 }
 
 // newHub returns a manager of mode that serves the registration name, with
@@ -110,6 +111,7 @@ func (h *hub) roleName(namespace string) string {
 func newHub(mode awskit.Mode, registration string) *hub {
 	h := &hub{
 		registration:   registration,
+		prefix:         "camunda",
 		serviceAccount: pluginsv1alpha1.ServiceAccountRef{Namespace: pluginNamespace, Name: registration},
 		scope:          issuer,
 		iam:            awsfake.NewIAM(),
@@ -129,6 +131,8 @@ func newHub(mode awskit.Mode, registration string) *hub {
 		ServiceAccount:         h.serviceAccount,
 		Mode:                   mode,
 		PermissionsBoundaryARN: boundary,
+		RoleNamePrefix:         h.prefix,
+		ExtraTags:              awskit.ExtraTags{"cost-center": "camunda"},
 		AllowedActions:         []string{"s3:*"},
 		OIDCProviderARN:        providerARN,
 		EKSClusterName:         eksCluster,

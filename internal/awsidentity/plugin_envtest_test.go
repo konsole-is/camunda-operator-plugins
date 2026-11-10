@@ -35,6 +35,7 @@ import (
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/awsidentity"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
 )
@@ -172,9 +173,11 @@ var _ = Describe("the AWS identity hub", func() {
 			role := roleOf(g, irsa, ns)
 			g.Expect(role.PermissionsBoundary).To(Equal(boundary))
 			g.Expect(role.Tags).To(Equal(map[string]string{
-				awskit.TagNamespace: ns,
-				awskit.TagClaim:     "orders",
-				awskit.TagRequest:   request.Name,
+				awskit.TagNamespace:  ns,
+				awskit.TagClaim:      "orders",
+				awskit.TagRequest:    request.Name,
+				awskit.TagRequestUID: string(request.UID),
+				"cost-center":        "camunda",
 			}))
 
 			got := read(g, request.DeepCopy())
@@ -188,6 +191,34 @@ var _ = Describe("the AWS identity hub", func() {
 			g.Expect(got.Status.Links).To(HaveLen(1))
 			g.Expect(got.Status.Links[0].URL).To(HaveSuffix("/roles/details/" + role.Name))
 		}, timeout).Should(Succeed())
+	})
+
+	It("refuses a role of its name that another request owns", func() {
+		ns := newNamespace()
+		name := irsa.roleName(ns)
+		owner := awskit.ExtraTags(nil).OwnerTags(ns, "orders", "orders-identity", "uid-of-an-orphaned-request")
+		_, _, err := awskit.EnsureRole(ctx, irsa.iam, awskit.RoleSpec{
+			Name:        name,
+			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
+			Tags:        owner,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		before := len(irsa.iam.RoleCalls(name))
+
+		request := hubRequest(irsa.registration, ns)
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			got := read(g, request.DeepCopy())
+			for _, conditionType := range []string{pluginsv1alpha1.ConditionOutputsReady, v1.ConditionReady} {
+				c := conditionOf(got.Status.Conditions, conditionType)
+				g.Expect(c.Status).To(Equal(metav1.ConditionFalse), conditionType)
+				g.Expect(c.Reason).To(Equal(awsidentity.ReasonRoleNameInUse), conditionType)
+				g.Expect(c.Message).To(ContainSubstring("uid-of-an-orphaned-request"), conditionType)
+			}
+		}, timeout).Should(Succeed())
+		Expect(irsa.iam.RoleCalls(name)[before:]).To(HaveEach("GetRole"))
+		Expect(roleOf(Default, irsa, ns).Tags).To(Equal(owner))
 	})
 
 	It("trusts the target ServiceAccount and each additional one, and no other", func() {
