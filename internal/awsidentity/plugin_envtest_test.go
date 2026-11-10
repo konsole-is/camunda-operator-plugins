@@ -31,6 +31,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
@@ -663,5 +664,147 @@ var _ = Describe("the AWS identity hub", func() {
 			_, ok := podIdentity.iam.Role(podIdentity.roleName(ns))
 			g.Expect(ok).To(BeFalse())
 		}, timeout).Should(Succeed())
+	})
+})
+
+// renameSetup is a request that was Ready on a hub with the prefix camunda,
+// and that hub stopped, before a hub with another prefix takes over its
+// registration and its fakes.
+type renameSetup struct {
+	mode         awskit.Mode
+	registration string
+	namespace    string
+	iam          *awsfake.IAM
+	eks          *awsfake.EKS
+	request      *pluginsv1alpha1.PluginRequest
+	// oldRole is the role of the request on the stopped hub.
+	oldRole awsfake.Role
+}
+
+func newRenameSetup(mode awskit.Mode, registrationPrefix string) renameSetup {
+	ns := newNamespace()
+	s := renameSetup{
+		mode:         mode,
+		registration: registrationPrefix + ns,
+		namespace:    ns,
+		iam:          awsfake.NewIAM(),
+		eks:          awsfake.NewEKS(),
+	}
+
+	old, stop := startHub(mode, s.registration, "camunda", s.iam, s.eks)
+	s.request = hubRequest(s.registration, ns)
+	readyRequest(s.request)
+	stop()
+
+	s.oldRole = roleOf(Default, old, ns)
+	return s
+}
+
+// startNewHub starts the hub with the prefix team-b on the fakes of s, and
+// stops it at the end of the spec.
+func (s renameSetup) startNewHub() *hub {
+	h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks)
+	DeferCleanup(stop)
+	return h
+}
+
+// putRole puts a role of name into the fakes of s, owned by the request
+// UID uid.
+func (s renameSetup) putRole(name, uid string) {
+	_, _, err := awskit.EnsureRole(ctx, s.iam, awskit.RoleSpec{
+		Name:        name,
+		TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
+		Tags:        awskit.ExtraTags(nil).OwnerTags(s.namespace, "orders", s.request.Name, uid),
+	})
+	Expect(err).NotTo(HaveOccurred())
+}
+
+var _ = Describe("a change of the role name prefix", Serial, func() {
+	DescribeTable("deletes the old role after the outputs name the new one",
+		func(mode awskit.Mode, registrationPrefix string) {
+			s := newRenameSetup(mode, registrationPrefix)
+			h := s.startNewHub()
+
+			Eventually(func(g Gomega) {
+				_, ok := s.iam.Role(s.oldRole.Name)
+				g.Expect(ok).To(BeFalse(), "the old role is gone")
+				role := roleOf(g, h, s.namespace)
+				got := read(g, s.request.DeepCopy())
+				g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(got.Status.Outputs).To(HaveKeyWithValue("principal", role.ARN))
+				g.Expect(got.Status.Resources).NotTo(ContainElement(HaveField("Name", s.oldRole.Name)))
+				g.Expect(eventNotes(g, s.namespace, "RoleDeleted")).To(ConsistOf(
+					And(ContainSubstring(s.oldRole.Name), ContainSubstring(role.Name)),
+				))
+			}, timeout).Should(Succeed())
+
+			if mode == awskit.ModePodIdentity {
+				role := roleOf(Default, h, s.namespace)
+				Expect(s.eks.Associations()).To(HaveEach(HaveField("RoleARN", role.ARN)))
+				Expect(s.eks.Calls()).To(ContainElement("UpdatePodIdentityAssociation"))
+			}
+		},
+		Entry("IRSA", awskit.ModeIRSA, "aws-irsa-"),
+		Entry("Pod Identity", awskit.ModePodIdentity, "aws-pod-identity-"),
+	)
+
+	It("deletes both roles when the request is deleted after a change of the prefix", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		newName := awskit.RoleName("team-b", issuer, s.namespace, "orders")
+		s.putRole(newName, string(s.request.UID))
+		// The finalizer holds the request until a hub runs Delete.
+		Expect(k8s.Delete(ctx, s.request)).To(Succeed())
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			err := k8s.Get(ctx, client.ObjectKeyFromObject(s.request), s.request.DeepCopy())
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the request is gone")
+			g.Expect(s.iam.Roles()).To(BeEmpty())
+			g.Expect(eventCount(g, s.namespace, "RoleDeleted")).To(Equal(2))
+		}, timeout).Should(Succeed())
+	})
+
+	It("keeps an old role whose UID tag names another request", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		_, err := s.iam.TagRole(ctx, &iam.TagRoleInput{
+			RoleName: aws.String(s.oldRole.Name),
+			Tags:     []iamtypes.Tag{{Key: aws.String(awskit.TagRequestUID), Value: aws.String("another-uid")}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		h := s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			role := roleOf(g, h, s.namespace)
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(got.Status.Outputs).To(HaveKeyWithValue("principal", role.ARN))
+			g.Expect(got.Status.Resources).NotTo(ContainElement(HaveField("Name", s.oldRole.Name)))
+			g.Expect(eventNotes(g, s.namespace, "RoleKept")).To(ConsistOf(
+				And(ContainSubstring(s.oldRole.Name), ContainSubstring("another-uid")),
+			))
+		}, timeout).Should(Succeed())
+		_, ok := s.iam.Role(s.oldRole.Name)
+		Expect(ok).To(BeTrue(), "the old role stays")
+		Expect(s.iam.RoleCalls(s.oldRole.Name)).NotTo(ContainElement("DeleteRole"))
+	})
+
+	It("keeps the old role while its new name is in use", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		s.putRole(awskit.RoleName("team-b", issuer, s.namespace, "orders"), "another-uid")
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			c := conditionOf(got.Status.Conditions, v1.ConditionReady)
+			g.Expect(c.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(c.Reason).To(Equal(awsidentity.ReasonRoleNameInUse))
+			g.Expect(got.Status.Resources).To(ContainElement(HaveField("Name", s.oldRole.Name)))
+			g.Expect(got.Status.Outputs).To(HaveKeyWithValue("principal", s.oldRole.ARN))
+		}, timeout).Should(Succeed())
+		_, ok := s.iam.Role(s.oldRole.Name)
+		Expect(ok).To(BeTrue(), "the old role stays")
 	})
 })

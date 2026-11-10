@@ -107,15 +107,22 @@ func (h *hub) roleName(namespace string) string {
 }
 
 // newHub returns a manager of mode that serves the registration name, with
-// fakes in which the boundary exists.
+// the prefix camunda and fakes in which the boundary exists.
 func newHub(mode awskit.Mode, registration string) *hub {
+	return newHubWith(mode, registration, "camunda", awsfake.NewIAM(), awsfake.NewEKS())
+}
+
+// newHubWith returns a manager of mode that serves the registration name
+// with the role name prefix, on the fakes iam and eks. It adds the boundary
+// to iam.
+func newHubWith(mode awskit.Mode, registration, prefix string, iam *awsfake.IAM, eks *awsfake.EKS) *hub {
 	h := &hub{
 		registration:   registration,
-		prefix:         "camunda",
+		prefix:         prefix,
 		serviceAccount: pluginsv1alpha1.ServiceAccountRef{Namespace: pluginNamespace, Name: registration},
 		scope:          issuer,
-		iam:            awsfake.NewIAM(),
-		eks:            awsfake.NewEKS(),
+		iam:            iam,
+		eks:            eks,
 	}
 	h.iam.AddPolicy(boundary)
 	if mode == awskit.ModePodIdentity {
@@ -124,14 +131,15 @@ func newHub(mode awskit.Mode, registration string) *hub {
 
 	var err error
 	h.mgr, err = awsidentity.NewManager(restConfig, awsidentity.Options{
-		Name:                   "aws-identity-" + string(mode),
+		// Controller names are unique in the process.
+		Name:                   "aws-identity-" + registration + "-" + prefix,
 		HealthProbeAddress:     "0",
 		MetricsAddress:         "0",
 		Registrations:          []pluginsv1alpha1.PluginRegistration{hubRegistration(registration)},
 		ServiceAccount:         h.serviceAccount,
 		Mode:                   mode,
 		PermissionsBoundaryARN: boundary,
-		RoleNamePrefix:         h.prefix,
+		RoleNamePrefix:         prefix,
 		ExtraTags:              awskit.ExtraTags{"cost-center": "camunda"},
 		AllowedActions:         []string{"s3:*"},
 		OIDCProviderARN:        providerARN,
@@ -141,4 +149,25 @@ func newHub(mode awskit.Mode, registration string) *hub {
 	Expect(err).NotTo(HaveOccurred())
 
 	return h
+}
+
+// startHub starts a hub that a spec stops again, as an admin who changes a
+// chart value restarts the controller. stop returns after the manager ended.
+func startHub(mode awskit.Mode, registration, prefix string, iam *awsfake.IAM, eks *awsfake.EKS) (*hub, func()) {
+	h := newHubWith(mode, registration, prefix, iam, eks)
+	// The hubs of one registration share its ServiceAccount and its RBAC.
+	Expect(client.IgnoreAlreadyExists(installRBAC(ctx, k8s, h.serviceAccount, registration))).To(Succeed())
+
+	hubCtx, stopHub := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer GinkgoRecover()
+		defer close(done)
+		Expect(h.mgr.Start(hubCtx)).To(Succeed())
+	}()
+
+	return h, func() {
+		stopHub()
+		<-done
+	}
 }

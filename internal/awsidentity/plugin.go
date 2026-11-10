@@ -50,6 +50,7 @@ const (
 	eventReasonRoleCreated        = "RoleCreated"
 	eventReasonRoleUpdated        = "RoleUpdated"
 	eventReasonRoleDeleted        = "RoleDeleted"
+	eventReasonRoleKept           = "RoleKept"
 	eventReasonAssociationCreated = "AssociationCreated"
 	eventReasonAssociationUpdated = "AssociationUpdated"
 	eventReasonAssociationDeleted = "AssociationDeleted"
@@ -97,8 +98,10 @@ type Plugin struct {
 // and writes their conditions. It is Pending with the reason
 // MissingServiceAccount when spec.target names no ServiceAccount, and with
 // the reason RoleNameInUse when the role of its name belongs to another
-// request. A failed AWS call is an error, except a policy document that IAM
-// refuses, which sets Applied=False on its Grant.
+// request. After a change of the role name, it deletes the old role once the
+// outputs name the new one, and until then keeps the old role in
+// status.resources. A failed AWS call is an error, except a policy document
+// that IAM refuses, which sets Applied=False on its Grant.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -110,7 +113,7 @@ func (p *Plugin) Reconcile(
 	}
 
 	role, err := p.ensureRole(ctx, req, sas)
-	if res, ok := roleNameInUse(err); ok {
+	if res, ok := roleNameInUse(err, request.Status.Resources); ok {
 		return res, nil
 	}
 	if err != nil {
@@ -145,6 +148,12 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{}, err
 	}
 
+	old, err := p.retireOldRoles(ctx, req, role)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+	resources = append(resources, old...)
+
 	consoleURL, err := awskit.RoleConsoleURL(role.ARN)
 	if err != nil {
 		return pluginkit.Result{}, err
@@ -156,6 +165,9 @@ func (p *Plugin) Reconcile(
 		Links:     []pluginsv1alpha1.Link{{Name: "IAM role", URL: consoleURL}},
 		Resources: resources,
 	}
+	if len(old) > 0 {
+		res.RequeueAfter = oldRoleRequeue
+	}
 	if conflicted {
 		res.RequeueAfter = conflictRequeue
 	}
@@ -164,14 +176,18 @@ func (p *Plugin) Reconcile(
 }
 
 // roleNameInUse returns the Pending result of a request whose role belongs
-// to another request, when err is an awskit.RoleInUseError.
-func roleNameInUse(err error) (pluginkit.Result, bool) {
+// to another request, when err is an awskit.RoleInUseError. The result keeps
+// the old roles of the rows of status.
+func roleNameInUse(err error, status []pluginsv1alpha1.ResourceRef) (pluginkit.Result, bool) {
 	var inUse awskit.RoleInUseError
 	if !errors.As(err, &inUse) {
 		return pluginkit.Result{}, false
 	}
 
-	return pluginkit.Result{Pending: &pluginkit.Waiting{Reason: ReasonRoleNameInUse, Message: inUse.Error()}}, true
+	return pluginkit.Result{
+		Pending:   &pluginkit.Waiting{Reason: ReasonRoleNameInUse, Message: inUse.Error()},
+		Resources: oldRoleRows(status, inUse.Name),
+	}, true
 }
 
 func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) pluginsv1alpha1.ResourceRef {
@@ -186,28 +202,34 @@ func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) plug
 
 // reconcileWithoutServiceAccounts makes the role of req, when it has one,
 // trust nobody, and keeps its Grants in sync, because credentials that STS
-// gave before stay valid.
+// gave before stay valid. It keeps the old roles of the status and deletes
+// none, because the outputs can still name one.
 func (p *Plugin) reconcileWithoutServiceAccounts(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 ) (pluginkit.Result, error) {
-	res := pluginkit.Result{Pending: &pluginkit.Waiting{
-		Reason:  ReasonMissingServiceAccount,
-		Message: "The request names no ServiceAccount in spec.target",
-	}}
+	current := p.roleName(req.Object)
+	status := req.Object.Status.Resources
+	res := pluginkit.Result{
+		Pending: &pluginkit.Waiting{
+			Reason:  ReasonMissingServiceAccount,
+			Message: "The request names no ServiceAccount in spec.target",
+		},
+		Resources: oldRoleRows(status, current),
+	}
 
-	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
+	arn, err := p.liveRoleARN(ctx, current)
 	if err != nil {
 		return res, err
 	}
 	if arn == "" {
 		// The associations of a role that someone deleted by hand still hold
 		// the ServiceAccounts.
-		return res, p.deleteAssociations(ctx, req, p.roleName(req.Object))
+		return res, p.deleteAssociations(ctx, req, current)
 	}
 
 	role, err := p.ensureRole(ctx, req, nil)
-	if inUse, ok := roleNameInUse(err); ok {
+	if inUse, ok := roleNameInUse(err, status); ok {
 		return inUse, nil
 	}
 	if err != nil {
@@ -226,7 +248,7 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 		return pluginkit.Result{}, err
 	}
 
-	res.Resources = []pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}
+	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, res.Resources...)
 	if conflicted {
 		res.RequeueAfter = conflictRequeue
 	}
@@ -366,27 +388,27 @@ func (p *Plugin) ensureAssociations(
 	return associations, err
 }
 
-// Delete deletes the associations of the role of the request, its inline
-// policies, and the role. A role that is gone is not an error.
+// Delete deletes each role of the request: the role of its current name and
+// the roles of its status.resources, each only with the UID of the request,
+// with their associations and inline policies. A role of another request UID
+// stays, with a Warning event. A role that is gone is not an error.
 func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
-	roleName := p.roleName(req.Object)
-	if err := p.deleteAssociations(ctx, req, roleName); err != nil {
-		return err
+	current := p.roleName(req.Object)
+	old := oldRoleRows(req.Object.Status.Resources, current)
+	names := make([]string, 0, len(old)+1)
+	names = append(names, current)
+	for _, row := range old {
+		names = append(names, row.Name)
 	}
 
-	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, roleName, string(req.Object.UID))
-	if err != nil {
-		return err
-	}
+	for _, name := range names {
+		if err := p.deleteAssociations(ctx, req, name); err != nil {
+			return err
+		}
 
-	if deleted {
-		req.Event(
-			corev1.EventTypeNormal,
-			eventReasonRoleDeleted,
-			eventActionDelete,
-			"Deleted the IAM role %s",
-			roleName,
-		)
+		if err := p.deleteNamedRole(ctx, req, name, ""); err != nil {
+			return err
+		}
 	}
 	return nil
 }
