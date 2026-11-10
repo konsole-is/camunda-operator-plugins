@@ -178,11 +178,13 @@ var _ = Describe("the AWS identity hub", func() {
 		Eventually(func(g Gomega) {
 			role := roleOf(g, irsa, ns)
 			g.Expect(role.PermissionsBoundary).To(Equal(boundary))
+			g.Expect(role.Tags).To(HaveKeyWithValue(awskit.TagDesired, MatchRegexp(`^[0-9a-f]{16}$`)))
 			g.Expect(role.Tags).To(Equal(map[string]string{
 				awskit.TagNamespace:  ns,
 				awskit.TagClaim:      "orders",
 				awskit.TagRequest:    request.Name,
 				awskit.TagRequestUID: string(request.UID),
+				awskit.TagDesired:    role.Tags[awskit.TagDesired],
 				"cost-center":        "camunda",
 			}))
 

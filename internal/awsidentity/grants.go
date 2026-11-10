@@ -41,6 +41,17 @@ type grantCounts struct {
 	applied, total, size int
 }
 
+// grantSync is what syncGrants did on a role.
+type grantSync struct {
+	counts grantCounts
+	// conflicted means that a Grant changed after it was read, so that its
+	// status was not written.
+	conflicted bool
+	// repaired holds each policy that the sync put for a Grant that had
+	// Applied=True for its generation before the sync.
+	repaired []string
+}
+
 // clusterGrant is a Grant of the cluster, with what the hub found for it.
 type clusterGrant struct {
 	grant   pluginsv1alpha1.Grant
@@ -52,31 +63,40 @@ type clusterGrant struct {
 // the policies of Grants that are gone, and writes Applied, MatchesTemplate,
 // and Ready of each Grant of the claim of req. It ignores a Grant that is
 // being deleted, and one whose request is gone or belongs to another claim.
-// It reports conflicted when a Grant changed after it was read, so that its
-// status was not written.
+// With an error, the result still holds the policies that it repaired.
 func (p *Plugin) syncGrants(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	role awskit.Role,
-) (grantCounts, bool, error) {
+) (grantSync, error) {
 	grants, retained, err := p.clusterGrants(ctx, req.Object)
 	if err != nil {
-		return grantCounts{}, false, err
+		return grantSync{}, err
 	}
 
 	current, err := awskit.InlinePolicies(ctx, p.clients.IAM, role.Name)
 	if err != nil {
-		return grantCounts{}, false, err
+		return grantSync{}, err
 	}
 
 	policies := make([]grantPolicy, 0, len(grants)+len(retained))
+	var applied []string
 	for _, g := range grants {
 		policies = append(policies, g.policy)
+		if appliedAt(&g.grant) {
+			applied = append(applied, g.policy.policy)
+		}
 	}
 
 	plan, put, removed, err := p.writePolicies(ctx, role, current, append(policies, retained...))
+	var sync grantSync
+	for _, policy := range put {
+		if slices.Contains(applied, policy) {
+			sync.repaired = append(sync.repaired, policy)
+		}
+	}
 	if err != nil {
-		return grantCounts{}, false, err
+		return sync, err
 	}
 
 	for _, policy := range removed {
@@ -100,13 +120,12 @@ func (p *Plugin) syncGrants(
 		)
 	}
 
-	counts := grantCounts{total: len(grants), size: plan.size}
-	conflicted := false
+	sync.counts = grantCounts{total: len(grants), size: plan.size}
 	for i := range grants {
 		g := &grants[i]
 		a := plan.applied[g.grant.Name]
 		if a.status == metav1.ConditionTrue {
-			counts.applied++
+			sync.counts.applied++
 		}
 
 		if !setGrantConditions(&g.grant, a, g.matches) {
@@ -116,13 +135,23 @@ func (p *Plugin) syncGrants(
 		err := p.client.Status().Update(ctx, &g.grant)
 		switch {
 		case apierrors.IsConflict(err) || apierrors.IsNotFound(err):
-			conflicted = true
+			sync.conflicted = true
 		case err != nil:
-			return grantCounts{}, false, fmt.Errorf("writing the status of the Grant %s: %w", g.grant.Name, err)
+			return sync, fmt.Errorf("writing the status of the Grant %s: %w", g.grant.Name, err)
 		}
 	}
 
-	return counts, conflicted, nil
+	return sync, nil
+}
+
+// policyCorrections names each policy of policies on role, for
+// pluginkit.Result.Corrected.
+func policyCorrections(role awskit.Role, policies []string) []string {
+	var out []string
+	for _, policy := range policies {
+		out = append(out, "the inline policy "+policy+" of the IAM role "+role.Name)
+	}
+	return out
 }
 
 // clusterGrants returns the Grants of the cluster of request that belong to
@@ -288,7 +317,7 @@ func templateChanged(message string) cond {
 // policy of the hub that is not in policies. When IAM refuses a document,
 // the returned plan refuses that policy with the reason Rejected or
 // OverSizeLimit. It returns the plan that it wrote and the policies that it
-// put and removed.
+// put and removed, also with an error.
 func (p *Plugin) writePolicies(
 	ctx context.Context,
 	role awskit.Role,
@@ -305,7 +334,7 @@ func (p *Plugin) writePolicies(
 		// counts every inline policy on the role until it is deleted.
 		for _, policy := range plan.remove {
 			if err := awskit.DeleteInlinePolicy(ctx, p.clients.IAM, role.Name, policy); err != nil {
-				return policyPlan{}, nil, nil, err
+				return policyPlan{}, put, removed, err
 			}
 			delete(current, policy)
 			removed = append(removed, policy)
@@ -334,7 +363,7 @@ func (p *Plugin) writePolicies(
 					message: "IAM refused the policy: " + awskit.Message(err),
 				}
 			default:
-				return policyPlan{}, nil, nil, err
+				return policyPlan{}, put, removed, err
 			}
 			refusedOne = true
 			break

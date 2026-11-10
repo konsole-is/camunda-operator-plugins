@@ -60,3 +60,10 @@ func setGrantConditions(grant *pluginsv1alpha1.Grant, applied, matches cond) boo
 
 	return changed
 }
+
+// appliedAt reports whether grant has Applied=True for its current
+// generation, so that the role had its statement before the pass.
+func appliedAt(grant *pluginsv1alpha1.Grant) bool {
+	applied := meta.FindStatusCondition(grant.Status.Conditions, pluginsv1alpha1.ConditionApplied)
+	return applied != nil && applied.Status == metav1.ConditionTrue && applied.ObservedGeneration == grant.Generation
+}
