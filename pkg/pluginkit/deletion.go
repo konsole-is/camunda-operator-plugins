@@ -18,6 +18,7 @@ package pluginkit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -44,6 +45,10 @@ const (
 	eventActionDelete            = "Delete"
 	eventActionOrphan            = "Orphan"
 )
+
+// deletingRequeue is the wait before the next pass of a Delete that returned
+// Deleting.
+const deletingRequeue = time.Second
 
 // delete applies the deletion policy of a deleted request, and then releases
 // its finalizer. The finalizer stays while the plugin fails, and while a Grant
@@ -79,6 +84,10 @@ func (r *reconciler[P, I]) delete(
 		err = r.plugin.Orphan(ctx, pluginRequest)
 	} else {
 		err = r.plugin.Delete(ctx, pluginRequest)
+	}
+	if deleting, ok := errors.AsType[Deleting](err); ok {
+		stage(request, v1.ConditionReady, ReasonDeleting, deleting.Message)
+		return ctrl.Result{RequeueAfter: deletingRequeue}, nil
 	}
 	if err != nil {
 		stage(request, v1.ConditionReady, ReasonDeleteFailed, err.Error())

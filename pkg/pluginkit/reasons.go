@@ -30,4 +30,8 @@ const (
 	// ReasonDeleteFailed means that the plugin failed to apply the deletion
 	// policy of a deleted request. The finalizer stays.
 	ReasonDeleteFailed = "DeleteFailed"
+	// ReasonDeleting means that the plugin deletes the resources of a deleted
+	// request in more than one pass, and has more to delete. The message says
+	// what it deletes. The finalizer stays.
+	ReasonDeleting = "Deleting"
 )

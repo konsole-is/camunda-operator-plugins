@@ -78,6 +78,28 @@ var _ = Describe("the deletion of a request", func() {
 		Eventually(gone(request)).Should(BeTrue())
 	})
 
+	It("keeps the finalizer and shows the message while the plugin deletes in passes", func() {
+		request := servedWithKey("delete-in-passes")
+		plugin.setDeleteErr(pluginkit.Deleting{Message: "Deleting the objects of the bucket b1"})
+		DeferCleanup(func() { plugin.setDeleteErr(nil) })
+
+		Expect(k8s.Delete(ctx, request)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			ready := condition(g, request, "Ready")
+			g.Expect(ready.Reason).To(Equal(pluginkit.ReasonDeleting))
+			g.Expect(ready.Message).To(Equal("Deleting the objects of the bucket b1"))
+		}).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(readRequest(g, request).Finalizers).To(ContainElement(pluginsv1alpha1.FinalizerCleanup))
+			g.Expect(condition(g, request, "Ready").Reason).To(Equal(pluginkit.ReasonDeleting))
+		}).WithTimeout(2 * time.Second).Should(Succeed())
+
+		// No change of the request starts the next pass: pluginkit requeues it.
+		plugin.setDeleteErr(nil)
+		Eventually(gone(request)).Should(BeTrue())
+	})
+
 	It("deletes the resources of a request with the Delete policy", func() {
 		request := servedWithKey("delete-policy")
 		sc := &storagev1.StorageClass{}

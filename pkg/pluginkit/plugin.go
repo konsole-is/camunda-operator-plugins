@@ -48,7 +48,8 @@ type Plugin[P, I any] interface {
 	// objects. The finalizer stays until Delete returns nil, so Delete must
 	// succeed for resources that are already gone. A plugin that finds its
 	// cluster-scoped objects by label matches the labels registration,
-	// request, and request-namespace.
+	// request, and request-namespace. A Delete that has more to delete than
+	// one call can do, such as a large bucket, returns Deleting.
 	Delete(ctx context.Context, req Request[P, I]) error
 	// Orphan releases the resources of a request with the deletion policy
 	// Orphan, for example the tags that tie a cloud resource to the request.
@@ -119,6 +120,18 @@ type Result struct {
 	// summary item "Last drift corrected" to the time, also when Reconcile
 	// returns an error.
 	Corrected []string
+}
+
+// Deleting is the error of a Delete that made progress and has more to
+// delete. pluginkit sets Ready=False with ReasonDeleting and Message, keeps
+// the finalizer, and calls Delete again after a second, without an error and
+// without a backoff.
+type Deleting struct {
+	Message string
+}
+
+func (d Deleting) Error() string {
+	return d.Message
 }
 
 // Waiting is the reason and the message of a False condition.
