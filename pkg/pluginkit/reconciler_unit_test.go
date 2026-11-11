@@ -344,3 +344,48 @@ func TestStageResultAddsNoDriftItemBeforeTheFirstCorrection(t *testing.T) {
 		{Label: "Size", Value: "small", Severity: pluginsv1alpha1.SeverityInfo},
 	}, request.Status.Summary)
 }
+
+func TestCheckInputs(t *testing.T) {
+	registration := &pluginsv1alpha1.PluginRegistration{Spec: pluginsv1alpha1.PluginRegistrationSpec{
+		Inputs: []pluginsv1alpha1.InputDecl{
+			{Name: "key", From: "encryption-key/keyRef", Required: true},
+			{Name: "principal", From: "cloud-identity/principal", Required: true},
+			{Name: "zone", From: "placement/zone"},
+		},
+	}}
+
+	tests := []struct {
+		name   string
+		inputs map[string]string
+		want   string
+	}{
+		{"every input has a value", map[string]string{"key": "k", "principal": "p", "zone": "z"}, ""},
+		{"an optional input has no value", map[string]string{"key": "k", "principal": "p"}, ""},
+		{
+			"one required input is missing",
+			map[string]string{"principal": "p"},
+			"the request has no value for the required input key (from encryption-key/keyRef)",
+		},
+		{
+			"an empty value is missing",
+			map[string]string{"key": "", "principal": "p"},
+			"the request has no value for the required input key (from encryption-key/keyRef)",
+		},
+		{
+			"two required inputs are missing",
+			nil,
+			"the request has no value for the required inputs key (from encryption-key/keyRef), " +
+				"principal (from cloud-identity/principal)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkInputs(registration, tt.inputs)
+			if tt.want == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.EqualError(t, err, tt.want)
+		})
+	}
+}

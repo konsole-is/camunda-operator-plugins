@@ -17,6 +17,10 @@
 /internal/awskms/                 @sourcehawk
 /charts/aws-kms/                  @sourcehawk
 /docs/plugins/aws-kms.md          @sourcehawk
+/cmd/aws-ebs/                     @sourcehawk
+/internal/awsebs/                 @sourcehawk
+/charts/aws-ebs/                  @sourcehawk
+/docs/plugins/aws-ebs.md          @sourcehawk
 /pkg/awskit/                      @sourcehawk
 /cmd/aws-connectors-role/         @sourcehawk
 /internal/awsconnectorsrole/      @sourcehawk
