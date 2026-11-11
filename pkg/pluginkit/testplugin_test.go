@@ -175,12 +175,11 @@ func (p *testPlugin) Delete(ctx context.Context, req pluginkit.Request[testParam
 		return err
 	}
 
-	sc := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: storageClassName(req.Object)}}
-	if err := client.IgnoreNotFound(p.client.Delete(ctx, sc)); err != nil {
-		return err
+	deleted, err := pluginkit.DeleteClusterScoped(ctx, p.reader, p.client, req.Object, &storagev1.StorageClassList{})
+	for _, obj := range deleted {
+		req.Event(corev1.EventTypeNormal, "Deleted", "Delete", "Deleted StorageClass %s", obj.GetName())
 	}
-	req.Event(corev1.EventTypeNormal, "Deleted", "Delete", "Deleted StorageClass %s", sc.Name)
-	return nil
+	return err
 }
 
 func (p *testPlugin) Orphan(context.Context, pluginkit.Request[testParams, map[string]string]) error {

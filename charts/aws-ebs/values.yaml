@@ -1,0 +1,80 @@
+image:
+  repository: ghcr.io/konsole-is/camunda-operator-plugins/aws-ebs
+  # An empty tag is the appVersion of the chart, which the release sets.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# registrations are the PluginRegistrations that the controller writes at
+# startup and serves. Each item is a name and the fields of a registration
+# spec. The chart grants the controller the verb serve on each name, and on no
+# other registration. The chart refuses to render without one.
+registrations:
+  - name: aws-ebs-encrypted
+    sections: [volume-encryption]
+    label: Encrypted EBS volumes
+    description: Creates a StorageClass for each cluster that encrypts its EBS volumes with the AWS KMS key of the cluster.
+    docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/aws-ebs.md
+    mode: Optional
+    deletionPolicies: [Delete, Orphan]
+    inputs:
+      - name: key
+        from: encryption-key/keyRef
+        required: true
+        formats: [aws-kms-arn]
+    outputs:
+      - key: storageClassName
+        description: The name of the StorageClass of the volumes of the cluster.
+    parameters:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [gp3, gp2, io1, io2, st1, sc1]
+          default: gp3
+          description: The EBS volume type.
+        iops:
+          type: integer
+          minimum: 100
+          description: The IOPS of each volume. Only for gp3, io1, and io2, and required for io1 and io2. 3000 to 80000 for gp3, 100 to 64000 for io1, and 100 to 256000 for io2.
+        throughput:
+          type: integer
+          minimum: 125
+          maximum: 2000
+          description: The throughput of each volume in MiB/s. Only for gp3. At most iops / 4, and 750 without iops.
+        fsType:
+          type: string
+          enum: [ext4, xfs, ext3]
+          default: ext4
+          description: The file system of each volume.
+        reclaimPolicy:
+          type: string
+          enum: [Delete, Retain]
+          default: Delete
+          description: What happens to a volume when its claim is deleted.
+      x-kubernetes-validations:
+        - rule: "!has(self.throughput) || !has(self.type) || self.type == 'gp3'"
+          message: throughput is only for the volume type gp3
+        - rule: "!has(self.iops) || !has(self.type) || self.type in ['gp3', 'io1', 'io2']"
+          message: iops is only for the volume types gp3, io1, and io2
+        - rule: "!has(self.iops) || (has(self.type) && self.type != 'gp3') || self.iops >= 3000"
+          message: iops of gp3 is at least 3000
+        - rule: "!has(self.type) || !(self.type in ['io1', 'io2']) || has(self.iops)"
+          message: iops is required for the volume types io1 and io2
+        - rule: "!has(self.iops) || self.iops <= ((!has(self.type) || self.type == 'gp3') ? 80000 : (self.type == 'io1' ? 64000 : 256000))"
+          message: iops is at most 80000 for gp3, 64000 for io1, and 256000 for io2
+        - rule: "!has(self.throughput) || self.throughput * 4 <= (has(self.iops) ? self.iops : 3000)"
+          message: throughput of gp3 is at most iops / 4, and 750 without iops
+
+# resync is the time after which the controller reconciles each request
+# again, also when nothing in the cluster changed. It brings back a
+# StorageClass that someone deleted. 0 turns it off.
+resync: 1h
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
