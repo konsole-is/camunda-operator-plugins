@@ -232,3 +232,23 @@ func TestCheckExtraTagsCountsTheTagsOfThePlugin(t *testing.T) {
 		})
 	}
 }
+
+func TestOwnedByNeedsTheUIDOfTheRequest(t *testing.T) {
+	assert.False(t, OwnedBy(map[string]string{TagRequest: "orders"}, "uid-1"), "no UID tag")
+	assert.False(t, OwnedBy(map[string]string{TagRequestUID: "uid-2"}, "uid-1"), "another UID")
+	assert.False(t, OwnedBy(map[string]string{TagRequestUID: ""}, ""), "an empty UID owns nothing")
+	assert.True(t, OwnedBy(map[string]string{TagRequestUID: "uid-1"}, "uid-1"))
+}
+
+func TestOwnerOfNamesTheRequestAndItsUID(t *testing.T) {
+	assert.Equal(t, "no request", OwnerOf(map[string]string{"team": "a"}))
+	assert.Equal(t, "the request team-a/orders", OwnerOf(map[string]string{
+		TagNamespace: "team-a",
+		TagRequest:   "orders",
+	}))
+	assert.Equal(t, "the request team-a/orders with the UID uid-1", OwnerOf(map[string]string{
+		TagNamespace:  "team-a",
+		TagRequest:    "orders",
+		TagRequestUID: "uid-1",
+	}))
+}

@@ -96,3 +96,14 @@ func KeyConsoleURL(keyARN string) (string, error) {
 
 	return "https://" + parsed.Region + "." + host + "/kms/home?region=" + parsed.Region + "#/kms/keys/" + id, nil
 }
+
+// BucketConsoleURL returns the page of the bucket in the S3 console of its
+// partition and region. It refuses a partition without a known console.
+func BucketConsoleURL(partition, region, bucket string) (string, error) {
+	host, ok := consoles[partition]
+	if !ok {
+		return "", fmt.Errorf("the bucket %s is in the partition %q, which has no known console", bucket, partition)
+	}
+
+	return "https://" + region + "." + host + "/s3/buckets/" + bucket + "?region=" + region, nil
+}

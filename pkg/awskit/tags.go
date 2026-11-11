@@ -154,6 +154,27 @@ func (t ExtraTags) RequestTags(namespace, claim, request string) map[string]stri
 	return tags
 }
 
+// OwnedBy reports whether an AWS object with tags belongs to the request of
+// uid: its TagRequestUID tag is uid. An empty uid owns nothing.
+func OwnedBy(tags map[string]string, uid string) bool {
+	return uid != "" && tags[TagRequestUID] == uid
+}
+
+// OwnerOf names the request of an AWS object with tags, for a message: "the
+// request <namespace>/<request>", with " with the UID <uid>" when the object
+// has a UID tag, or "no request".
+func OwnerOf(tags map[string]string) string {
+	if tags[TagRequest] == "" {
+		return "no request"
+	}
+
+	owner := "the request " + tags[TagNamespace] + "/" + tags[TagRequest]
+	if uid := tags[TagRequestUID]; uid != "" {
+		owner += " with the UID " + uid
+	}
+	return owner
+}
+
 // OwnerTags returns a new map with the tags of RequestTags, the extra tags,
 // and TagRequestUID with uid.
 func (t ExtraTags) OwnerTags(namespace, claim, request, uid string) map[string]string {

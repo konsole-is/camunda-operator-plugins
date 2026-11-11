@@ -192,8 +192,8 @@ func (k keys) ensure(ctx context.Context, ref keyRef, replicaRegions []string) (
 		if err != nil {
 			return keyStatus{}, nil, err
 		}
-		if !owns(current, ref) {
-			return keyStatus{}, nil, aliasInUseError{Alias: alias, KeyARN: status.ARN, Owner: owner(current)}
+		if !awskit.OwnedBy(current, ref.UID) {
+			return keyStatus{}, nil, aliasInUseError{Alias: alias, KeyARN: status.ARN, Owner: awskit.OwnerOf(current)}
 		}
 		if status.State != types.KeyStateEnabled {
 			return status, nil, nil
@@ -314,25 +314,6 @@ func listTags(ctx context.Context, c awskit.KMS, keyID string) (map[string]strin
 		}
 		in.Marker = out.NextMarker
 	}
-}
-
-// owns reports whether a key with tags belongs to the request of ref.
-func owns(tags map[string]string, ref keyRef) bool {
-	uid, ok := tags[awskit.TagRequestUID]
-	return ok && uid == ref.UID
-}
-
-// owner names the request of a key with tags, for a message.
-func owner(tags map[string]string) string {
-	request, ok := tags[awskit.TagRequest]
-	if !ok {
-		return "no request"
-	}
-	owner := "the request " + tags[awskit.TagNamespace] + "/" + request
-	if uid, ok := tags[awskit.TagRequestUID]; ok {
-		owner += " with the UID " + uid
-	}
-	return owner
 }
 
 // repair tags the key keyARN again when a tag of want is missing from
@@ -589,7 +570,7 @@ func (k keys) ownedKey(
 	if err != nil {
 		return nil, false, err
 	}
-	return meta, owns(tags, ref), nil
+	return meta, awskit.OwnedBy(tags, ref.UID), nil
 }
 
 // schedule schedules the deletion of the key keyARN. A key that is gone or
