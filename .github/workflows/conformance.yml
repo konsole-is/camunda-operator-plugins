@@ -6,18 +6,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A run on main is not cancelled, so that it ends, cleans up the AWS
+# sandbox, and can file its issue.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  # Each plugin gets its own job and its own kind cluster. The job runs on
-  # every pull request, so that its check reports and can be required. A
-  # pull request that touches only the docs or other plugins ends it after
-  # the scope step, with the check green.
+  # Each plugin of kind gets its own job and its own kind cluster. The job
+  # runs on every pull request, so that its check reports and can be
+  # required. A pull request that touches only the docs or other plugins
+  # ends it after the scope step, with the check green.
   conformance:
     name: Conformance of ${{ matrix.plugin }}
     runs-on: ubuntu-latest
@@ -60,35 +62,9 @@ jobs:
             echo "The change touches nothing that the conformance run of ${PLUGIN} uses." >> "${GITHUB_STEP_SUMMARY}"
           fi
 
-      # The operator on kind is built from the commit that the api module of
-      # go.mod names, so its CRDs are those that the plugin is built against.
-      - name: Check out the operator at the api ref
+      - name: Install the kind tools
         if: steps.scope.outputs.run == 'true'
-        run: |
-          echo "OPERATOR_DIR=${RUNNER_TEMP}/camunda-operator" >> "${GITHUB_ENV}"
-          OPERATOR_DIR="${RUNNER_TEMP}/camunda-operator" hack/ci-retry.sh make operator-source
-
-      # kind and kubebuilder install the versions of .tool-versions of the
-      # operator, as its own kind jobs do.
-      - name: Install kind and kubebuilder
-        if: steps.scope.outputs.run == 'true'
-        run: |
-          KIND_VERSION=$(awk '$1 == "kind" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
-          curl -fsSLo ./kind --retry 5 --retry-delay 10 --retry-all-errors \
-            "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-$(go env GOARCH)"
-          chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
-          KUBEBUILDER_VERSION=$(awk '$1 == "kubebuilder" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
-          curl -fsSL -o kubebuilder --retry 5 --retry-delay 10 --retry-all-errors \
-            "https://github.com/kubernetes-sigs/kubebuilder/releases/download/v${KUBEBUILDER_VERSION}/kubebuilder_$(go env GOOS)_$(go env GOARCH)"
-          chmod +x kubebuilder && sudo mv kubebuilder /usr/local/bin/
-          kind version
-          kubebuilder version
-
-      - name: Install Helm
-        if: steps.scope.outputs.run == 'true'
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          version: v4.3.1
+        uses: ./.github/actions/kind-tools
 
       - name: Run the conformance suite on kind
         if: steps.scope.outputs.run == 'true'
@@ -115,3 +91,156 @@ jobs:
             echo "=== logs of ${workload} in ${namespace}"
             kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
           done
+
+  # Each AWS plugin gets its own job, its own kind cluster, and its own run
+  # in the AWS sandbox. These checks are never required.
+  conformance-aws:
+    name: Conformance of ${{ matrix.plugin }} in the AWS sandbox
+    # A pull request runs these rows only when the trusted user opened it
+    # from a branch of this repository and triggered the event. Every other
+    # pull request, Renovate included, skips them, and they run on main after
+    # the merge. GitHub gives a fork no OIDC token, and the CI role checks the
+    # actor ID in the token.
+    if: >-
+      github.repository == 'konsole-is/camunda-operator-plugins' &&
+      (github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      format('{0}', github.event.pull_request.user.id) == vars.AWS_SANDBOX_ACTOR_ID &&
+      github.actor_id == vars.AWS_SANDBOX_ACTOR_ID))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ github.actor_id == vars.AWS_SANDBOX_ACTOR_ID && 'aws-sandbox' || 'aws-sandbox-review' }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # One line for each AWS plugin, and test/conformance/<plugin>/ for its
+        # setup. See CONTRIBUTING.md.
+        plugin:
+          - aws-connectors-role
+          - aws-identity
+          - aws-kms
+    env:
+      PLUGIN: ${{ matrix.plugin }}
+      KIND_CLUSTER: conformance
+      CONFORMANCE_REPORT: ${{ github.workspace }}/conformance-report/${{ matrix.plugin }}.xml
+      # One run ID for each row. issuer.sh refuses an ID that does not match
+      # cpo-ci-[a-z0-9-]{1,40}.
+      RUN_ID: cpo-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_KMS_REPLICA_REGION: ${{ vars.AWS_KMS_REPLICA_REGION }}
+      AWS_ISSUER_BUCKET: ${{ vars.AWS_ISSUER_BUCKET }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Check if the change can affect the plugin
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" != pull_request ]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          run=$(test/conformance/scope.sh "${PLUGIN}" "${BASE}" "${HEAD}")
+          echo "run=${run}" >> "${GITHUB_OUTPUT}"
+          if [ "${run}" = false ]; then
+            echo "The change touches nothing that the conformance run of ${PLUGIN} uses." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Install the kind tools
+        if: steps.scope.outputs.run == 'true'
+        uses: ./.github/actions/kind-tools
+
+      - name: Get the credentials of the CI role
+        id: aws
+        if: steps.scope.outputs.run == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Publish the issuer of the run
+        id: issuer
+        if: steps.scope.outputs.run == 'true'
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
+        run: |
+          echo "AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}" >> "${GITHUB_ENV}"
+          out=$(hack/aws-sandbox/issuer.sh up "${RUN_ID}" "${RUNNER_TEMP}/issuer")
+          echo "${out}"
+          echo "KIND_CONFIG=${RUNNER_TEMP}/issuer/kind.yaml" >> "${GITHUB_ENV}"
+          echo "AWS_OIDC_PROVIDER_ARN=$(sed -n 's/^provider=//p' <<< "${out}")" >> "${GITHUB_ENV}"
+
+      - name: Run the conformance suite on kind
+        if: steps.scope.outputs.run == 'true'
+        run: make conformance-kind
+
+      - name: Upload the conformance report
+        if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-${{ matrix.plugin }}
+          path: conformance-report/
+          if-no-files-found: warn
+
+      - name: Read the kind cluster
+        if: ${{ failure() && steps.scope.outputs.run == 'true' }}
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get pluginregistrations,pluginrequests,grants -A -o yaml || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
+          for target in \
+            "camunda-operator-system deployment/camunda-operator-controller-manager" \
+            "camunda-operator-plugins deployment/${PLUGIN}" \
+            "default deployment/pod-identity-webhook"; do
+            read -r namespace workload <<< "${target}"
+            echo "=== logs of ${workload} in ${namespace}"
+            kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
+          done
+
+      # The first session of the CI role can be over: it lasts one hour.
+      - name: Get the credentials of the CI role for the cleanup
+        if: ${{ always() && steps.issuer.outcome != 'skipped' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The kind cluster goes first, so that no controller creates an object
+      # again. The step fails when the run left a role, a policy, an OIDC
+      # provider, or a bucket.
+      - name: Remove what the run created
+        if: ${{ always() && steps.issuer.outcome != 'skipped' }}
+        run: |
+          kind delete cluster --name "${KIND_CLUSTER}" || true
+          hack/aws-sandbox/teardown.sh "${RUN_ID}"
+
+  report:
+    name: File an issue for a red run on main
+    needs: [conformance, conformance-aws]
+    if: ${{ failure() && github.event_name == 'push' && github.repository == 'konsole-is/camunda-operator-plugins' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: File or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: hack/failure-issue.sh "Conformance failed on main" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
