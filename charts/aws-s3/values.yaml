@@ -1,0 +1,134 @@
+image:
+  repository: ghcr.io/konsole-is/camunda-operator-plugins/aws-s3
+  # An empty tag is the appVersion of the chart, which the release sets.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# region is the AWS region of the bucket of a request that sets no region
+# parameter. Empty takes the region of the AWS SDK chain, such as the
+# AWS_REGION of the pod. The controller does not start without a region.
+region: ""
+
+# partition is the AWS partition of the buckets: aws, aws-cn, or aws-us-gov.
+# It goes into the bucket ARN of the outputs, which the grants read, and into
+# the console link.
+partition: aws
+
+# mode is how the pods of a cluster get their AWS role: irsa or podIdentity.
+# With irsa, the ObjectStorageConfig names the role of the principal input.
+# With podIdentity, it names no role, because a role annotation on the
+# ServiceAccount makes the IRSA token win over Pod Identity.
+mode: irsa
+
+# extraTags go on each bucket, next to the camunda.io/ tags of the request,
+# for example a cost center.
+extraTags: {}
+
+# deleteBudget is the time for which one pass of a delete deletes objects.
+# A bucket with more objects than one pass deletes takes more passes, and the
+# request requeues between them.
+deleteBudget: 30s
+
+# resync is the time after which the controller reconciles each request
+# again, and repairs a bucket setting that was changed outside the cluster.
+# 0 turns the resync off.
+resync: 1h
+
+# endpointURL, when set, sends every AWS call to this endpoint instead of the
+# endpoints of AWS.
+endpointURL: ""
+
+serviceAccount:
+  # annotations of the ServiceAccount of the controller, for example the
+  # IRSA annotation of the role that the controller itself runs as.
+  annotations: {}
+
+# registrations are the PluginRegistrations that the controller writes at
+# startup and serves. Each item is a name and the fields of a registration
+# spec. The chart grants the controller the verb serve on each name, and on
+# no other registration. The chart refuses to render without one. The grant
+# templates hold placeholders that pluginkit fills for each request.
+registrations:
+  - name: aws-s3
+    sections: [backup-storage]
+    label: AWS S3 bucket
+    description: Creates one S3 bucket for the backups of each cluster, encrypted with the key of the cluster when it has one.
+    docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/aws-s3.md
+    mode: Optional
+    deletionPolicies: [Delete, Orphan]
+    inputs:
+      - name: key
+        from: encryption-key/keyRef
+        required: false
+        formats: [aws-kms-arn]
+      - name: principal
+        from: cloud-identity/principal
+        required: false
+        formats: [aws-iam-role-arn]
+    outputs:
+      - key: objectStorageConfig
+        description: The ObjectStorageConfig of the bucket, in the namespace of the claim.
+      - key: bucket
+        description: The name of the bucket.
+      - key: bucketArn
+        description: The ARN of the bucket, in the partition of the chart.
+      - key: keyArn
+        format: aws-kms-arn
+        description: The ARN of the key of the default encryption. Only with the key input.
+    grantTemplates:
+      - name: bucket-read-write
+        format: aws-iam-statement
+        description: Read and write the objects of the bucket, as Zeebe, the Elasticsearch snapshot repository, and the PostgreSQL archive do.
+        template:
+          Effect: Allow
+          Action:
+            - s3:ListBucket
+            - s3:GetBucketLocation
+            - s3:ListBucketMultipartUploads
+            - s3:ListBucketVersions
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:AbortMultipartUpload
+            - s3:ListMultipartUploadParts
+          Resource:
+            - "{{ .outputs.bucketArn }}"
+            - "{{ .outputs.bucketArn }}/*"
+      - name: bucket-key-use
+        format: aws-iam-statement
+        requiresInputs: [key]
+        description: Encrypt and decrypt with the key of the bucket.
+        template:
+          Effect: Allow
+          Action: [kms:GenerateDataKey, kms:Decrypt]
+          Resource: "{{ .outputs.keyArn }}"
+    parameters:
+      type: object
+      properties:
+        bucketPrefix:
+          type: string
+          default: camunda
+          maxLength: 40
+          pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+          x-kubernetes-validations:
+            - rule: "!self.startsWith('xn--') && !self.startsWith('sthree-') && !self.startsWith('amzn-s3-demo-')"
+              message: S3 reserves the bucket name prefixes xn--, sthree-, and amzn-s3-demo-.
+          description: The start of each bucket name. It cannot change after the bucket exists.
+        region:
+          type: string
+          pattern: '^([a-z]+-){2,3}[0-9]+$'
+          description: The region of the bucket. Empty is the region of the chart. It cannot change after the bucket exists.
+        abortIncompleteUploadDays:
+          type: integer
+          minimum: 1
+          default: 7
+          description: Days after which S3 aborts an incomplete multipart upload.
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
