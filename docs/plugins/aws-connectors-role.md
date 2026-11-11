@@ -297,7 +297,7 @@ kubectl get events -n <namespace> --field-selector reason=DriftCorrected
 
 A change of the request, of its parameters, or of a chart value is not drift. The plugin applies it with its usual events, such as `PolicyAttached`, and records no `DriftCorrected`, also when it needs a retry. A new role, for example after a change of `roleNamePrefix`, is not drift either. An `aws-connectors-existing-role` request records no `DriftCorrected`: the plugin repairs its association, but it has no role of its own to keep the tag below on.
 
-To tell drift from a change, the plugin keeps the tag `camunda.io/desired` on the role, a hash of the role, its inline policy, and its managed policies as the plugin last applied them in full. A repair counts as drift only while the tag matches the request. Do not change or delete the tag. Without it, the next repair counts as a change, and the plugin then writes the tag again.
+To tell drift from a change, the plugin keeps the tag `camunda.io/desired` on the role, a hash of the role, its inline policy, and its managed policies as the plugin last applied them in full. While the plugin applies a change, the tag holds `changing`. A repair counts as drift only while the tag matches the request. So a change that fails, and that you then change back, is not drift either. Do not change or delete the tag. Without it, the next repair counts as a change, and the plugin then writes the tag again.
 
 ## Grants
 

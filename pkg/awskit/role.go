@@ -113,7 +113,12 @@ func (c RoleChange) Corrections(name string) []string {
 // TagRequestUID value differs from the one in spec.Tags. An absent tag is the
 // empty value. It takes a live role without a TagRequestUID value whose
 // TagNamespace and TagRequest are the ones in spec.Tags, and writes its UID.
-func EnsureRole(ctx context.Context, c IAM, spec RoleSpec) (Role, RoleChange, error) {
+//
+// hash is the DesiredHash of the pass. When the TagDesired value of the live
+// role is another hash, EnsureRole sets it to DesiredChanging, with the tags
+// of spec, before it changes anything else. So a change that fails part of
+// the way is not drift in a later pass.
+func EnsureRole(ctx context.Context, c IAM, spec RoleSpec, hash string) (Role, RoleChange, error) {
 	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(spec.Name)})
 	if IsNotFound(err) {
 		created, createErr := c.CreateRole(ctx, &iam.CreateRoleInput{
@@ -142,6 +147,12 @@ func EnsureRole(ctx context.Context, c IAM, spec RoleSpec) (Role, RoleChange, er
 	}
 
 	role := Role{Name: spec.Name, ARN: aws.ToString(out.Role.Arn), Desired: live[TagDesired]}
+	if role.Desired != "" && role.Desired != hash && role.Desired != DesiredChanging {
+		if _, err := MarkDesired(ctx, c, role, spec.Tags, DesiredChanging); err != nil {
+			return role, RoleChange{}, err
+		}
+	}
+
 	updated, err := updateRole(ctx, c, out.Role, live, spec)
 	return role, RoleChange{Updated: updated}, err
 }

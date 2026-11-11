@@ -22,6 +22,7 @@ import (
 	"maps"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
@@ -51,7 +52,7 @@ func roleSpec() awskit.RoleSpec {
 func TestEnsureRoleCreatesARoleWithTrustBoundaryAndTags(t *testing.T) {
 	f := awsfake.NewIAM()
 
-	role, change, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	role, change, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 
 	require.NoError(t, err)
 	assert.Equal(t, awskit.RoleChange{Created: true}, change)
@@ -69,11 +70,11 @@ func TestEnsureRoleCreatesARoleWithTrustBoundaryAndTags(t *testing.T) {
 
 func TestEnsureRoleLeavesAnUnchangedRoleAlone(t *testing.T) {
 	f := awsfake.NewIAM()
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	before := len(f.Calls())
 
-	_, change, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, change, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 
 	require.NoError(t, err)
 	assert.Equal(t, awskit.RoleChange{}, change)
@@ -82,14 +83,14 @@ func TestEnsureRoleLeavesAnUnchangedRoleAlone(t *testing.T) {
 
 func TestEnsureRoleUpdatesTheTrustBoundaryAndTags(t *testing.T) {
 	f := awsfake.NewIAM()
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	spec := roleSpec()
 	spec.TrustPolicy = []byte(`{"Version":"2012-10-17","Statement":[]}`)
 	spec.PermissionsBoundary = otherBoundary
 	spec.Tags = awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity-2", "uid-1")
 
-	_, change, err := awskit.EnsureRole(context.Background(), f, spec)
+	_, change, err := awskit.EnsureRole(context.Background(), f, spec, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, awskit.RoleChange{Updated: []string{"trust policy", "permissions boundary", "tags"}}, change)
@@ -108,10 +109,10 @@ func TestEnsureRoleKeepsATagThatTheSpecDoesNotName(t *testing.T) {
 		awskit.TagRequest:    "orders-identity",
 		awskit.TagRequestUID: "uid-1",
 	}
-	_, _, err := awskit.EnsureRole(context.Background(), f, spec)
+	_, _, err := awskit.EnsureRole(context.Background(), f, spec, "")
 	require.NoError(t, err)
 
-	_, change, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, change, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"tags"}, change.Updated)
@@ -121,11 +122,11 @@ func TestEnsureRoleKeepsATagThatTheSpecDoesNotName(t *testing.T) {
 
 func TestEnsureRoleReadsARoleThatAnotherWriterCreated(t *testing.T) {
 	f := awsfake.NewIAM()
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	f.FailNext("GetRole", &smithy.GenericAPIError{Code: "NoSuchEntity"})
 
-	role, change, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	role, change, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 
 	require.NoError(t, err)
 	assert.False(t, change.Created)
@@ -137,7 +138,7 @@ func TestEnsureRoleReturnsAFailedCall(t *testing.T) {
 	boom := errors.New("boom")
 	f.FailNext("CreateRole", boom)
 
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 
 	assert.ErrorIs(t, err, boom)
 }
@@ -146,11 +147,11 @@ func TestEnsureRoleRefusesARoleOfAnotherRequest(t *testing.T) {
 	f := awsfake.NewIAM()
 	other := roleSpec()
 	other.Tags = awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2")
-	_, _, err := awskit.EnsureRole(context.Background(), f, other)
+	_, _, err := awskit.EnsureRole(context.Background(), f, other, "")
 	require.NoError(t, err)
 	before := len(f.Calls())
 
-	_, _, err = awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err = awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 
 	var inUse awskit.RoleInUseError
 	require.ErrorAs(t, err, &inUse)
@@ -164,10 +165,10 @@ func TestEnsureRoleTakesARoleOfItsRequestWithoutAUID(t *testing.T) {
 	f := awsfake.NewIAM()
 	legacy := roleSpec()
 	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
-	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
+	_, _, err := awskit.EnsureRole(context.Background(), f, legacy, "")
 	require.NoError(t, err)
 
-	_, change, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, change, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"tags"}, change.Updated)
@@ -188,10 +189,10 @@ func TestEnsureRoleRefusesARoleWithoutAUIDOfAnotherRequest(t *testing.T) {
 			f := awsfake.NewIAM()
 			made := roleSpec()
 			made.Tags = tc.tags
-			_, _, err := awskit.EnsureRole(context.Background(), f, made)
+			_, _, err := awskit.EnsureRole(context.Background(), f, made, "")
 			require.NoError(t, err)
 
-			_, _, err = awskit.EnsureRole(context.Background(), f, roleSpec())
+			_, _, err = awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 
 			var inUse awskit.RoleInUseError
 			require.ErrorAs(t, err, &inUse)
@@ -245,7 +246,7 @@ func TestDesiredHashChangesWithEachPart(t *testing.T) {
 
 func TestEnsureRoleReadsTheDesiredTagBeforeItChanges(t *testing.T) {
 	f := awsfake.NewIAM()
-	created, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	created, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	assert.Empty(t, created.Desired, "a new role has no desired tag")
 	_, err = awskit.MarkDesired(context.Background(), f, created, roleSpec().Tags, "aaaaaaaaaaaaaaaa")
@@ -253,18 +254,125 @@ func TestEnsureRoleReadsTheDesiredTagBeforeItChanges(t *testing.T) {
 	spec := roleSpec()
 	spec.TrustPolicy = []byte(`{"Version":"2012-10-17","Statement":[]}`)
 
-	role, change, err := awskit.EnsureRole(context.Background(), f, spec)
+	role, change, err := awskit.EnsureRole(context.Background(), f, spec, "aaaaaaaaaaaaaaaa")
 
 	require.NoError(t, err)
 	assert.Equal(t, "aaaaaaaaaaaaaaaa", role.Desired)
 	assert.Equal(t, awskit.RoleChange{Updated: []string{"trust policy"}}, change)
 	got, _ := f.Role(spec.Name)
-	assert.Equal(t, "aaaaaaaaaaaaaaaa", got.Tags[awskit.TagDesired], "EnsureRole keeps the desired tag")
+	assert.Equal(t, "aaaaaaaaaaaaaaaa", got.Tags[awskit.TagDesired], "a repair at the hash of the tag keeps the tag")
+}
+
+// desiredRole returns a fake with the role of roleSpec, whose desired tag is
+// "aaaaaaaaaaaaaaaa", and a spec of the role with another trust policy.
+func desiredRole(t *testing.T) (*awsfake.IAM, awskit.RoleSpec) {
+	t.Helper()
+	f := awsfake.NewIAM()
+	created, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
+	require.NoError(t, err)
+	_, err = awskit.MarkDesired(context.Background(), f, created, roleSpec().Tags, "aaaaaaaaaaaaaaaa")
+	require.NoError(t, err)
+
+	spec := roleSpec()
+	spec.TrustPolicy = []byte(`{"Version":"2012-10-17","Statement":[]}`)
+	spec.Tags["cpo-ci-run"] = "cpo-ci-x"
+	return f, spec
+}
+
+func TestEnsureRoleMarksAChangeBeforeItsFirstWrite(t *testing.T) {
+	f, spec := desiredRole(t)
+	before := len(f.Calls())
+
+	role, change, err := awskit.EnsureRole(context.Background(), f, spec, "bbbbbbbbbbbbbbbb")
+
+	require.NoError(t, err)
+	assert.Equal(t, "aaaaaaaaaaaaaaaa", role.Desired, "Desired is the tag as EnsureRole read it")
+	assert.Equal(t, awskit.RoleChange{Updated: []string{"trust policy", "tags"}}, change)
+	assert.Equal(t, []string{"GetRole", "TagRole", "UpdateAssumeRolePolicy", "TagRole"}, f.Calls()[before:])
+	got, _ := f.Role(spec.Name)
+	assert.Equal(t, awskit.DesiredChanging, got.Tags[awskit.TagDesired])
+}
+
+func TestEnsureRoleSendsTheTagsOfTheSpecWithTheMark(t *testing.T) {
+	f, spec := desiredRole(t)
+	// The sandbox refuses a tag request without its run tag.
+	f.FailNext("UpdateAssumeRolePolicy", errors.New("throttled"))
+
+	_, _, err := awskit.EnsureRole(context.Background(), f, spec, "bbbbbbbbbbbbbbbb")
+
+	require.Error(t, err)
+	got, _ := f.Role(spec.Name)
+	assert.Equal(t, awskit.DesiredChanging, got.Tags[awskit.TagDesired])
+	assert.Equal(t, "cpo-ci-x", got.Tags["cpo-ci-run"])
+}
+
+func TestEnsureRoleMarksNoRoleWithoutAHashOfAnotherState(t *testing.T) {
+	for name, live := range map[string]string{
+		"no desired tag":       "",
+		"the hash of the pass": "bbbbbbbbbbbbbbbb",
+		"already marked":       awskit.DesiredChanging,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := awsfake.NewIAM()
+			created, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
+			require.NoError(t, err)
+			if live != "" {
+				_, err = awskit.MarkDesired(context.Background(), f, created, roleSpec().Tags, live)
+				require.NoError(t, err)
+			}
+			before := len(f.Calls())
+
+			_, _, err = awskit.EnsureRole(context.Background(), f, roleSpec(), "bbbbbbbbbbbbbbbb")
+
+			require.NoError(t, err)
+			assert.Equal(t, []string{"GetRole"}, f.Calls()[before:])
+		})
+	}
+}
+
+func TestEnsureRoleChangesNothingWhenTheMarkFails(t *testing.T) {
+	f, spec := desiredRole(t)
+	f.FailNext("TagRole", errors.New("throttled"))
+
+	role, _, err := awskit.EnsureRole(context.Background(), f, spec, "bbbbbbbbbbbbbbbb")
+
+	require.ErrorContains(t, err, spec.Name)
+	assert.NotEqual(t, "bbbbbbbbbbbbbbbb", role.Desired, "the pass is no drift")
+	got, _ := f.Role(spec.Name)
+	assert.Equal(t, "aaaaaaaaaaaaaaaa", got.Tags[awskit.TagDesired])
+	assert.NotContains(t, f.Calls(), "UpdateAssumeRolePolicy")
+}
+
+func TestEnsureRoleEndsAChangeThatStoppedAfterTheMark(t *testing.T) {
+	f, spec := desiredRole(t)
+	f.FailNext("UpdateAssumeRolePolicy", errors.New("throttled"))
+	_, _, err := awskit.EnsureRole(context.Background(), f, spec, "bbbbbbbbbbbbbbbb")
+	require.Error(t, err)
+
+	role, change, err := awskit.EnsureRole(context.Background(), f, spec, "bbbbbbbbbbbbbbbb")
+
+	require.NoError(t, err)
+	assert.NotEqual(t, "bbbbbbbbbbbbbbbb", role.Desired, "the repair of the change is no drift")
+	assert.Contains(t, change.Updated, "trust policy")
+	_, err = awskit.MarkDesired(context.Background(), f, role, spec.Tags, "bbbbbbbbbbbbbbbb")
+	require.NoError(t, err)
+
+	// A change in AWS after the pass is drift again.
+	_, err = f.UpdateAssumeRolePolicy(context.Background(), &iam.UpdateAssumeRolePolicyInput{
+		RoleName:       aws.String(spec.Name),
+		PolicyDocument: aws.String(string(roleSpec().TrustPolicy)),
+	})
+	require.NoError(t, err)
+	role, change, err = awskit.EnsureRole(context.Background(), f, spec, "bbbbbbbbbbbbbbbb")
+
+	require.NoError(t, err)
+	assert.Equal(t, "bbbbbbbbbbbbbbbb", role.Desired)
+	assert.Equal(t, []string{"trust policy"}, change.Updated)
 }
 
 func TestMarkDesiredTagsOnlyAChangedHash(t *testing.T) {
 	f := awsfake.NewIAM()
-	role, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	role, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	role.Desired = "aaaaaaaaaaaaaaaa"
 	before := len(f.Calls())
@@ -290,7 +398,7 @@ func TestMarkDesiredTagsOnlyAChangedHash(t *testing.T) {
 
 func TestMarkDesiredReturnsAFailedCall(t *testing.T) {
 	f := awsfake.NewIAM()
-	role, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	role, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	f.FailNext("TagRole", errors.New("throttled"))
 
@@ -313,7 +421,7 @@ func TestRoleChangeCorrectionsNameEachUpdatedPart(t *testing.T) {
 func TestDeleteRoleDeletesEveryPage(t *testing.T) {
 	f := awsfake.NewIAM()
 	f.PageSize = 1
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	for _, name := range []string{"a", "b", "c"} {
 		require.NoError(t, awskit.PutInlinePolicy(context.Background(), f, roleSpec().Name, name, []byte(`{}`)))
@@ -339,7 +447,7 @@ func TestDeleteRoleOfAMissingRoleReportsFalse(t *testing.T) {
 
 func TestDeleteRoleDeletesOnlyARoleOfTheUID(t *testing.T) {
 	f := awsfake.NewIAM()
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 
 	for _, uid := range []string{"uid-2", ""} {
@@ -362,7 +470,7 @@ func TestDeleteRoleRefusesARoleWithoutAUID(t *testing.T) {
 	f := awsfake.NewIAM()
 	made := roleSpec()
 	made.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
-	_, _, err := awskit.EnsureRole(context.Background(), f, made)
+	_, _, err := awskit.EnsureRole(context.Background(), f, made, "")
 	require.NoError(t, err)
 
 	deleted, err := awskit.DeleteRole(context.Background(), f, roleSpec().Name, "uid-1")
@@ -375,7 +483,7 @@ func TestDeleteRoleRefusesARoleWithoutAUID(t *testing.T) {
 
 func TestClaimRoleReturnsARoleOfTheUID(t *testing.T) {
 	f := awsfake.NewIAM()
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	before := len(f.Calls())
 
@@ -390,7 +498,7 @@ func TestClaimRoleTakesARoleOfItsRequestWithoutAUID(t *testing.T) {
 	f := awsfake.NewIAM()
 	legacy := roleSpec()
 	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
-	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
+	_, _, err := awskit.EnsureRole(context.Background(), f, legacy, "")
 	require.NoError(t, err)
 
 	role, err := awskit.ClaimRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
@@ -410,7 +518,7 @@ func TestClaimRoleRefusesARoleOfAnotherRequest(t *testing.T) {
 			f := awsfake.NewIAM()
 			made := roleSpec()
 			made.Tags = tags
-			_, _, err := awskit.EnsureRole(context.Background(), f, made)
+			_, _, err := awskit.EnsureRole(context.Background(), f, made, "")
 			require.NoError(t, err)
 
 			_, err = awskit.ClaimRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
@@ -465,7 +573,7 @@ func TestDeleteClaimedRoleDeletesARoleOfItsRequestWithoutAUID(t *testing.T) {
 	f := awsfake.NewIAM()
 	legacy := roleSpec()
 	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
-	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
+	_, _, err := awskit.EnsureRole(context.Background(), f, legacy, "")
 	require.NoError(t, err)
 
 	deleted, err := awskit.DeleteClaimedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
@@ -479,7 +587,7 @@ func TestDeleteClaimedRoleReportsAUIDTagThatIAMDoesNotShowYet(t *testing.T) {
 	f := &staleIAM{IAM: awsfake.NewIAM()}
 	legacy := roleSpec()
 	legacy.Tags = awskit.RequestTags("team-a", "orders", "orders-identity")
-	_, _, err := awskit.EnsureRole(context.Background(), f, legacy)
+	_, _, err := awskit.EnsureRole(context.Background(), f, legacy, "")
 	require.NoError(t, err)
 
 	deleted, err := awskit.DeleteClaimedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
@@ -495,7 +603,7 @@ func TestDeleteClaimedRoleKeepsARoleOfAnotherRequest(t *testing.T) {
 	f := awsfake.NewIAM()
 	other := roleSpec()
 	other.Tags = awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2")
-	_, _, err := awskit.EnsureRole(context.Background(), f, other)
+	_, _, err := awskit.EnsureRole(context.Background(), f, other, "")
 	require.NoError(t, err)
 
 	deleted, err := awskit.DeleteClaimedRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
@@ -508,7 +616,7 @@ func TestDeleteClaimedRoleKeepsARoleOfAnotherRequest(t *testing.T) {
 
 func TestDeleteRoleNamesTheInstanceProfileThatUsesTheRole(t *testing.T) {
 	f := awsfake.NewIAM()
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	f.AddRoleToInstanceProfile(roleSpec().Name, "nodes")
 
@@ -529,7 +637,7 @@ func TestReplacedRolesSkipsTheCurrentNameInAnyCase(t *testing.T) {
 func TestInlinePoliciesReadsEveryPage(t *testing.T) {
 	f := awsfake.NewIAM()
 	f.PageSize = 1
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	docs := map[string]string{"a": `{"a":"x y"}`, "b": `{"b":1}`, "c": `{"c":[]}`}
 	for name, doc := range docs {
@@ -547,7 +655,7 @@ func TestInlinePoliciesReadsEveryPage(t *testing.T) {
 
 func TestDeleteInlinePolicyIgnoresAMissingPolicy(t *testing.T) {
 	f := awsfake.NewIAM()
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 
 	assert.NoError(t, awskit.DeleteInlinePolicy(context.Background(), f, roleSpec().Name, "gone"))
@@ -566,7 +674,7 @@ func newRoleWith(t *testing.T, attached ...string) *awsfake.IAM {
 	for _, p := range []string{policyA, policyB, policyC} {
 		f.AddPolicy(p)
 	}
-	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec())
+	_, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
 	require.NoError(t, err)
 	for _, p := range attached {
 		f.AttachPolicy(roleSpec().Name, p)

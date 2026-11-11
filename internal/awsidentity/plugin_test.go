@@ -85,7 +85,7 @@ func newTestRole(t *testing.T) (*Plugin, *awsfake.IAM, awskit.Role) {
 	role, _, err := awskit.EnsureRole(context.Background(), fake, awskit.RoleSpec{
 		Name:        "camunda-r",
 		TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
-	})
+	}, "")
 	require.NoError(t, err)
 	return p, fake, role
 }

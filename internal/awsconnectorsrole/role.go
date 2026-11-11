@@ -73,7 +73,7 @@ func (p *Plugin) reconcileRole(
 	}
 	hash := spec.DesiredHash([]byte(strings.Join(sas, ",")), doc, []byte(strings.Join(wanted, ",")))
 
-	role, change, err := p.ensureRole(ctx, req, spec)
+	role, change, err := p.ensureRole(ctx, req, spec, hash)
 	pending, inUse := roleNameInUse(err, status)
 	if inUse {
 		// The outputs still name the old role, so it serves the request until
@@ -83,7 +83,7 @@ func (p *Plugin) reconcileRole(
 			return pending, oldErr
 		}
 		spec.Name = old.Name
-		role, change, err = p.ensureRole(ctx, req, spec)
+		role, change, err = p.ensureRole(ctx, req, spec, hash)
 	}
 	drift := role.Desired == hash
 	var corrected []string
@@ -253,7 +253,7 @@ func (p *Plugin) trustNobody(
 	}
 
 	hash := spec.DesiredHash()
-	role, change, err := p.ensureRole(ctx, req, spec)
+	role, change, err := p.ensureRole(ctx, req, spec, hash)
 	var corrected []string
 	if role.Desired == hash {
 		corrected = append(change.Corrections(role.Name), awskit.AssociationChange{Deleted: deleted}.Corrections()...)
@@ -290,14 +290,16 @@ func (p *Plugin) roleSpec(request *pluginsv1alpha1.PluginRequest, name string, s
 	}, nil
 }
 
-// ensureRole keeps the role of spec, records an event when it created or
-// updated the role, and returns the role and the change, also with an error.
+// ensureRole calls awskit.EnsureRole with spec and hash, records an event
+// when it created or updated the role, and returns the role and the change,
+// also with an error.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	spec awskit.RoleSpec,
+	hash string,
 ) (awskit.Role, awskit.RoleChange, error) {
-	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, spec)
+	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, spec, hash)
 
 	switch {
 	case change.Created:

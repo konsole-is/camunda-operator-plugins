@@ -121,7 +121,7 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{}, err
 	}
 
-	role, change, err := p.ensureRole(ctx, req, spec)
+	role, change, err := p.ensureRole(ctx, req, spec, hash)
 	pending, inUse := roleNameInUse(err, request.Status.Resources)
 	if inUse {
 		// The outputs still name the old role, so it serves the request until
@@ -131,7 +131,7 @@ func (p *Plugin) Reconcile(
 			return pending, oldErr
 		}
 		spec.Name = old.Name
-		role, change, err = p.ensureRole(ctx, req, spec)
+		role, change, err = p.ensureRole(ctx, req, spec, hash)
 	}
 	drift := role.Desired == hash
 	var corrected []string
@@ -361,7 +361,7 @@ func (p *Plugin) trustNobody(
 		return awskit.Role{}, false, nil, err
 	}
 
-	role, change, err := p.ensureRole(ctx, req, spec)
+	role, change, err := p.ensureRole(ctx, req, spec, hash)
 	drift := role.Desired == hash
 	var corrected []string
 	if drift {
@@ -435,14 +435,16 @@ func (p *Plugin) desiredRole(
 	return spec, spec.DesiredHash([]byte(strings.Join(sas, ","))), nil
 }
 
-// ensureRole keeps the role of spec, records an event when it created or
-// updated the role, and returns the role and the change, also with an error.
+// ensureRole calls awskit.EnsureRole with spec and hash, records an event
+// when it created or updated the role, and returns the role and the change,
+// also with an error.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	spec awskit.RoleSpec,
+	hash string,
 ) (awskit.Role, awskit.RoleChange, error) {
-	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, spec)
+	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, spec, hash)
 
 	switch {
 	case change.Created:

@@ -74,7 +74,7 @@ func TestReconcileRetriesARoleNameInUse(t *testing.T) {
 		Name:        p.roleName(request),
 		TrustPolicy: []byte(`{}`),
 		Tags:        awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	res, err := p.Reconcile(context.Background(), pluginkit.Request[Params, map[string]string]{Object: request})
@@ -127,7 +127,7 @@ func TestRetireOldRolesKeepsARoleWhoseNewTagIsNotVisibleYet(t *testing.T) {
 		Name:        "camunda-old",
 		TrustPolicy: []byte(`{}`),
 		Tags:        awskit.RequestTags("team-a", "orders", "orders-identity"),
-	})
+	}, "")
 	require.NoError(t, err)
 	row := pluginsv1alpha1.ResourceRef{Kind: kindIAMRole, Name: old.Name, ID: old.ARN}
 	current := awskit.Role{Name: "camunda-new", ARN: "arn:aws:iam::111122223333:role/camunda-new"}
@@ -176,14 +176,14 @@ func TestReconcileWithoutServiceAccountRetriesARoleWhoseNewTagIsNotVisibleYet(t 
 		TrustPolicy:         nobody,
 		PermissionsBoundary: p.boundary,
 		Tags:                p.roleTags(request),
-	})
+	}, "")
 	require.NoError(t, err)
 	// A role of an older version of the plugin, without the UID tag.
 	old, _, err := awskit.EnsureRole(context.Background(), fake, awskit.RoleSpec{
 		Name:        "camunda-connectors-old",
 		TrustPolicy: []byte(`{}`),
 		Tags:        awskit.RequestTags("team-a", "orders", request.Name),
-	})
+	}, "")
 	require.NoError(t, err)
 	request.Status = pluginsv1alpha1.PluginRequestStatus{
 		Outputs:   map[string]string{awskit.OutputPrincipal: current.ARN},

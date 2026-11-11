@@ -150,7 +150,7 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 				s.request.Name,
 				string(s.request.UID),
 			),
-		})
+		}, "")
 		Expect(err).NotTo(HaveOccurred())
 		// The finalizer holds the request until a manager runs Delete.
 		Expect(renameCluster.k8s.Delete(ctx, s.request)).To(Succeed())
@@ -257,7 +257,7 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 					s.request.Name,
 					string(s.request.UID),
 				),
-			})
+			}, "")
 			Expect(err).NotTo(HaveOccurred())
 			s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
 
@@ -279,7 +279,7 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 			Name:        awskit.RoleName(newPrefix, issuer, s.namespace, "orders"),
 			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
 			Tags:        awskit.ExtraTags(nil).OwnerTags(s.namespace, "orders", s.request.Name, "another-uid"),
-		})
+		}, "")
 		Expect(err).NotTo(HaveOccurred())
 		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Parameters = raw(managedParams(policyB)) })
 

@@ -321,7 +321,7 @@ var _ = Describe("the aws-connectors-role registration", func() {
 			Name:        name,
 			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
 			Tags:        owner,
-		})
+		}, "")
 		Expect(err).NotTo(HaveOccurred())
 		before := len(role.iam.RoleCalls(name))
 

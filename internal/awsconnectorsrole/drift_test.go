@@ -209,4 +209,34 @@ var _ = Describe("drift of a Connectors role", func() {
 			To(BeNumerically(">=", 2), "the first attach failed")
 		expectNoDriftCorrected(req)
 	})
+
+	It("records no DriftCorrected when a change that failed is changed back", func() {
+		req, name := readyDriftRequest(managedParams(policyA))
+
+		// IAM refuses to attach a policy that does not exist, so the pass of
+		// the change stops after it detached policyA.
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(managedParams("arn:aws:iam::111122223333:policy/connectors-missing"))
+		})
+		Eventually(func(g Gomega) {
+			iamRole, _ := rolePodIdentity.iam.Role(name)
+			g.Expect(iamRole.Attached).To(BeEmpty())
+		}, timeout).Should(Succeed())
+
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Parameters = raw(managedParams(policyA))
+		})
+		Eventually(func(g Gomega) {
+			iamRole, _ := rolePodIdentity.iam.Role(name)
+			g.Expect(iamRole.Attached).To(ConsistOf(policyA))
+		}, timeout).Should(Succeed())
+		expectNoDriftCorrected(req)
+
+		_, err := rolePodIdentity.iam.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+			RoleName:  aws.String(name),
+			PolicyArn: aws.String(policyA),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		expectOneDriftCorrected(req, "the managed policy "+policyA+" of the IAM role "+name)
+	})
 })

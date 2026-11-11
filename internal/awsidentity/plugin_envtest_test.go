@@ -209,7 +209,7 @@ var _ = Describe("the AWS identity hub", func() {
 			Name:        name,
 			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
 			Tags:        owner,
-		})
+		}, "")
 		Expect(err).NotTo(HaveOccurred())
 		before := len(irsa.iam.RoleCalls(name))
 
@@ -736,7 +736,7 @@ func (s renameSetup) putRole(name, uid string) {
 		Name:        name,
 		TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
 		Tags:        awskit.ExtraTags(nil).OwnerTags(s.namespace, "orders", s.request.Name, uid),
-	})
+	}, "")
 	Expect(err).NotTo(HaveOccurred())
 }
 
@@ -863,7 +863,7 @@ var _ = Describe("a change of the role name prefix", Serial, func() {
 			Name:        s.oldRole.Name,
 			TrustPolicy: []byte(s.oldRole.TrustPolicy),
 			Tags:        awskit.RequestTags(s.namespace, "orders", s.request.Name),
-		})
+		}, "")
 		Expect(err).NotTo(HaveOccurred())
 
 		h := s.startNewHub()

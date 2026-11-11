@@ -40,6 +40,11 @@ const (
 	TagDesired = "camunda.io/desired"
 )
 
+// DesiredChanging is the TagDesired value of an IAM role while a plugin
+// applies a change of its desired state. A repair of such a role is not
+// drift.
+const DesiredChanging = "changing"
+
 // MaxExtraTags is the most extra tags that Set accepts: the 50 tags of one
 // AWS object, less the three request tags. A plugin that puts tags of its own
 // on an object checks CheckExtraTags too.
