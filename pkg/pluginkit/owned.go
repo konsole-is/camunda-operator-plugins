@@ -74,7 +74,7 @@ func prepareOwned(
 				u.GetNamespace(),
 			)
 		}
-		labels[pluginsv1alpha1.LabelRequestNamespace] = req.Namespace
+		maps.Copy(labels, ClusterScopedLabels(req))
 		u.SetLabels(labels)
 		return u, nil
 	}

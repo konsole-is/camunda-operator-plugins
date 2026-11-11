@@ -17,6 +17,10 @@
 /internal/awskms/                 @sourcehawk
 /charts/aws-kms/                  @sourcehawk
 /docs/plugins/aws-kms.md          @sourcehawk
+/cmd/aws-ebs/                     @sourcehawk
+/internal/awsebs/                 @sourcehawk
+/charts/aws-ebs/                  @sourcehawk
+/docs/plugins/aws-ebs.md          @sourcehawk
 /cmd/aws-s3/                      @sourcehawk
 /internal/awss3/                  @sourcehawk
 /charts/aws-s3/                   @sourcehawk

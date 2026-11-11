@@ -12,5 +12,6 @@ Plugin authors read [pluginkit](pluginkit.md), the shared library of every plugi
 - [AWS identity](plugins/aws-identity.md): one IAM role for each cluster, with the grants of other plugins on it.
 - [AWS Connectors role](plugins/aws-connectors-role.md): an IAM role for the Connectors of each cluster, with the policies that the admin allows.
 - [AWS KMS key](plugins/aws-kms.md): one KMS key with rotation for each cluster, multi-Region on request.
+- [AWS EBS encrypted volumes](plugins/aws-ebs.md): a StorageClass for each cluster that encrypts its EBS volumes with the key of the cluster.
 - [AWS S3 bucket](plugins/aws-s3.md): one S3 bucket for the backups of each cluster, encrypted with the key of the cluster when it has one.
 - [RustFS bucket](plugins/rustfs.md): a RustFS bucket and an access key for the backups of each cluster.

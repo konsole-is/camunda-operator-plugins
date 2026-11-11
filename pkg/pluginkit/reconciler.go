@@ -178,6 +178,14 @@ func (r *reconciler[P, I]) serve(
 		return ctrl.Result{}, nil
 	}
 
+	// A request that never got its required inputs holds no finalizer, as a
+	// request whose parameters never passed the schema.
+	if err := checkInputs(registration, request.Spec.Inputs); err != nil {
+		stage(request, pluginsv1alpha1.ConditionOutputsReady, ReasonMissingInput, err.Error())
+		stage(request, v1.ConditionReady, ReasonMissingInput, err.Error())
+		return ctrl.Result{}, nil
+	}
+
 	// A request whose parameters never passed the schema holds no finalizer,
 	// so its delete never waits for a cleanup that cannot run.
 	if controllerutil.AddFinalizer(request, pluginsv1alpha1.FinalizerCleanup) {
@@ -335,6 +343,27 @@ func (r *reconciler[P, I]) stageReady(
 
 	meta.SetStatusCondition(&request.Status.Conditions, readyCondition(outputs, grants, notReady, request.Generation))
 	request.SetObservedGeneration(request.Generation)
+}
+
+// checkInputs returns an error that names each input that registration marks
+// required and that has no value in inputs, in the order of the registration.
+// An empty value is no value.
+func checkInputs(registration *pluginsv1alpha1.PluginRegistration, inputs map[string]string) error {
+	var missing []string
+	for _, in := range registration.Spec.Inputs {
+		if in.Required && inputs[in.Name] == "" {
+			missing = append(missing, in.Name+" (from "+in.From+")")
+		}
+	}
+
+	switch len(missing) {
+	case 0:
+		return nil
+	case 1:
+		return fmt.Errorf("the request has no value for the required input %s", missing[0])
+	default:
+		return fmt.Errorf("the request has no value for the required inputs %s", strings.Join(missing, ", "))
+	}
 }
 
 func (r *reconciler[P, I]) pluginRequest(
