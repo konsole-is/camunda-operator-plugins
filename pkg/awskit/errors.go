@@ -42,9 +42,17 @@ func Message(err error) string {
 }
 
 // IsNotFound reports whether err says that the object does not exist, in IAM,
-// EKS, or KMS.
+// EKS, KMS, or S3.
 func IsNotFound(err error) bool {
-	return hasCode(err, "NoSuchEntity", "NoSuchEntityException", "ResourceNotFoundException", "NotFoundException")
+	return hasCode(
+		err,
+		"NoSuchEntity",
+		"NoSuchEntityException",
+		"ResourceNotFoundException",
+		"NotFoundException",
+		"NoSuchBucket",
+		"NotFound",
+	)
 }
 
 // IsAlreadyExists reports whether err says that the object exists already.
@@ -65,9 +73,24 @@ func IsMalformedPolicy(err error) bool {
 }
 
 // IsAccessDenied reports whether err says that the caller may not make the
-// call.
+// call. S3 answers Forbidden to a HeadBucket on a bucket that the caller may
+// not read.
 func IsAccessDenied(err error) bool {
-	return hasCode(err, "AccessDenied", "AccessDeniedException")
+	return hasCode(err, "AccessDenied", "AccessDeniedException", "Forbidden")
+}
+
+// IsNotConfigured reports whether err says that a bucket has no
+// configuration of the kind that the call reads: no tag set, no public access
+// block, no default encryption, or no lifecycle configuration. A missing
+// bucket is IsNotFound, not IsNotConfigured.
+func IsNotConfigured(err error) bool {
+	return hasCode(
+		err,
+		"NoSuchTagSet",
+		"NoSuchPublicAccessBlockConfiguration",
+		"ServerSideEncryptionConfigurationNotFoundError",
+		"NoSuchLifecycleConfiguration",
+	)
 }
 
 func hasCode(err error, codes ...string) bool {

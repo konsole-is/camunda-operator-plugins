@@ -35,7 +35,7 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 )
 
-// defaultHome is the region of a KMS that sets no Home.
+// defaultHome is the region of a KMS or an S3 that sets no Home.
 const defaultHome = "eu-west-1"
 
 var (

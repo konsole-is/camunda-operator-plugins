@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -199,20 +200,94 @@ type KMS interface {
 	) (*kms.ScheduleKeyDeletionOutput, error)
 }
 
+// S3 is the part of the S3 API that the plugins call. Each method behaves as
+// the method of the same name of *s3.Client.
+type S3 interface {
+	HeadBucket(ctx context.Context, in *s3.HeadBucketInput, opts ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	CreateBucket(
+		ctx context.Context,
+		in *s3.CreateBucketInput,
+		opts ...func(*s3.Options),
+	) (*s3.CreateBucketOutput, error)
+	DeleteBucket(
+		ctx context.Context,
+		in *s3.DeleteBucketInput,
+		opts ...func(*s3.Options),
+	) (*s3.DeleteBucketOutput, error)
+	ListBuckets(ctx context.Context, in *s3.ListBucketsInput, opts ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
+	GetBucketTagging(
+		ctx context.Context,
+		in *s3.GetBucketTaggingInput,
+		opts ...func(*s3.Options),
+	) (*s3.GetBucketTaggingOutput, error)
+	PutBucketTagging(
+		ctx context.Context,
+		in *s3.PutBucketTaggingInput,
+		opts ...func(*s3.Options),
+	) (*s3.PutBucketTaggingOutput, error)
+	DeleteBucketTagging(
+		ctx context.Context,
+		in *s3.DeleteBucketTaggingInput,
+		opts ...func(*s3.Options),
+	) (*s3.DeleteBucketTaggingOutput, error)
+	GetPublicAccessBlock(
+		ctx context.Context,
+		in *s3.GetPublicAccessBlockInput,
+		opts ...func(*s3.Options),
+	) (*s3.GetPublicAccessBlockOutput, error)
+	PutPublicAccessBlock(
+		ctx context.Context,
+		in *s3.PutPublicAccessBlockInput,
+		opts ...func(*s3.Options),
+	) (*s3.PutPublicAccessBlockOutput, error)
+	GetBucketEncryption(
+		ctx context.Context,
+		in *s3.GetBucketEncryptionInput,
+		opts ...func(*s3.Options),
+	) (*s3.GetBucketEncryptionOutput, error)
+	PutBucketEncryption(
+		ctx context.Context,
+		in *s3.PutBucketEncryptionInput,
+		opts ...func(*s3.Options),
+	) (*s3.PutBucketEncryptionOutput, error)
+	GetBucketLifecycleConfiguration(
+		ctx context.Context,
+		in *s3.GetBucketLifecycleConfigurationInput,
+		opts ...func(*s3.Options),
+	) (*s3.GetBucketLifecycleConfigurationOutput, error)
+	PutBucketLifecycleConfiguration(
+		ctx context.Context,
+		in *s3.PutBucketLifecycleConfigurationInput,
+		opts ...func(*s3.Options),
+	) (*s3.PutBucketLifecycleConfigurationOutput, error)
+	ListObjectsV2(
+		ctx context.Context,
+		in *s3.ListObjectsV2Input,
+		opts ...func(*s3.Options),
+	) (*s3.ListObjectsV2Output, error)
+	DeleteObjects(
+		ctx context.Context,
+		in *s3.DeleteObjectsInput,
+		opts ...func(*s3.Options),
+	) (*s3.DeleteObjectsOutput, error)
+}
+
 var (
 	_ IAM = (*iam.Client)(nil)
 	_ EKS = (*eks.Client)(nil)
 	_ STS = (*sts.Client)(nil)
 	_ KMS = (*kms.Client)(nil)
+	_ S3  = (*s3.Client)(nil)
 )
 
-// Clients are the AWS clients of a plugin. KMS is the client of the region of
-// the config.
+// Clients are the AWS clients of a plugin. KMS and S3 are the clients of the
+// region of the config.
 type Clients struct {
 	IAM IAM
 	EKS EKS
 	STS STS
 	KMS KMS
+	S3  S3
 }
 
 // LoadConfig returns the AWS config of the default chain: the environment,
@@ -240,6 +315,7 @@ func NewClients(cfg aws.Config) Clients {
 		EKS: eks.NewFromConfig(cfg),
 		STS: sts.NewFromConfig(cfg),
 		KMS: kms.NewFromConfig(cfg),
+		S3:  s3.NewFromConfig(cfg),
 	}
 }
 
@@ -248,5 +324,13 @@ func NewClients(cfg aws.Config) Clients {
 func KMSIn(cfg aws.Config) func(region string) KMS {
 	return func(region string) KMS {
 		return kms.NewFromConfig(cfg, func(o *kms.Options) { o.Region = region })
+	}
+}
+
+// S3In returns a function that gives an S3 client of cfg for a region, such
+// as the region of a bucket.
+func S3In(cfg aws.Config) func(region string) S3 {
+	return func(region string) S3 {
+		return s3.NewFromConfig(cfg, func(o *s3.Options) { o.Region = region })
 	}
 }
