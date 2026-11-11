@@ -222,8 +222,10 @@ func TestSandboxDeleteRoleRemovesTheManagedAndInlinePoliciesFirst(t *testing.T) 
 
 	require.NoError(t, err)
 	assert.True(t, deleted)
-	_, err = s.iam.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(spec.Name)})
-	assert.True(t, awskit.IsNotFound(err), "GetRole after the delete: %v", err)
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		_, err := s.iam.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(spec.Name)})
+		assert.True(c, awskit.IsNotFound(err), "GetRole after the delete: %v", err)
+	}, time.Minute, time.Second)
 }
 
 // IAM refuses a TagRole call with more than 50 tags as a ValidationError,
