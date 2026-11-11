@@ -226,7 +226,9 @@ func TestSandboxDeleteRoleRemovesTheManagedAndInlinePoliciesFirst(t *testing.T) 
 	assert.True(t, awskit.IsNotFound(err), "GetRole after the delete: %v", err)
 }
 
-func TestSandboxClaimRoleOfARoleWithFiftyTagsIsLimitExceeded(t *testing.T) {
+// IAM refuses a TagRole call with more than 50 tags as a ValidationError,
+// and a call that brings a role over 50 tags as LimitExceeded.
+func TestSandboxARoleHoldsAtMostFiftyTags(t *testing.T) {
 	s := newSandbox(t)
 	ctx := context.Background()
 	spec := s.role(t, "full", "")
@@ -239,6 +241,16 @@ func TestSandboxClaimRoleOfARoleWithFiftyTagsIsLimitExceeded(t *testing.T) {
 	tags[awskit.TagRequestUID] = "uid-1"
 
 	_, err = awskit.ClaimRole(ctx, s.iam, spec.Name, tags)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ValidationError")
 
-	assert.True(t, awskit.IsLimitExceeded(err), "ClaimRole with 51 tags: %v", err)
+	_, err = s.iam.TagRole(ctx, &iam.TagRoleInput{
+		RoleName: aws.String(spec.Name),
+		Tags:     []types.Tag{{Key: aws.String(awskit.TagRequestUID), Value: aws.String("uid-1")}},
+	})
+	assert.True(t, awskit.IsLimitExceeded(err), "TagRole of a 51st tag: %v", err)
+
+	out, err := s.iam.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(spec.Name)})
+	require.NoError(t, err)
+	assert.Len(t, out.Role.Tags, 50)
 }
