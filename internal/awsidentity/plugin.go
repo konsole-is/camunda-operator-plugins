@@ -136,21 +136,24 @@ func (p *Plugin) Reconcile(
 		spec.Name = old.Name
 		role, change, err = p.ensureRole(ctx, req, spec)
 	}
-	if err != nil {
-		return pluginkit.Result{}, err
-	}
-
 	drift := role.Desired == hash
 	var corrected []string
 	if drift {
 		corrected = change.Corrections(role.Name)
+	}
+	if err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
 	// A ServiceAccount that left the request loses its association before a
 	// Grant step can fail.
 	var leftErr error
 	if p.mode == awskit.ModePodIdentity {
-		leftErr = p.deleteLeftAssociations(ctx, req, sas)
+		var left []string
+		left, leftErr = p.deleteLeftAssociations(ctx, req, sas)
+		if drift {
+			corrected = append(corrected, awskit.AssociationChange{Deleted: left}.Corrections()...)
+		}
 	}
 
 	// The Grants reach the role before an association moves to it, so a pod
@@ -362,14 +365,13 @@ func (p *Plugin) trustNobody(
 	}
 
 	role, change, err := p.ensureRole(ctx, req, spec)
-	if err != nil {
-		return awskit.Role{}, false, nil, err
-	}
-
 	drift := role.Desired == hash
 	var corrected []string
 	if drift {
 		corrected = change.Corrections(role.Name)
+	}
+	if err != nil {
+		return awskit.Role{}, false, corrected, err
 	}
 
 	if p.mode == awskit.ModePodIdentity {
@@ -436,17 +438,14 @@ func (p *Plugin) desiredRole(
 	return spec, spec.DesiredHash([]byte(strings.Join(sas, ","))), nil
 }
 
-// ensureRole keeps the role of spec and records an event when it created or
-// updated the role.
+// ensureRole keeps the role of spec, records an event when it created or
+// updated the role, and returns the role and the change, also with an error.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	spec awskit.RoleSpec,
 ) (awskit.Role, awskit.RoleChange, error) {
 	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, spec)
-	if err != nil {
-		return awskit.Role{}, awskit.RoleChange{}, err
-	}
 
 	switch {
 	case change.Created:
@@ -468,7 +467,7 @@ func (p *Plugin) ensureRole(
 		)
 	}
 
-	return role, change, nil
+	return role, change, err
 }
 
 // roleName is the role of the claim of request. The OIDC issuer names one
@@ -493,12 +492,13 @@ func (p *Plugin) roleTags(request *pluginsv1alpha1.PluginRequest) map[string]str
 }
 
 // deleteLeftAssociations deletes the associations of req of each
-// ServiceAccount that is not in sas, and records an event for each.
+// ServiceAccount that is not in sas, records an event for each, and returns
+// their ServiceAccounts, also with an error.
 func (p *Plugin) deleteLeftAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	sas []string,
-) error {
+) ([]string, error) {
 	request := req.Object
 	deleted, err := awskit.DeleteRequestAssociations(
 		ctx,
@@ -517,7 +517,7 @@ func (p *Plugin) deleteLeftAssociations(
 			sa,
 		)
 	}
-	return err
+	return deleted, err
 }
 
 // ensureAssociations keeps one Pod Identity association of role for each of

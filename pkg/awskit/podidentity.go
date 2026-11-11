@@ -181,8 +181,8 @@ func DeleteAssociations(
 // cluster that carries the TagNamespace, TagClaim, and TagRequest values of
 // tags, on any role, except the associations of the ServiceAccounts in keep.
 // It returns the ServiceAccounts of the deleted
-// associations, sorted. It finds an association that a failed or interrupted
-// change of the role left behind.
+// associations, sorted, also with an error. It finds an association that a
+// failed or interrupted change of the role left behind.
 func DeleteRequestAssociations(
 	ctx context.Context,
 	c EKS,
@@ -201,7 +201,8 @@ func DeleteRequestAssociations(
 			continue
 		}
 		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {
-			return nil, err
+			slices.Sort(deleted)
+			return deleted, err
 		}
 		deleted = append(deleted, a.ServiceAccount)
 	}

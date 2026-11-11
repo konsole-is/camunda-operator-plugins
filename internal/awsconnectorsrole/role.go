@@ -86,14 +86,13 @@ func (p *Plugin) reconcileRole(
 		spec.Name = old.Name
 		role, change, err = p.ensureRole(ctx, req, spec)
 	}
-	if err != nil {
-		return pluginkit.Result{}, err
-	}
-
 	drift := role.Desired == hash
 	var corrected []string
 	if drift {
 		corrected = change.Corrections(role.Name)
+	}
+	if err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
 	// Like the trust policy of IRSA, so that a former ServiceAccount loses its
@@ -202,14 +201,15 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 		return pluginkit.Result{}, err
 	}
 	if old.ARN != "" {
-		_, corrected, err := p.trustNobody(ctx, req, old.Name)
+		_, corrected, err := p.trustNobody(ctx, req, old.Name, nil)
 		res.Corrected = corrected
 		if err != nil {
 			return pluginkit.Result{Corrected: res.Corrected}, err
 		}
 	}
 
-	if err := p.deleteAssociations(ctx, req); err != nil {
+	deleted, err := p.deleteAssociations(ctx, req)
+	if err != nil {
 		return pluginkit.Result{Corrected: res.Corrected}, err
 	}
 
@@ -218,7 +218,7 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 		return res, err
 	}
 
-	role, corrected, err := p.trustNobody(ctx, req, current)
+	role, corrected, err := p.trustNobody(ctx, req, current, deleted)
 	res.Corrected = append(res.Corrected, corrected...)
 	if inUse, ok := roleNameInUse(err, status); ok {
 		inUse.Corrected = res.Corrected
@@ -240,26 +240,28 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 }
 
 // trustNobody makes the role name of req trust nobody, and then tags the
-// role with the hash of that state. It returns the drift that it repaired.
+// role with the hash of that state. It returns the drift that it repaired,
+// also with an error. The associations of the ServiceAccounts in deleted,
+// which the pass deleted, count as drift of the role.
 func (p *Plugin) trustNobody(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	name string,
+	deleted []string,
 ) (awskit.Role, []string, error) {
 	spec, err := p.roleSpec(req.Object, name, nil)
 	if err != nil {
 		return awskit.Role{}, nil, err
 	}
 
-	role, change, err := p.ensureRole(ctx, req, spec)
-	if err != nil {
-		return awskit.Role{}, nil, err
-	}
-
 	hash := spec.DesiredHash()
+	role, change, err := p.ensureRole(ctx, req, spec)
 	var corrected []string
 	if role.Desired == hash {
-		corrected = change.Corrections(role.Name)
+		corrected = append(change.Corrections(role.Name), awskit.AssociationChange{Deleted: deleted}.Corrections()...)
+	}
+	if err != nil {
+		return awskit.Role{}, corrected, err
 	}
 
 	_, err = awskit.MarkDesired(ctx, p.clients.IAM, role, spec.Tags, hash)
@@ -290,17 +292,14 @@ func (p *Plugin) roleSpec(request *pluginsv1alpha1.PluginRequest, name string, s
 	}, nil
 }
 
-// ensureRole keeps the role of spec and records an event when it created or
-// updated the role.
+// ensureRole keeps the role of spec, records an event when it created or
+// updated the role, and returns the role and the change, also with an error.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	spec awskit.RoleSpec,
 ) (awskit.Role, awskit.RoleChange, error) {
 	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, spec)
-	if err != nil {
-		return awskit.Role{}, awskit.RoleChange{}, err
-	}
 
 	switch {
 	case change.Created:
@@ -322,7 +321,7 @@ func (p *Plugin) ensureRole(
 		)
 	}
 
-	return role, change, nil
+	return role, change, err
 }
 
 // roleName is the role of the claim of request. The OIDC issuer names one
@@ -437,7 +436,7 @@ func (p *Plugin) ensureAttachedPolicies(
 // deleteRole deletes the associations of req, and each role of req with its
 // policies: the role of its current name and the roles of its status.
 func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
-	if err := p.deleteAssociations(ctx, req); err != nil {
+	if _, err := p.deleteAssociations(ctx, req); err != nil {
 		return err
 	}
 

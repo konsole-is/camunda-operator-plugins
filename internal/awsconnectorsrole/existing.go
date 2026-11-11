@@ -34,7 +34,7 @@ func (p *Plugin) reconcileExisting(
 ) (pluginkit.Result, error) {
 	sas := trustedServiceAccounts(req.Object.Spec.Target)
 	if len(sas) == 0 {
-		if err := p.deleteAssociations(ctx, req); err != nil {
+		if _, err := p.deleteAssociations(ctx, req); err != nil {
 			return pluginkit.Result{}, err
 		}
 		return pluginkit.Result{Pending: missingServiceAccount()}, nil

@@ -92,10 +92,14 @@ func (p *Plugin) ensureAssociations(
 }
 
 // deleteAssociations deletes, with Pod Identity, each association of the
-// request on any role. With IRSA it does nothing.
-func (p *Plugin) deleteAssociations(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
+// request on any role, and returns their ServiceAccounts, also with an error.
+// With IRSA it does nothing.
+func (p *Plugin) deleteAssociations(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+) ([]string, error) {
 	if p.mode != awskit.ModePodIdentity {
-		return nil
+		return nil, nil
 	}
 
 	request := req.Object
@@ -108,7 +112,7 @@ func (p *Plugin) deleteAssociations(ctx context.Context, req pluginkit.Request[P
 		nil,
 	)
 	p.associationsDeleted(req, deleted)
-	return err
+	return deleted, err
 }
 
 // associationsDeleted records an event for each ServiceAccount in sas whose

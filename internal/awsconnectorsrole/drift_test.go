@@ -24,11 +24,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	gomegatypes "github.com/onsi/gomega/types"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
+	v1 "github.com/konsole-is/camunda-operator/api/v1"
+
+	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 )
 
 // driftQuiet is longer than two resyncs of rolePodIdentity.
@@ -129,6 +133,50 @@ var _ = Describe("drift of a Connectors role", func() {
 
 		expectOneDriftCorrected(req, "the Pod Identity association of the ServiceAccount orders-connectors")
 		Expect(associationsIn(rolePodIdentity, req.Namespace)).To(HaveLen(1))
+	})
+
+	It("records the repair of the trust policy when a later step of the pass fails", func() {
+		req, name := readyDriftRequest(managedParams(policyA))
+
+		_, err := rolePodIdentity.iam.UpdateAssumeRolePolicy(ctx, &iam.UpdateAssumeRolePolicyInput{
+			RoleName:       aws.String(name),
+			PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[]}`),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = rolePodIdentity.iam.TagRole(ctx, &iam.TagRoleInput{
+			RoleName: aws.String(name),
+			Tags:     []iamtypes.Tag{{Key: aws.String(awskit.TagClaim), Value: aws.String("changed")}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		rolePodIdentity.iam.FailNext("TagRole", errors.New("the role cannot be tagged"))
+
+		Eventually(func(g Gomega) {
+			g.Expect(eventCount(g, rolePodIdentity, req.Namespace, "DriftCorrected")).To(Equal(2))
+			iamRole, _ := rolePodIdentity.iam.Role(name)
+			g.Expect(iamRole.Tags).To(HaveKeyWithValue(awskit.TagClaim, "orders"))
+		}, timeout).Should(Succeed())
+		Expect(eventNotes(Default, rolePodIdentity, req.Namespace, "DriftCorrected")).
+			To(ContainElement(ContainSubstring("the trust policy of the IAM role " + name)))
+	})
+
+	It("records one DriftCorrected for an association of a request that names no ServiceAccount", func() {
+		req, name := readyDriftRequest(managedParams(policyA))
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+		waitReason(rolePodIdentity, req, v1.ConditionReady, "MissingServiceAccount")
+		Expect(associationsIn(rolePodIdentity, req.Namespace)).To(BeEmpty())
+		iamRole, _ := rolePodIdentity.iam.Role(name)
+
+		_, err := rolePodIdentity.eks.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
+			ClusterName:    aws.String(eksCluster),
+			Namespace:      aws.String(req.Namespace),
+			ServiceAccount: aws.String("orders-connectors"),
+			RoleArn:        aws.String(iamRole.ARN),
+			Tags:           awskit.RequestTags(req.Namespace, "orders", req.Name),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		expectOneDriftCorrected(req, "the Pod Identity association of the ServiceAccount orders-connectors")
+		Expect(associationsIn(rolePodIdentity, req.Namespace)).To(BeEmpty())
 	})
 
 	It("records no DriftCorrected for a change of the parameters", func() {

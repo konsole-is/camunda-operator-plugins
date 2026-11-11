@@ -339,6 +339,22 @@ func TestDeleteRequestAssociationsWithoutKeepDeletesEachOfTheRequest(t *testing.
 	assert.Equal(t, "orders-camunda", f.Associations()[0].ServiceAccount)
 }
 
+func TestDeleteRequestAssociationsReturnsTheDeletedServiceAccountsWithAnError(t *testing.T) {
+	f := awsfake.NewEKS()
+	request := awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
+	createAssociation(t, f, "old-a", roleA, request)
+	createAssociation(t, f, "old-b", roleA, request)
+	f.FailNext("DeletePodIdentityAssociation", nil)
+	f.FailNext("DeletePodIdentityAssociation", errors.New("throttled"))
+
+	deleted, err := awskit.DeleteRequestAssociations(context.Background(), f, "eks", "team-a", request, nil)
+
+	require.Error(t, err)
+	require.Len(t, deleted, 1)
+	require.Len(t, f.Associations(), 1)
+	assert.NotEqual(t, deleted[0], f.Associations()[0].ServiceAccount)
+}
+
 func connectorsTags() map[string]string {
 	return awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
 }

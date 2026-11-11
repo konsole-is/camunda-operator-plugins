@@ -17,11 +17,13 @@ limitations under the License.
 package awsidentity_test
 
 import (
+	"errors"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	gomegatypes "github.com/onsi/gomega/types"
@@ -151,6 +153,45 @@ var _ = Describe("drift of a role", Serial, func() {
 		s.expectOneDriftCorrected("the trust policy of the IAM role " + s.role)
 		Expect(subjects(Default, roleOf(Default, s.hub, s.namespace))).
 			To(ConsistOf("system:serviceaccount:" + s.namespace + ":orders-camunda"))
+	})
+
+	It("records the repair of the trust policy when a later step of the pass fails", func() {
+		s := newDriftSetup(awskit.ModeIRSA, "aws-irsa-")
+
+		_, err := s.hub.iam.UpdateAssumeRolePolicy(ctx, &iam.UpdateAssumeRolePolicyInput{
+			RoleName:       aws.String(s.role),
+			PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[]}`),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = s.hub.iam.TagRole(ctx, &iam.TagRoleInput{
+			RoleName: aws.String(s.role),
+			Tags:     []iamtypes.Tag{{Key: aws.String(awskit.TagClaim), Value: aws.String("changed")}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		s.hub.iam.FailNext("TagRole", errors.New("the role cannot be tagged"))
+
+		Eventually(func(g Gomega) {
+			g.Expect(eventCount(g, s.namespace, "DriftCorrected")).To(Equal(2))
+			g.Expect(roleOf(g, s.hub, s.namespace).Tags).To(HaveKeyWithValue(awskit.TagClaim, "orders"))
+		}, timeout).Should(Succeed())
+		Expect(eventNotes(Default, s.namespace, "DriftCorrected")).
+			To(ContainElement(ContainSubstring("the trust policy of the IAM role " + s.role)))
+	})
+
+	It("records one DriftCorrected for an association of a ServiceAccount that the request does not name", func() {
+		s := newDriftSetup(awskit.ModePodIdentity, "aws-pod-identity-")
+
+		_, err := s.hub.eks.CreatePodIdentityAssociation(ctx, &eks.CreatePodIdentityAssociationInput{
+			ClusterName:    aws.String(eksCluster),
+			Namespace:      aws.String(s.namespace),
+			ServiceAccount: aws.String("orders-old"),
+			RoleArn:        aws.String(roleOf(Default, s.hub, s.namespace).ARN),
+			Tags:           awskit.RequestTags(s.namespace, "orders", s.request.Name),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		s.expectOneDriftCorrected("the Pod Identity association of the ServiceAccount orders-old")
+		Expect(associationsIn(s.hub, s.namespace)).To(ConsistOf("orders-camunda"))
 	})
 
 	It("records one DriftCorrected for a deleted association", func() {
