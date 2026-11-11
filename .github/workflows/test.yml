@@ -47,3 +47,6 @@ jobs:
 
       - name: Check that the published API check refuses the root module
         run: make test-published-api
+
+      - name: Run the tests of the CI scripts
+        run: make test-scripts
