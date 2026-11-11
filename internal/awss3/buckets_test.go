@@ -35,7 +35,10 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
 )
 
-const keyARN = "arn:aws:kms:eu-west-1:111122223333:key/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+const (
+	keyARN   = "arn:aws:kms:eu-west-1:111122223333:key/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+	otherUID = "uid-other"
+)
 
 // testRef is the bucket of the request orders-backup of the claim orders.
 func testRef(region string) bucketRef {
@@ -74,8 +77,10 @@ func ensured(t *testing.T) (buckets, *awsfake.S3, bucketRef) {
 // outside the plugin does.
 func createInput(name, region string) *s3.CreateBucketInput {
 	return &s3.CreateBucketInput{
-		Bucket:                    aws.String(name),
-		CreateBucketConfiguration: &types.CreateBucketConfiguration{LocationConstraint: types.BucketLocationConstraint(region)},
+		Bucket: aws.String(name),
+		CreateBucketConfiguration: &types.CreateBucketConfiguration{
+			LocationConstraint: types.BucketLocationConstraint(region),
+		},
 	}
 }
 
@@ -301,7 +306,7 @@ func TestEnsureMergesTheTagsByKey(t *testing.T) {
 
 func TestEnsureRefusesABucketWithAnotherUID(t *testing.T) {
 	b, f, ref := ensured(t)
-	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.Tags[awskit.TagRequestUID] = "uid-other" })
+	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.Tags[awskit.TagRequestUID] = otherUID })
 	before := bucketOfFake(t, f, ref.Name)
 
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
@@ -309,7 +314,7 @@ func TestEnsureRefusesABucketWithAnotherUID(t *testing.T) {
 	var inUse bucketInUseError
 	require.ErrorAs(t, err, &inUse)
 	assert.Contains(t, err.Error(), ref.Name)
-	assert.Contains(t, err.Error(), "the request team-a/orders-backup with the UID uid-other")
+	assert.Contains(t, err.Error(), "the request team-a/orders-backup with the UID "+otherUID)
 	assert.Equal(t, before, bucketOfFake(t, f, ref.Name), "the plugin changes nothing on the bucket")
 }
 
@@ -355,7 +360,7 @@ func TestEnsureReadsTheTagsAfterACreateThatAnsweredSuccess(t *testing.T) {
 	b, f := newBuckets()
 	ref := testRef("us-east-1")
 	other := ref
-	other.UID = "uid-other"
+	other.UID = otherUID
 	_, err := b.ensure(context.Background(), other, testWant(other), prior{})
 	require.NoError(t, err)
 	before := bucketOfFake(t, f, ref.Name)
@@ -366,7 +371,7 @@ func TestEnsureReadsTheTagsAfterACreateThatAnsweredSuccess(t *testing.T) {
 
 	var inUse bucketInUseError
 	require.ErrorAs(t, err, &inUse, "in us-east-1 a create of an owned name answers success")
-	assert.Contains(t, inUse.Owner, "uid-other")
+	assert.Contains(t, inUse.Owner, otherUID)
 	assert.Empty(t, actions, "no create is reported")
 	assert.Equal(t, before, bucketOfFake(t, f, ref.Name))
 }
@@ -500,7 +505,7 @@ func TestDeleteOfAMissingBucketIsDone(t *testing.T) {
 func TestDeleteKeepsABucketOfAnotherRequest(t *testing.T) {
 	b, f, ref := ensured(t)
 	fill(f, ref.Name, 3)
-	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.Tags[awskit.TagRequestUID] = "uid-other" })
+	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.Tags[awskit.TagRequestUID] = otherUID })
 
 	actions, remain, err := b.delete(context.Background(), ref)
 
@@ -556,11 +561,11 @@ func TestReleaseDeletesTheTagSetWhenNoTagStays(t *testing.T) {
 
 func TestReleaseKeepsABucketOfAnotherRequest(t *testing.T) {
 	b, f, ref := ensured(t)
-	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.Tags[awskit.TagRequestUID] = "uid-other" })
+	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.Tags[awskit.TagRequestUID] = otherUID })
 
 	actions, err := b.release(context.Background(), ref)
 
 	require.NoError(t, err)
 	assert.Empty(t, actions)
-	assert.Equal(t, "uid-other", bucketOfFake(t, f, ref.Name).Tags[awskit.TagRequestUID])
+	assert.Equal(t, otherUID, bucketOfFake(t, f, ref.Name).Tags[awskit.TagRequestUID])
 }

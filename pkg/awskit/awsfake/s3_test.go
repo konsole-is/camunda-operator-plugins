@@ -681,7 +681,10 @@ func deleteKeys(t *testing.T, f *S3, ids ...types.ObjectIdentifier) *s3.DeleteOb
 func TestS3GivesTheVersioningOfABucket(t *testing.T) {
 	f := versionedBucket(t, "")
 
-	out, err := f.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: aws.String("bucket-1")})
+	out, err := f.GetBucketVersioning(
+		context.Background(),
+		&s3.GetBucketVersioningInput{Bucket: aws.String("bucket-1")},
+	)
 	require.NoError(t, err)
 	assert.Empty(t, out.Status, "a bucket that never had versioning on has no status")
 

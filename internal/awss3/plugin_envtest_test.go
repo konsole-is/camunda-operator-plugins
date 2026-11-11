@@ -182,7 +182,7 @@ const bucketGrant = `{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLo
 var _ = Describe("the AWS S3 plugin", func() {
 	It("creates the bucket, the contract, and both grants for a request with a key", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, map[string]string{"key": keyARN, "principal": roleARN}, "",
+		request := bucketRequest(ns, map[string]string{"key": keyARN, "principal": roleARN},
 			pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		name := bucketNameOf(ns)
@@ -231,7 +231,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 
 	It("gives a request without a key SSE-S3 and only the bucket grant", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, nil, "", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 
 		Eventually(func(g Gomega) {
@@ -248,7 +248,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 	It("refuses a bucket name of another request", func() {
 		ns := newNamespace()
 		takeName(ns, "uid-of-another-cluster")
-		request := bucketRequest(ns, nil, "", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -270,7 +270,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 	It("refuses a bucket name of another AWS account", func() {
 		ns := newNamespace()
 		fake.AddForeignBucket(bucketNameOf(ns), home)
-		request := bucketRequest(ns, nil, "", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
 		Expect(k8s.Create(ctx, request)).To(Succeed())
 
 		Eventually(func(g Gomega) {
@@ -283,9 +283,27 @@ var _ = Describe("the AWS S3 plugin", func() {
 		Eventually(gone(request), timeout).Should(BeTrue())
 	})
 
+	It("keeps the record of its bucket when the bucket gets another UID", func() {
+		ns := newNamespace()
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
+		readyRequest(request)
+		name := bucketNameOf(ns)
+		fake.Edit(name, func(b *awsfake.Bucket) { b.Tags[awskit.TagRequestUID] = "uid-of-another-cluster" })
+
+		poke(request)
+
+		Eventually(func(g Gomega) {
+			g.Expect(conditionOf(g, request, pluginsv1alpha1.ConditionOutputsReady).Reason).
+				To(Equal(awss3.ReasonBucketNameInUse))
+			g.Expect(read(g, request).Status.Resources).To(ContainElement(SatisfyAll(
+				HaveField("Kind", "S3Bucket"), HaveField("Name", name), HaveField("Location", home),
+			)))
+		}, timeout).Should(Succeed())
+	})
+
 	It("keeps the bucket when the region parameter changes", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, nil, "", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 
 		Eventually(func(g Gomega) {
@@ -309,7 +327,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 
 	It("repairs a public access block that was turned off", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, nil, "", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		name := bucketNameOf(ns)
 		fake.Edit(name, func(b *awsfake.Bucket) { b.PublicAccessBlock.BlockPublicPolicy = aws.Bool(false) })
@@ -324,7 +342,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 
 	It("deletes a bucket with objects and its contract in more than one pass", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, nil, "", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		name := bucketNameOf(ns)
 		fill(name, 2500)
@@ -345,7 +363,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 
 	It("goes on with the delete of a bucket after a restart of the plugin", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, nil, "", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		name := bucketNameOf(ns)
 		fill(name, 4000)
@@ -366,7 +384,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 
 	It("deletes a bucket whose versioning someone turned on", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, nil, "", pluginsv1alpha1.DeletionPolicyDelete)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
 		readyRequest(request)
 		name := bucketNameOf(ns)
 		fill(name, 5)
@@ -387,7 +405,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 
 	It("orphans the bucket and the contract", func() {
 		ns := newNamespace()
-		request := bucketRequest(ns, map[string]string{"key": keyARN}, "", pluginsv1alpha1.DeletionPolicyOrphan)
+		request := bucketRequest(ns, map[string]string{"key": keyARN}, pluginsv1alpha1.DeletionPolicyOrphan)
 		readyRequest(request)
 		name := bucketNameOf(ns)
 		fill(name, 2)

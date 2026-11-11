@@ -83,7 +83,9 @@ var _ = Describe("the conformance suite", func() {
 			conformance.GrantRequires,
 			conformance.GrantReady,
 		} {
-			Expect(results).To(ContainElement(And(HaveField("ID", id), HaveField("Outcome", conformance.OutcomePassed))))
+			Expect(
+				results,
+			).To(ContainElement(And(HaveField("ID", id), HaveField("Outcome", conformance.OutcomePassed))))
 		}
 
 		// Each case runs once with Delete and once with Orphan. Only the

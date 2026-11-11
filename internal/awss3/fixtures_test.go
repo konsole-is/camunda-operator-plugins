@@ -210,14 +210,13 @@ func raw(s string) *apiextensionsv1.JSON {
 }
 
 // bucketRequest is the backup storage request of the claim orders, for the
-// cluster of the same name, with inputs, params, and policy.
+// cluster of the same name, with inputs and policy.
 func bucketRequest(
 	namespace string,
 	inputs map[string]string,
-	params string,
 	policy pluginsv1alpha1.DeletionPolicy,
 ) *pluginsv1alpha1.PluginRequest {
-	request := &pluginsv1alpha1.PluginRequest{
+	return &pluginsv1alpha1.PluginRequest{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
 			Name:      "orders-backup-storage",
@@ -239,8 +238,4 @@ func bucketRequest(
 			DeletionPolicy: policy,
 		},
 	}
-	if params != "" {
-		request.Spec.Parameters = raw(params)
-	}
-	return request
 }

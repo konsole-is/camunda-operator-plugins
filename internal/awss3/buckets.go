@@ -443,12 +443,13 @@ func abortRule(days int32) types.LifecycleRule {
 }
 
 // sameAbortRule reports whether r aborts an incomplete upload of each object
-// after days, and does nothing else.
+// after days, and does nothing else. The plugin writes its rule with an empty
+// filter, so a rule without a filter is not its rule as written.
 func sameAbortRule(r types.LifecycleRule, days int32) bool {
 	f := r.Filter
-	everyObject := f == nil || aws.ToString(f.Prefix) == "" && f.And == nil && f.Tag == nil &&
+	everyObject := f != nil && aws.ToString(f.Prefix) == "" && f.And == nil && f.Tag == nil &&
 		f.ObjectSizeGreaterThan == nil && f.ObjectSizeLessThan == nil
-	return r.Status == types.ExpirationStatusEnabled && everyObject && aws.ToString(r.Prefix) == "" &&
+	return r.Status == types.ExpirationStatusEnabled && everyObject &&
 		r.AbortIncompleteMultipartUpload != nil &&
 		aws.ToInt32(r.AbortIncompleteMultipartUpload.DaysAfterInitiation) == days &&
 		r.Expiration == nil && len(r.Transitions) == 0 &&

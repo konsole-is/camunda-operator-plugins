@@ -125,6 +125,7 @@ func (p *Plugin) Reconcile(
 	case errors.As(err, &inUse):
 		return pluginkit.Result{
 			Pending:      &pluginkit.Waiting{Reason: ReasonBucketNameInUse, Message: err.Error()},
+			Resources:    ownRows(req.Object),
 			RequeueAfter: inUseRequeue,
 			Corrected:    corrected,
 		}, nil
@@ -203,7 +204,7 @@ func changedBucket(recorded *pluginsv1alpha1.ResourceRef, ref bucketRef) *plugin
 }
 
 // ownRows returns the rows of status.resources that the plugin wrote, so
-// that a Pending result keeps them.
+// that a Pending result keeps the record of the bucket.
 func ownRows(request *pluginsv1alpha1.PluginRequest) []pluginsv1alpha1.ResourceRef {
 	return slices.DeleteFunc(slices.Clone(request.Status.Resources), func(r pluginsv1alpha1.ResourceRef) bool {
 		return r.Kind != kindS3Bucket && r.Kind != kindObjectStorageConfig

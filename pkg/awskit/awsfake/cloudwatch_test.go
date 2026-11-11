@@ -31,13 +31,13 @@ import (
 
 var day = time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
 
-// sizeQuery is the query of BucketSizeBytes of bucket in [start, end).
-func sizeQuery(bucket string, start, end time.Time) *cloudwatch.GetMetricStatisticsInput {
+// sizeQuery is the query of BucketSizeBytes of bucket-1 in [start, end).
+func sizeQuery(start, end time.Time) *cloudwatch.GetMetricStatisticsInput {
 	return &cloudwatch.GetMetricStatisticsInput{
 		Namespace:  aws.String("AWS/S3"),
 		MetricName: aws.String("BucketSizeBytes"),
 		Dimensions: []types.Dimension{
-			{Name: aws.String("BucketName"), Value: aws.String(bucket)},
+			{Name: aws.String("BucketName"), Value: aws.String("bucket-1")},
 			{Name: aws.String("StorageType"), Value: aws.String("StandardStorage")},
 		},
 		StartTime:  aws.Time(start),
@@ -48,7 +48,7 @@ func sizeQuery(bucket string, start, end time.Time) *cloudwatch.GetMetricStatist
 }
 
 func averages(out *cloudwatch.GetMetricStatisticsOutput) []float64 {
-	var values []float64
+	values := make([]float64, 0, len(out.Datapoints))
 	for _, p := range out.Datapoints {
 		values = append(values, aws.ToFloat64(p.Average))
 	}
@@ -64,7 +64,7 @@ func TestCloudWatchGivesThePointsInTheWindow(t *testing.T) {
 
 	out, err := f.In("eu-west-1").GetMetricStatistics(
 		context.Background(),
-		sizeQuery("bucket-1", day.Add(-time.Hour), day.Add(24*time.Hour)),
+		sizeQuery(day.Add(-time.Hour), day.Add(24*time.Hour)),
 	)
 
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestCloudWatchGivesThePointsInTheWindow(t *testing.T) {
 func TestCloudWatchGivesNoPointForAnotherQuery(t *testing.T) {
 	f := NewCloudWatch()
 	f.SetBucketSize("eu-west-1", "bucket-1", 1, day)
-	query := sizeQuery("bucket-1", day.Add(-time.Hour), day.Add(time.Hour))
+	query := sizeQuery(day.Add(-time.Hour), day.Add(time.Hour))
 	query.Dimensions[1].Value = aws.String("StandardIAStorage")
 
 	out, err := f.In("eu-west-1").GetMetricStatistics(context.Background(), query)
@@ -90,7 +90,7 @@ func TestCloudWatchKeepsEachRegionApart(t *testing.T) {
 
 	out, err := f.In("eu-west-1").GetMetricStatistics(
 		context.Background(),
-		sizeQuery("bucket-1", day.Add(-time.Hour), day.Add(time.Hour)),
+		sizeQuery(day.Add(-time.Hour), day.Add(time.Hour)),
 	)
 
 	require.NoError(t, err)
@@ -101,7 +101,7 @@ func TestCloudWatchFailNextFailsTheNextCall(t *testing.T) {
 	f := NewCloudWatch()
 	boom := errors.New("boom")
 	f.FailNext("GetMetricStatistics", boom)
-	query := sizeQuery("bucket-1", day, day.Add(time.Hour))
+	query := sizeQuery(day, day.Add(time.Hour))
 
 	_, err := f.In("eu-west-1").GetMetricStatistics(context.Background(), query)
 	require.ErrorIs(t, err, boom)
