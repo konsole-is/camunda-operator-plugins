@@ -10,6 +10,8 @@
 #   KIND_CLUSTER  the name of the kind cluster (required)
 #   OPERATOR_DIR  the checkout of the operator, as make operator-source
 #                 writes it (required)
+#   KIND_CONFIG   a kind config file, such as the kind.yaml of
+#                 hack/aws-sandbox/issuer.sh up (optional)
 set -euo pipefail
 
 : "${KIND_CLUSTER:?KIND_CLUSTER is not set}"
@@ -17,7 +19,9 @@ set -euo pipefail
 operator_image=camunda-operator:kind
 
 echo "==> Creating the kind cluster $KIND_CLUSTER"
-kind create cluster --name "$KIND_CLUSTER" --wait 120s
+args=(--name "$KIND_CLUSTER" --wait 120s)
+[ -z "${KIND_CONFIG:-}" ] || args+=(--config "$KIND_CONFIG")
+kind create cluster "${args[@]}"
 
 echo "==> Building the operator image and loading it into kind"
 make -C "$OPERATOR_DIR" docker-build IMG="$operator_image"
