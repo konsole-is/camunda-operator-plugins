@@ -47,32 +47,66 @@ A maintainer approves a plugin when all of these rules are true:
 
 ## 6. The conformance job
 
-The workflow `.github/workflows/conformance.yml` has one job for each plugin, `Conformance of <plugin>`. The job creates a kind cluster, installs the operator from its chart, installs the chart of the plugin, and runs the conformance suite of the operator against one registration of the plugin. The operator is built from the commit that the api module of `go.mod` names.
+The workflow `.github/workflows/conformance.yml` has one job for each plugin. The job creates a kind cluster, installs the operator from its chart, installs the chart of the plugin, and runs the conformance suite of the operator against the registrations of the plugin. The operator is built from the commit that the api module of `go.mod` names.
 
-The job runs on each push to `main` and on each pull request. On a pull request that changes only the docs, Markdown files, or the files of other plugins, the job stops after its first steps, and its check passes.
+The workflow has two matrices:
+
+- The job `conformance`, with the check `Conformance of <plugin>`, is for a plugin that needs only the kind cluster. It runs on each push to `main` and on each pull request.
+- The job `conformance-aws`, with the check `Conformance of <plugin> in the AWS sandbox`, is for a plugin that calls AWS. It runs against the AWS sandbox account. See [The AWS jobs](#the-aws-jobs).
+
+On a pull request that changes only the docs, Markdown files, or the files of other plugins, a job that runs stops after its first steps, and its check passes.
 
 To add the job of a new plugin:
 
-1. Add the name of the plugin, the directory name in `cmd/`, as one line to `matrix.plugin` in `.github/workflows/conformance.yml`.
-2. Add the directory `test/conformance/<plugin>/` with these three files:
+1. Add the name of the plugin, the directory name in `cmd/`, as one line to `matrix.plugin` of the job `conformance` in `.github/workflows/conformance.yml`. For a plugin that calls AWS, add it to `matrix.plugin` of the job `conformance-aws` instead.
+2. Add the directory `test/conformance/<plugin>/` with these files:
 
     | File | What it holds |
     | --- | --- |
     | `setup.sh` | An executable script that installs what the plugin needs before its chart, such as a Gateway API implementation or a storage server, and creates the targets of the requests. The scripts in `test/kind/` install the shared parts. |
     | `values.yaml` | The chart values of the run. The job sets the image of the plugin. |
     | `config.yaml` | The config of `plugin-conformance`: the registration, the namespace, the cases, and the timeouts. |
+    | `config-<name>.yaml` | Optional. One more run of the suite, for example against a second registration of the chart. Its report is `<plugin>-<name>.xml`. |
+    | `check.sh` | Optional. An executable script that runs after the suites, for a promise of the plugin that the suite does not check. The job fails when it fails. |
+    | `controller-policy.json` | AWS plugins only. The IAM policy of the role of the controller. Copy it from the docs page of the plugin, so that a policy on the page that is too small fails the job. |
 
-3. A maintainer then makes the check `Conformance of <plugin>` required for the `main` branch.
+3. A maintainer then makes the check `Conformance of <plugin>` required for the `main` branch. An AWS check is never required.
 
-Copy `test/conformance/gateway-access/` or `test/conformance/rustfs/` as a start. `setup.sh` runs with `kubectl` and `helm` pointed at the kind cluster, from the root of the repository. It gets `CHART_NAMESPACE`, the namespace of the release, in its environment.
+Copy `test/conformance/gateway-access/` or `test/conformance/rustfs/` as a start, or `test/conformance/aws-kms/` for an AWS plugin. `setup.sh` and `check.sh` run with `kubectl` and `helm` pointed at the kind cluster, from the root of the repository. They get `CHART_NAMESPACE`, the namespace of the release, in their environment.
 
-`make conformance-kind PLUGIN=<plugin>` runs the job on your machine, after `make operator-source`. It needs Docker, kind, kubebuilder, kubectl, and helm. It creates the kind cluster `camunda-operator-plugins` and leaves it after the run. Delete it with `kind delete cluster --name camunda-operator-plugins`.
+Before the job uses `values.yaml` and each config, it replaces these variables of the run in them:
+
+| Variable | Value |
+| --- | --- |
+| `${RUN_ID}` | The ID of the run, such as `cpo-ci-19234567890-1-0`. |
+| `${AWS_ACCOUNT_ID}` | The sandbox account. |
+| `${AWS_REGION}` | The region of the sandbox. |
+| `${AWS_KMS_REPLICA_REGION}` | The second KMS region of the sandbox. |
+| `${AWS_OIDC_PROVIDER_ARN}` | The IAM OIDC provider of the kind cluster of the run. |
+
+The job fails on a file that names one of these variables when the variable has no value. A kind job sets none of them. Other text, such as `{name}` or `$5`, stays as it is. `setup.sh` fills the variables into its own files, such as `controller-policy.json`, with `test/conformance/render.sh <file>`.
+
+`make conformance-kind PLUGIN=<plugin>` runs the job of a kind plugin on your machine, after `make operator-source`. It needs Docker, kind, kubebuilder, kubectl, and helm. It creates the kind cluster `camunda-operator-plugins` and leaves it after the run. Delete it with `kind delete cluster --name camunda-operator-plugins`. An AWS job runs only in CI.
 
 ### The AWS jobs
 
 The AWS plugins run against a real AWS sandbox account, not against fakes. A job gets the credentials of a CI role from GitHub with OIDC. No access key exists. `terraform/aws-sandbox/README.md` tells how the account is set up and what a job can do there.
 
-A pull request of a contributor waits until a maintainer approves its AWS jobs. GitHub gives no OIDC token to a pull request from a fork. As a result, the AWS jobs do not run on such a pull request. They run on `main` after the merge. A maintainer can push the branch to this repository to run them before the merge.
+The AWS jobs run on each push to `main`, when a maintainer starts the workflow by hand, and on a pull request that the trusted user of the sandbox opened from a branch of this repository and pushed. The trusted user is the GitHub user whose ID is the repository variable `AWS_SANDBOX_ACTOR_ID`. Every other pull request skips them, and its AWS checks show as skipped: a pull request of another person, a pull request of the trusted user that another person pushed to, a pull request from a fork, and the pull requests of Renovate. Such a pull request gets no AWS credentials and waits for no approval in the environment `aws-sandbox-review`. Its AWS jobs run on `main` after the merge. A maintainer who read the change can run them before the merge on a branch of this repository, with `gh workflow run Conformance --ref <branch>`.
+
+Each AWS job is one run with its own run ID, `cpo-ci-<GitHub run>-<attempt>-<row>`. The job:
+
+1. Publishes an OIDC issuer for the run with `hack/aws-sandbox/issuer.sh`, and starts kind with it, so that STS trusts the ServiceAccount tokens of the cluster.
+2. Installs cert-manager and `amazon-eks-pod-identity-webhook` with `test/kind/pod-identity-webhook.sh`. A pod under a ServiceAccount with the annotation `eks.amazonaws.com/role-arn` then gets the credentials of that role, as on EKS.
+3. Creates the role of the controller with `hack/aws-sandbox/plugin-role.sh`, from `controller-policy.json`. The chart gives the role to the controller through `serviceAccount.annotations`.
+4. Runs the suites and `check.sh`.
+5. Deletes the kind cluster, and runs `hack/aws-sandbox/teardown.sh`, also when an earlier step failed. The step fails when the run left a role, a managed policy, an OIDC provider, or a bucket.
+
+Each AWS object of a run has a name that starts with the run ID and the tag `cpo-ci-run` with the run ID as its value. Each role has the boundary `cpo-sandbox-boundary` and no path. So the values of an AWS plugin set a name prefix and the extra tag, for example `roleNamePrefix: ${RUN_ID}-hub` and `extraTags: {cpo-ci-run: ${RUN_ID}}`. A KMS key gets a deletion window of 7 days, because the boundary refuses every other window.
+
+A red run on `main` files the issue "Conformance failed on main", or adds a comment to it when it is open. Find the cause and fix it. Do not run the workflow again to make it green.
+
+The Pod Identity mode of the AWS plugins needs EKS, so CI does not test it in the sandbox. Its envtest suites run with a fake of the EKS API.
 
 ## 7. The journeys
 
