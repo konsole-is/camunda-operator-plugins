@@ -69,6 +69,17 @@ func main() {
 		"",
 		"The managed policy that bounds every role.",
 	)
+	flag.StringVar(
+		&opts.RoleNamePrefix,
+		"role-name-prefix",
+		"camunda",
+		"The start of the name of each role. It must differ from the prefix of aws-connectors-role.",
+	)
+	flag.Var(
+		&opts.ExtraTags,
+		"extra-tags",
+		"Tags, as comma-separated key=value items, that go on each AWS object next to the tags of the request.",
+	)
 	allowedActions := flag.String(
 		"allowed-actions",
 		"",

@@ -18,6 +18,7 @@ package awsconnectorsrole
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -33,9 +34,11 @@ import (
 
 // reconcileRole keeps the role of the claim of req, trusted by the
 // Connectors ServiceAccount only, with the inline policy and the managed
-// policies of the parameters. It is Pending when the request names no
-// ServiceAccount, and Pending with no AWS call when the inline policy is over
-// the size limit.
+// policies of the parameters, then deletes the old roles of the status once
+// the outputs name the role. It is Pending when the request names no
+// ServiceAccount, Pending with no AWS call when the inline policy is over the
+// size limit, and Pending when the role of its name belongs to another
+// request. A Pending result keeps the old roles of the status.
 func (p *Plugin) reconcileRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -46,15 +49,31 @@ func (p *Plugin) reconcileRole(
 		return p.reconcileRoleWithoutServiceAccount(ctx, req)
 	}
 
+	status := request.Status.Resources
 	doc, size, err := inlinePolicyDocument(req.Parameters.InlinePolicy)
 	if err != nil {
-		return pluginkit.Result{Pending: &pluginkit.Waiting{
-			Reason:  pluginsv1alpha1.ReasonInvalidParameters,
-			Message: "spec.parameters.inlinePolicy: " + err.Error(),
-		}}, nil
+		// No role is read, so each role of the status stays.
+		return pluginkit.Result{
+			Pending: &pluginkit.Waiting{
+				Reason:  pluginsv1alpha1.ReasonInvalidParameters,
+				Message: "spec.parameters.inlinePolicy: " + err.Error(),
+			},
+			Resources: oldRoleRows(status, ""),
+		}, nil
 	}
 
-	role, err := p.ensureRole(ctx, req, sas)
+	current := p.roleName(request)
+	role, err := p.ensureRole(ctx, req, current, sas)
+	pending, inUse := roleNameInUse(err, status)
+	if inUse {
+		// The outputs still name the old role, so it serves the request until
+		// the name is free.
+		old, oldErr := p.activeOldRole(ctx, req, current)
+		if oldErr != nil || old.ARN == "" {
+			return pending, oldErr
+		}
+		role, err = p.ensureRole(ctx, req, old.Name, sas)
+	}
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
@@ -74,41 +93,81 @@ func (p *Plugin) reconcileRole(
 	if err := p.ensureAttachedPolicies(ctx, req, role, wanted); err != nil {
 		return pluginkit.Result{}, err
 	}
-	resources := append([]pluginsv1alpha1.ResourceRef{{
-		Kind:     kindIAMRole,
-		Name:     role.Name,
-		ID:       role.ARN,
-		Role:     "AWS identity of the Connectors of the cluster " + request.Spec.Target.Name,
-		OnOrphan: pluginsv1alpha1.OnOrphanKept,
-	}}, associations...)
+
+	resources := append([]pluginsv1alpha1.ResourceRef{roleResource(role, request)}, associations...)
+	if inUse {
+		pending.Resources = append(resources, oldRoleRows(status, role.Name)...)
+		return pending, nil
+	}
+
+	old, _, err := p.retireOldRoles(ctx, req, role)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+	resources = append(resources, old...)
 
 	consoleURL, err := awskit.RoleConsoleURL(role.ARN)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
 
-	return pluginkit.Result{
+	res := pluginkit.Result{
 		Outputs:   awskit.IdentityOutputs(p.mode, role.ARN),
 		Summary:   summary(role, len(wanted), size, p.boundary),
 		Links:     []pluginsv1alpha1.Link{{Name: "IAM role", URL: consoleURL}},
 		Resources: resources,
-	}, nil
+	}
+	if len(old) > 0 {
+		res.RequeueAfter = oldRoleRequeue
+	}
+	return res, nil
+}
+
+// roleNameInUse returns the Pending result of a request whose role belongs
+// to another request, when err is an awskit.RoleInUseError. The result keeps
+// the old roles of the rows of status.
+func roleNameInUse(err error, status []pluginsv1alpha1.ResourceRef) (pluginkit.Result, bool) {
+	var inUse awskit.RoleInUseError
+	if !errors.As(err, &inUse) {
+		return pluginkit.Result{}, false
+	}
+
+	return pluginkit.Result{
+		Pending:      &pluginkit.Waiting{Reason: ReasonRoleNameInUse, Message: inUse.Error()},
+		Resources:    oldRoleRows(status, inUse.Name),
+		RequeueAfter: roleInUseRequeue,
+	}, true
+}
+
+func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) pluginsv1alpha1.ResourceRef {
+	return pluginsv1alpha1.ResourceRef{
+		Kind:     kindIAMRole,
+		Name:     role.Name,
+		ID:       role.ARN,
+		Role:     "AWS identity of the Connectors of the cluster " + request.Spec.Target.Name,
+		OnOrphan: pluginsv1alpha1.OnOrphanKept,
+	}
 }
 
 // reconcileRoleWithoutServiceAccount makes the role of the claim of req, when
-// it exists, trust nobody, and deletes the associations of the request. It
-// creates no role.
+// it exists, and the old role that the outputs name trust nobody, and deletes
+// the associations of the request. It creates no role, and deletes the other
+// old roles of the status only once the outputs name the role of its current
+// name. The Pending result keeps the role and the old roles that stay.
 func (p *Plugin) reconcileRoleWithoutServiceAccount(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 ) (pluginkit.Result, error) {
-	arn, err := p.liveRoleARN(ctx, p.roleName(req.Object))
+	current := p.roleName(req.Object)
+	status := req.Object.Status.Resources
+	res := pluginkit.Result{Pending: missingServiceAccount(), Resources: oldRoleRows(status, current)}
+
+	old, err := p.activeOldRole(ctx, req, current)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
-
-	if arn != "" {
-		if _, err := p.ensureRole(ctx, req, nil); err != nil {
+	if old.ARN != "" {
+		if _, err := p.ensureRole(ctx, req, old.Name, nil); err != nil {
 			return pluginkit.Result{}, err
 		}
 	}
@@ -116,7 +175,29 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 	if err := p.deleteAssociations(ctx, req); err != nil {
 		return pluginkit.Result{}, err
 	}
-	return pluginkit.Result{Pending: missingServiceAccount()}, nil
+
+	arn, err := p.liveRoleARN(ctx, current)
+	if err != nil || arn == "" {
+		return res, err
+	}
+
+	role, err := p.ensureRole(ctx, req, current, nil)
+	if inUse, ok := roleNameInUse(err, status); ok {
+		return inUse, nil
+	}
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+
+	left, again, err := p.retireOldRoles(ctx, req, role)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, left...)
+	if again {
+		res.RequeueAfter = oldRoleRequeue
+	}
+	return res, nil
 }
 
 func missingServiceAccount() *pluginkit.Waiting {
@@ -126,11 +207,12 @@ func missingServiceAccount() *pluginkit.Waiting {
 	}
 }
 
-// ensureRole keeps the role of the claim of req, trusted by sas, and records
-// an event when it created or updated the role.
+// ensureRole keeps the role name of the claim of req, trusted by sas, and
+// records an event when it created or updated the role.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
+	name string,
 	sas []string,
 ) (awskit.Role, error) {
 	request := req.Object
@@ -140,11 +222,11 @@ func (p *Plugin) ensureRole(
 	}
 
 	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, awskit.RoleSpec{
-		Name:                p.roleName(request),
+		Name:                name,
 		Description:         "Connectors of the Camunda cluster " + request.Namespace + "/" + request.Spec.ClaimRef.Name,
 		TrustPolicy:         trust,
 		PermissionsBoundary: p.boundary,
-		Tags:                p.tags(request),
+		Tags:                p.roleTags(request),
 	})
 	if err != nil {
 		return awskit.Role{}, err
@@ -278,27 +360,25 @@ func (p *Plugin) ensureAttachedPolicies(
 	return err
 }
 
-// deleteRole deletes the associations of req, and the role of its claim with
-// its policies.
+// deleteRole deletes the associations of req, and each role of req with its
+// policies: the role of its current name and the roles of its status.
 func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	if err := p.deleteAssociations(ctx, req); err != nil {
 		return err
 	}
 
-	roleName := p.roleName(req.Object)
-	deleted, err := awskit.DeleteRole(ctx, p.clients.IAM, roleName)
-	if err != nil {
-		return err
+	current := p.roleName(req.Object)
+	old := oldRoleRows(req.Object.Status.Resources, current)
+	names := make([]string, 0, len(old)+1)
+	names = append(names, current)
+	for _, row := range old {
+		names = append(names, row.Name)
 	}
 
-	if deleted {
-		req.Event(
-			corev1.EventTypeNormal,
-			eventReasonRoleDeleted,
-			eventActionDelete,
-			"Deleted the IAM role %s",
-			roleName,
-		)
+	for _, name := range names {
+		if err := p.deleteNamedRole(ctx, req, name, ""); err != nil {
+			return err
+		}
 	}
 	return nil
 }

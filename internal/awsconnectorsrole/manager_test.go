@@ -17,6 +17,7 @@ limitations under the License.
 package awsconnectorsrole
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -74,6 +75,7 @@ func TestNewPluginRefuses(t *testing.T) {
 		"a prefix with a slash":       {func(o *Options) { o.RoleNamePrefix = "cam/x" }, "role name prefix"},
 		"the prefix of aws-identity":  {func(o *Options) { o.RoleNamePrefix = "camunda" }, "aws-identity"},
 		"that prefix in another case": {func(o *Options) { o.RoleNamePrefix = "Camunda" }, "aws-identity"},
+		"too many extra tags":         {func(o *Options) { o.ExtraTags = extraTags(47) }, "at most 46"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			opts := validOptions()
@@ -96,6 +98,23 @@ func TestNewPluginAcceptsTheExistingRoleAloneWithoutBoundaryOrPrefix(t *testing.
 
 	require.NoError(t, err)
 	assert.Empty(t, p.boundary)
+}
+
+func TestNewPluginAcceptsTheMostExtraTags(t *testing.T) {
+	opts := validOptions()
+	opts.ExtraTags = extraTags(46)
+
+	_, err := newPlugin(opts)
+
+	assert.NoError(t, err)
+}
+
+func extraTags(n int) awskit.ExtraTags {
+	tags := awskit.ExtraTags{}
+	for i := range n {
+		tags[fmt.Sprintf("k%d", i)] = "v"
+	}
+	return tags
 }
 
 func TestNewPluginAcceptsValidOptions(t *testing.T) {

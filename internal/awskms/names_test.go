@@ -58,7 +58,7 @@ func TestKeyTagsHoldTheUIDAndTheExtraTags(t *testing.T) {
 		{TagKey: aws.String(awskit.TagClaim), TagValue: aws.String("orders")},
 		{TagKey: aws.String(awskit.TagNamespace), TagValue: aws.String("team-a")},
 		{TagKey: aws.String(awskit.TagRequest), TagValue: aws.String("orders-key")},
-		{TagKey: aws.String(tagRequestUID), TagValue: aws.String("uid-1")},
+		{TagKey: aws.String(awskit.TagRequestUID), TagValue: aws.String("uid-1")},
 		{TagKey: aws.String("cpo-ci-run"), TagValue: aws.String("cpo-ci-manual-1")},
 	}, tags)
 }

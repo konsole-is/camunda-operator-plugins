@@ -31,6 +31,7 @@ import (
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/awsconnectorsrole"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
@@ -68,10 +69,11 @@ var _ = Describe("the aws-connectors-role registration", func() {
 		Expect(iamRole.TrustPolicy).NotTo(ContainSubstring("orders-camunda"))
 		Expect(iamRole.PermissionsBoundary).To(Equal(boundary))
 		Expect(iamRole.Tags).To(Equal(map[string]string{
-			awskit.TagNamespace: ns,
-			awskit.TagClaim:     "orders",
-			awskit.TagRequest:   req.Name,
-			"cost-center":       "camunda",
+			awskit.TagNamespace:  ns,
+			awskit.TagClaim:      "orders",
+			awskit.TagRequest:    req.Name,
+			awskit.TagRequestUID: string(req.UID),
+			"cost-center":        "camunda",
 		}))
 		Expect(iamRole.Attached).To(ConsistOf(policyA, policyB))
 		Expect(iamRole.InlinePolicies).To(HaveKey("connectors"))
@@ -294,6 +296,43 @@ var _ = Describe("the aws-connectors-role registration", func() {
 			g.Expect(ok).To(BeTrue())
 			g.Expect(iamRole.Attached).To(ContainElement(policyA))
 		}, timeout).Should(Succeed())
+	})
+
+	It("says in both registrations when an AWS connector uses the role", func() {
+		registrations := chartRegistrations()
+
+		Expect(registrations).To(HaveLen(2))
+		for _, r := range registrations {
+			Expect(r.Spec.Description).To(
+				HaveSuffix("An AWS connector uses the role when it signs in with the default credentials chain."),
+				r.Name,
+			)
+		}
+	})
+
+	It("refuses a role of its name that another request owns", func() {
+		ns := newNamespace(role)
+		name := role.roleName(ns)
+		owner := awskit.ExtraTags(nil).
+			OwnerTags(ns, "orders", "orders-connectors-permissions", "uid-of-an-orphaned-request")
+		_, _, err := awskit.EnsureRole(ctx, role.iam, awskit.RoleSpec{
+			Name:        name,
+			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
+			Tags:        owner,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		before := len(role.iam.RoleCalls(name))
+
+		req := connectorsRequest(role, ns, paramsOf(role))
+		Expect(role.k8s.Create(ctx, req)).To(Succeed())
+
+		for _, conditionType := range []string{pluginsv1alpha1.ConditionOutputsReady, v1.ConditionReady} {
+			message := waitReason(role, req, conditionType, awsconnectorsrole.ReasonRoleNameInUse)
+			Expect(message).To(ContainSubstring("uid-of-an-orphaned-request"))
+		}
+		Expect(role.iam.RoleCalls(name)[before:]).To(HaveEach("GetRole"))
+		got, _ := role.iam.Role(name)
+		Expect(got.Tags).To(Equal(owner))
 	})
 
 	It("keeps the resourceVersion of a Ready request while nothing changes", func() {

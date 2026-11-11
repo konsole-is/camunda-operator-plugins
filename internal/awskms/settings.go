@@ -28,6 +28,10 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 )
 
+// ownTags is the number of tags that a key carries besides the request tags
+// and the extra tags: awskit.TagRequestUID.
+const ownTags = 1
+
 // Settings are the settings of the plugin that the chart gives.
 type Settings struct {
 	// Region is the home region: the region of each primary key.
@@ -48,8 +52,8 @@ type Settings struct {
 }
 
 // Validate returns an error that names the first field that is not valid: an
-// empty region, partition, or account, more than awskit.MaxExtraTags-1 extra
-// tags, an alias prefix that awskit.CheckAliasPrefix refuses, or a principal
+// empty region, partition, or account, more extra tags than
+// awskit.CheckExtraTags allows next to the UID tag, an alias prefix that awskit.CheckAliasPrefix refuses, or a principal
 // that is not an IAM ARN.
 func (s Settings) Validate() error {
 	switch {
@@ -59,9 +63,8 @@ func (s Settings) Validate() error {
 		return errors.New("account: the partition or the account is empty")
 	}
 
-	// A key also carries the tag camunda.io/request-uid.
-	if len(s.ExtraTags) > awskit.MaxExtraTags-1 {
-		return fmt.Errorf("extra tags: at most %d on a KMS key", awskit.MaxExtraTags-1)
+	if err := awskit.CheckExtraTags(s.ExtraTags, ownTags); err != nil {
+		return fmt.Errorf("extra tags: %w", err)
 	}
 
 	if err := awskit.CheckAliasPrefix(s.AliasPrefix); err != nil {

@@ -23,6 +23,7 @@ package awsidentity
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -62,6 +63,11 @@ type Options struct {
 	Mode awskit.Mode
 	// PermissionsBoundaryARN is the managed policy that bounds every role.
 	PermissionsBoundaryARN string
+	// RoleNamePrefix starts the name of each role.
+	RoleNamePrefix string
+	// ExtraTags go on each role and each association, next to the request
+	// tags.
+	ExtraTags awskit.ExtraTags
 	// AllowedActions are the IAM action patterns that a Grant may hold.
 	AllowedActions []string
 	// OIDCProviderARN is the IAM OIDC provider of the EKS cluster. ModeIRSA
@@ -77,9 +83,12 @@ type Options struct {
 
 // NewManager returns a manager for cfg that publishes and serves the
 // registrations of opts. It refuses an unknown mode, no permissions
-// boundary, no allowed action or a bad one, ModeIRSA without a valid OIDC
-// provider ARN, ModePodIdentity without an EKS cluster name, and a missing
-// client. /healthz and /readyz answer while it runs.
+// boundary, a role name prefix that awskit.CheckRolePrefix refuses or that
+// aws-connectors-role uses by default, more extra tags than
+// awskit.CheckExtraTags allows next to the UID tag, no allowed action or a
+// bad one, ModeIRSA without a valid OIDC provider ARN, ModePodIdentity
+// without an EKS cluster name, and a missing client. /healthz and /readyz
+// answer while it runs.
 func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 	plugin, err := newPlugin(opts)
 	if err != nil {
@@ -151,16 +160,33 @@ func newPlugin(opts Options) (*Plugin, error) {
 		return nil, errors.New("the permissions boundary ARN is empty: every role needs a boundary")
 	}
 
+	if err := awskit.CheckRolePrefix(opts.RoleNamePrefix); err != nil {
+		return nil, err
+	}
+	// IAM role names are unique without regard to case.
+	if strings.EqualFold(opts.RoleNamePrefix, connectorsRolePrefix) {
+		return nil, fmt.Errorf(
+			"role name prefix %q: aws-connectors-role names its roles with it, so both plugins would write one role",
+			opts.RoleNamePrefix,
+		)
+	}
+
+	if err := awskit.CheckExtraTags(opts.ExtraTags, ownTags); err != nil {
+		return nil, fmt.Errorf("extra tags: %w", err)
+	}
+
 	ceiling, err := NewCeiling(opts.AllowedActions)
 	if err != nil {
 		return nil, fmt.Errorf("allowed actions: %w", err)
 	}
 
 	p := &Plugin{
-		mode:     mode,
-		boundary: opts.PermissionsBoundaryARN,
-		ceiling:  ceiling,
-		clients:  opts.Clients,
+		mode:      mode,
+		boundary:  opts.PermissionsBoundaryARN,
+		prefix:    opts.RoleNamePrefix,
+		extraTags: opts.ExtraTags,
+		ceiling:   ceiling,
+		clients:   opts.Clients,
 	}
 
 	switch mode {

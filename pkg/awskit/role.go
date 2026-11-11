@@ -18,9 +18,11 @@ package awskit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -45,6 +47,18 @@ type Role struct {
 	Name, ARN string
 }
 
+// RoleInUseError means that an IAM role has the name that a request wants,
+// and its TagRequestUID tag names another request, or none.
+type RoleInUseError struct {
+	// Name is the role. Owner names the request of its tags, such as "the
+	// request team-a/orders-identity with the UID 1f2e", or "no request".
+	Name, Owner string
+}
+
+func (e RoleInUseError) Error() string {
+	return "The IAM role " + e.Name + " belongs to " + e.Owner + ". Delete the role, or change the role name prefix"
+}
+
 // RoleChange says what EnsureRole changed: Created, or the parts that it
 // updated, from "trust policy", "permissions boundary", and "tags", in that
 // order. The zero value means that the role was as spec says.
@@ -57,6 +71,11 @@ type RoleChange struct {
 // trust policy, the permissions boundary, and the tags of spec. It never
 // removes a tag that spec does not name. A role that another writer creates
 // at the same time is updated as one that existed.
+//
+// It refuses with a RoleInUseError, and changes nothing, a live role whose
+// TagRequestUID value differs from the one in spec.Tags. An absent tag is the
+// empty value. It takes a live role without a TagRequestUID value whose
+// TagNamespace and TagRequest are the ones in spec.Tags, and writes its UID.
 func EnsureRole(ctx context.Context, c IAM, spec RoleSpec) (Role, RoleChange, error) {
 	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(spec.Name)})
 	if IsNotFound(err) {
@@ -80,9 +99,49 @@ func EnsureRole(ctx context.Context, c IAM, spec RoleSpec) (Role, RoleChange, er
 		return Role{}, RoleChange{}, fmt.Errorf("reading the IAM role %s: %w", spec.Name, err)
 	}
 
+	live := roleTags(out.Role)
+	if !ownedBy(live, spec.Tags) {
+		return Role{}, RoleChange{}, RoleInUseError{Name: spec.Name, Owner: ownerOf(live)}
+	}
+
 	role := Role{Name: spec.Name, ARN: aws.ToString(out.Role.Arn)}
-	updated, err := updateRole(ctx, c, out.Role, spec)
+	updated, err := updateRole(ctx, c, out.Role, live, spec)
 	return role, RoleChange{Updated: updated}, err
+}
+
+func roleTags(role *types.Role) map[string]string {
+	tags := make(map[string]string, len(role.Tags))
+	for _, t := range role.Tags {
+		tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
+	}
+	return tags
+}
+
+// ownedBy reports whether a role with the tags live belongs to the request of
+// the tags want.
+func ownedBy(live, want map[string]string) bool {
+	if live[TagRequestUID] == want[TagRequestUID] {
+		return true
+	}
+
+	// The plugins tagged their roles without the UID before they bound a role
+	// to its request, so such a role is taken over once.
+	return live[TagRequestUID] == "" &&
+		live[TagNamespace] != "" && live[TagNamespace] == want[TagNamespace] &&
+		live[TagRequest] != "" && live[TagRequest] == want[TagRequest]
+}
+
+// ownerOf names the request of the tags of a role, for a RoleInUseError.
+func ownerOf(tags map[string]string) string {
+	if tags[TagRequest] == "" {
+		return "no request"
+	}
+
+	owner := "the request " + tags[TagNamespace] + "/" + tags[TagRequest]
+	if uid := tags[TagRequestUID]; uid != "" {
+		owner += " with the UID " + uid
+	}
+	return owner
 }
 
 func optional(s string) *string {
@@ -100,9 +159,15 @@ func iamTags(tags map[string]string) []types.Tag {
 	return out
 }
 
-// updateRole brings the live role to spec and returns the parts that it
-// updated.
-func updateRole(ctx context.Context, c IAM, live *types.Role, spec RoleSpec) ([]string, error) {
+// updateRole brings the live role, with the tags liveTags, to spec and
+// returns the parts that it updated.
+func updateRole(
+	ctx context.Context,
+	c IAM,
+	live *types.Role,
+	liveTags map[string]string,
+	spec RoleSpec,
+) ([]string, error) {
 	var updated []string
 
 	trust, err := DecodePolicy(aws.ToString(live.AssumeRolePolicyDocument))
@@ -132,10 +197,6 @@ func updateRole(ctx context.Context, c IAM, live *types.Role, spec RoleSpec) ([]
 		updated = append(updated, "permissions boundary")
 	}
 
-	liveTags := make(map[string]string, len(live.Tags))
-	for _, t := range live.Tags {
-		liveTags[aws.ToString(t.Key)] = aws.ToString(t.Value)
-	}
 	for k, v := range spec.Tags {
 		if got, ok := liveTags[k]; !ok || got != v {
 			if _, err := c.TagRole(ctx, &iam.TagRoleInput{
@@ -152,10 +213,73 @@ func updateRole(ctx context.Context, c IAM, live *types.Role, spec RoleSpec) ([]
 	return updated, nil
 }
 
-// DeleteRole deletes the inline policies of the role name, detaches its
-// managed policies, and deletes it. It reports false, with no error, when the
-// role does not exist.
-func DeleteRole(ctx context.Context, c IAM, name string) (bool, error) {
+// ClaimRole returns the Role of name when it belongs to the request of tags,
+// and a zero Role when the role does not exist. A role belongs to the request
+// when its TagRequestUID value is the one in tags, or when EnsureRole would
+// take it over. In the second case ClaimRole writes tags on the role. It
+// returns a RoleInUseError for any other role.
+func ClaimRole(ctx context.Context, c IAM, name string, tags map[string]string) (Role, error) {
+	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
+	if IsNotFound(err) {
+		return Role{}, nil
+	}
+	if err != nil {
+		return Role{}, fmt.Errorf("reading the IAM role %s: %w", name, err)
+	}
+
+	live := roleTags(out.Role)
+	if !ownedBy(live, tags) {
+		return Role{}, RoleInUseError{Name: name, Owner: ownerOf(live)}
+	}
+
+	if live[TagRequestUID] != tags[TagRequestUID] {
+		if _, err := c.TagRole(ctx, &iam.TagRoleInput{RoleName: aws.String(name), Tags: iamTags(tags)}); err != nil {
+			return Role{}, fmt.Errorf("tagging the IAM role %s: %w", name, err)
+		}
+	}
+	return Role{Name: name, ARN: aws.ToString(out.Role.Arn)}, nil
+}
+
+// ErrTagNotVisible means that a read of IAM did not show the TagRequestUID
+// tag that ClaimRole wrote just before. IAM is eventually consistent, so a
+// later call deletes the role.
+var ErrTagNotVisible = errors.New("IAM does not show the UID tag of the request on the role yet")
+
+// DeleteClaimedRole claims the role name for the request of tags with
+// ClaimRole, then deletes it with DeleteRole. It reports false, with no
+// error, when the role does not exist, a RoleInUseError for a role of another
+// request, and ErrTagNotVisible when the read of DeleteRole does not show the
+// UID tag of tags on the role yet.
+func DeleteClaimedRole(ctx context.Context, c IAM, name string, tags map[string]string) (bool, error) {
+	if _, err := ClaimRole(ctx, c, name, tags); err != nil {
+		return false, err
+	}
+
+	deleted, err := DeleteRole(ctx, c, name, tags[TagRequestUID])
+	if errors.As(err, new(RoleInUseError)) {
+		// ClaimRole found the UID of the request on the role, or wrote it.
+		return false, fmt.Errorf("deleting the IAM role %s: %w", name, ErrTagNotVisible)
+	}
+	return deleted, err
+}
+
+// DeleteRole deletes the role name with its inline policies and its managed
+// policy attachments, only when its TagRequestUID tag is uid. An absent tag
+// is the empty value. It reports false, with no error, when the role does not
+// exist, and a RoleInUseError when the tag differs from uid.
+func DeleteRole(ctx context.Context, c IAM, name, uid string) (bool, error) {
+	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(name)})
+	if IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading the IAM role %s: %w", name, err)
+	}
+
+	if tags := roleTags(out.Role); tags[TagRequestUID] != uid {
+		return false, RoleInUseError{Name: name, Owner: ownerOf(tags)}
+	}
+
 	policies, err := policyNames(ctx, c, name)
 	if IsNotFound(err) {
 		return false, nil
@@ -189,11 +313,34 @@ func DeleteRole(ctx context.Context, c IAM, name string) (bool, error) {
 	if IsNotFound(err) {
 		return false, nil
 	}
+	// The plugins never put a role into an instance profile, so they leave
+	// removing it to the admin.
+	if hasCode(err, "DeleteConflict") && strings.Contains(strings.ToLower(Message(err)), "instance profile") {
+		return false, fmt.Errorf(
+			"deleting the IAM role %s: an instance profile uses it. Remove the role from the instance profile: %w",
+			name,
+			err,
+		)
+	}
 	if err != nil {
 		return false, fmt.Errorf("deleting the IAM role %s: %w", name, err)
 	}
 
 	return true, nil
+}
+
+// ReplacedRoles returns the names of names that are not current, in any
+// case, each once in any case, in the order of names. IAM role names are
+// unique without regard to case.
+func ReplacedRoles(current string, names []string) []string {
+	var replaced []string
+	for _, name := range names {
+		same := func(other string) bool { return strings.EqualFold(other, name) }
+		if !same(current) && !slices.ContainsFunc(replaced, same) {
+			replaced = append(replaced, name)
+		}
+	}
+	return replaced
 }
 
 // PolicyChange names the managed policies that EnsureAttachedPolicies

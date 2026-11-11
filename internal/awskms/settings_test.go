@@ -36,6 +36,10 @@ func validSettings() Settings {
 func TestSettingsValidate(t *testing.T) {
 	require.NoError(t, validSettings().Validate())
 
+	most := validSettings()
+	most.ExtraTags = extraTags(46)
+	require.NoError(t, most.Validate(), "46 extra tags fit next to the four tags of the request")
+
 	for _, tc := range []struct {
 		name  string
 		edit  func(*Settings)
@@ -44,7 +48,7 @@ func TestSettingsValidate(t *testing.T) {
 		{"empty region", func(s *Settings) { s.Region = "" }, "region"},
 		{"no account", func(s *Settings) { s.Account = "" }, "account"},
 		{"reserved prefix", func(s *Settings) { s.AliasPrefix = "aws" }, "alias prefix"},
-		{"too many extra tags", func(s *Settings) { s.ExtraTags = tooManyTags() }, "extra tags"},
+		{"too many extra tags", func(s *Settings) { s.ExtraTags = extraTags(47) }, "at most 46"},
 		{"bad administrator", func(s *Settings) { s.KeyAdministratorARNs = []string{"not-an-arn"} }, "key administrator"},
 		{"bad driver", func(s *Settings) { s.CSIDriverRoleARN = "arn:aws:s3:::bucket" }, "CSI driver role"},
 	} {
@@ -55,11 +59,9 @@ func TestSettingsValidate(t *testing.T) {
 	}
 }
 
-// tooManyTags returns awskit.MaxExtraTags extra tags, one more than a KMS
-// key has room for next to its four tags of the request.
-func tooManyTags() awskit.ExtraTags {
+func extraTags(n int) awskit.ExtraTags {
 	tags := awskit.ExtraTags{}
-	for i := range awskit.MaxExtraTags {
+	for i := range n {
 		tags[fmt.Sprintf("k%d", i)] = "v"
 	}
 	return tags

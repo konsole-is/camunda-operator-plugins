@@ -39,6 +39,8 @@ spec:
             - -mode={{ .Values.mode }}
             - -region={{ .Values.region }}
             - -permissions-boundary-arn={{ .Values.permissionsBoundaryArn }}
+            - -role-name-prefix={{ .Values.roleNamePrefix }}
+            - {{ printf "-extra-tags=%s" (include "aws-identity.extraTags" .) | quote }}
             - -allowed-actions={{ join "," .Values.allowedActions }}
             - -oidc-provider-arn={{ .Values.oidcProviderArn }}
             - -eks-cluster-name={{ .Values.eksClusterName }}

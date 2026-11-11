@@ -45,8 +45,7 @@ func aliasName(prefix, namespace, claim string) string {
 // keyTags returns the request tags of ref, its UID tag, and the extra tags
 // of s, sorted by key.
 func keyTags(s Settings, ref keyRef) []types.Tag {
-	tags := s.ExtraTags.RequestTags(ref.Namespace, ref.Claim, ref.Request)
-	tags[tagRequestUID] = ref.UID
+	tags := s.ExtraTags.OwnerTags(ref.Namespace, ref.Claim, ref.Request, ref.UID)
 
 	out := make([]types.Tag, 0, len(tags))
 	for _, key := range slices.Sorted(maps.Keys(tags)) {

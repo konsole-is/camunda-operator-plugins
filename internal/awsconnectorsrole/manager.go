@@ -87,12 +87,13 @@ type Options struct {
 
 // NewManager returns a manager for cfg that publishes and serves the
 // registrations of opts. It refuses a registration that the plugin does not
-// know, an unknown mode, ModeIRSA without a valid OIDC provider ARN,
+// know, an unknown mode, more extra tags than awskit.CheckExtraTags allows
+// next to the UID tag, ModeIRSA without a valid OIDC provider ARN,
 // ModePodIdentity without an EKS cluster name, a region, or an EKS client,
 // and a missing IAM or STS client. When opts serves RegistrationRole, it also
 // refuses no permissions boundary, and a role name prefix that IAM refuses
-// or that is the prefix of aws-identity. /healthz and /readyz answer while
-// it runs.
+// or that is the default prefix of aws-identity. /healthz and /readyz answer
+// while it runs.
 func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 	plugin, err := newPlugin(opts)
 	if err != nil {
@@ -172,6 +173,10 @@ func newPlugin(opts Options) (*Plugin, error) {
 		return nil, fmt.Errorf("mode: %w", err)
 	}
 
+	if err := awskit.CheckExtraTags(opts.ExtraTags, ownTags); err != nil {
+		return nil, fmt.Errorf("extra tags: %w", err)
+	}
+
 	p := &Plugin{mode: mode, extraTags: opts.ExtraTags, clients: opts.Clients}
 	switch mode {
 	case awskit.ModeIRSA:
@@ -211,7 +216,8 @@ func newPlugin(opts Options) (*Plugin, error) {
 	if err := awskit.CheckRolePrefix(opts.RoleNamePrefix); err != nil {
 		return nil, err
 	}
-	// IAM role names are unique without regard to case.
+	// IAM role names are unique without regard to case. The chart does not
+	// know the prefix of aws-identity, so this checks its default only.
 	if strings.EqualFold(opts.RoleNamePrefix, awsIdentityRolePrefix) {
 		return nil, fmt.Errorf(
 			"role name prefix %q: aws-identity names its roles with it, so both plugins would write one role",

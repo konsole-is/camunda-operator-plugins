@@ -18,7 +18,9 @@ package awsconnectorsrole_test
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,6 +58,7 @@ type connectors struct {
 	*cluster
 	registration string
 	mode         awskit.Mode
+	prefix       string
 	// scope is the EKS cluster identity that role names hash.
 	scope          string
 	serviceAccount pluginsv1alpha1.ServiceAccountRef
@@ -64,11 +67,15 @@ type connectors struct {
 	eks            *awsfake.EKS
 }
 
+// managerSeq numbers the managers of the suite.
+var managerSeq atomic.Int32
+
 var (
 	ctx    context.Context
 	cancel context.CancelFunc
 	// irsaCluster holds role and existing, podIdentityCluster the other two.
-	irsaCluster, podIdentityCluster *cluster
+	// renameCluster holds the managers that one spec starts and stops.
+	irsaCluster, podIdentityCluster, renameCluster *cluster
 	// Each manager serves one registration in one mode, with fakes of its
 	// own.
 	role, rolePodIdentity, existing, existingPodIdentity *connectors
@@ -88,6 +95,7 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.Background())
 	irsaCluster = startCluster(crds)
 	podIdentityCluster = startCluster(crds)
+	renameCluster = startCluster(crds)
 
 	registrations := chartRegistrations()
 	role = newConnectors(irsaCluster, registrations, awsconnectorsrole.RegistrationRole, awskit.ModeIRSA)
@@ -116,7 +124,7 @@ var _ = BeforeSuite(func() {
 
 var _ = AfterSuite(func() {
 	cancel()
-	for _, c := range []*cluster{irsaCluster, podIdentityCluster} {
+	for _, c := range []*cluster{irsaCluster, podIdentityCluster, renameCluster} {
 		Expect(c.env.Stop()).To(Succeed())
 	}
 })
@@ -141,29 +149,47 @@ func startCluster(crds string) *cluster {
 }
 
 // newConnectors returns a manager of mode in c that serves the registration
-// of the chart named registration. The fakes of a manager of
-// RegistrationRole hold the boundary and the test policies.
+// of the chart named registration, with the prefix rolePrefix and fakes of
+// its own.
 func newConnectors(
 	c *cluster,
 	registrations []pluginsv1alpha1.PluginRegistration,
 	registration string,
 	mode awskit.Mode,
 ) *connectors {
+	return newConnectorsWith(c, registrations, registration, mode, rolePrefix, awsfake.NewIAM(), awsfake.NewEKS())
+}
+
+// newConnectorsWith returns a manager of mode in c that serves the
+// registration of the chart named registration, with the role name prefix,
+// on the fakes iam and eks. With RegistrationRole, it adds the boundary and
+// the test policies to iam.
+func newConnectorsWith(
+	c *cluster,
+	registrations []pluginsv1alpha1.PluginRegistration,
+	registration string,
+	mode awskit.Mode,
+	prefix string,
+	iam *awsfake.IAM,
+	eks *awsfake.EKS,
+) *connectors {
 	h := &connectors{
 		cluster:        c,
 		registration:   registration,
 		mode:           mode,
+		prefix:         prefix,
 		scope:          issuer,
 		serviceAccount: pluginsv1alpha1.ServiceAccountRef{Namespace: pluginNamespace, Name: registration},
-		iam:            awsfake.NewIAM(),
-		eks:            awsfake.NewEKS(),
+		iam:            iam,
+		eks:            eks,
 	}
 	if mode == awskit.ModePodIdentity {
 		h.scope = region + "/" + eksCluster
 	}
 
 	opts := awsconnectorsrole.Options{
-		Name:               registration + "-" + string(mode),
+		// Controller names are unique in the process.
+		Name:               fmt.Sprintf("%s-%s-%d", registration, mode, managerSeq.Add(1)),
 		HealthProbeAddress: "0",
 		MetricsAddress:     "0",
 		ServiceAccount:     h.serviceAccount,
@@ -178,7 +204,7 @@ func newConnectors(
 		opts.Resync = 2 * time.Second
 	}
 	if registration == awsconnectorsrole.RegistrationRole {
-		opts.RoleNamePrefix = rolePrefix
+		opts.RoleNamePrefix = prefix
 		opts.PermissionsBoundaryARN = boundary
 		for _, p := range []string{boundary, policyA, policyB, policyC} {
 			h.iam.AddPolicy(p)
@@ -200,5 +226,35 @@ func newConnectors(
 
 // roleName is the name of the role of the claim orders in namespace.
 func (c *connectors) roleName(namespace string) string {
-	return awskit.RoleName(rolePrefix, c.scope, namespace, "orders")
+	return awskit.RoleName(c.prefix, c.scope, namespace, "orders")
+}
+
+// startConnectors starts a manager of RegistrationRole in renameCluster
+// that a spec stops again, as an admin who changes a chart value restarts
+// the controller. stop returns after the manager ended.
+func startConnectors(mode awskit.Mode, prefix string, iam *awsfake.IAM, eks *awsfake.EKS) (*connectors, func()) {
+	h := newConnectorsWith(
+		renameCluster,
+		chartRegistrations(),
+		awsconnectorsrole.RegistrationRole,
+		mode,
+		prefix,
+		iam,
+		eks,
+	)
+	// The managers of the registration share its ServiceAccount and its RBAC.
+	Expect(client.IgnoreAlreadyExists(installRBAC(ctx, h.k8s, h.serviceAccount, h.registration))).To(Succeed())
+
+	managerCtx, stopManager := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer GinkgoRecover()
+		defer close(done)
+		Expect(h.mgr.Start(managerCtx)).To(Succeed())
+	}()
+
+	return h, func() {
+		stopManager()
+		<-done
+	}
 }

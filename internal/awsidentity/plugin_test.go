@@ -18,8 +18,10 @@ package awsidentity
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +46,7 @@ func validOptions() Options {
 	return Options{
 		Mode:                   awskit.ModeIRSA,
 		PermissionsBoundaryARN: testBoundary,
+		RoleNamePrefix:         "camunda",
 		AllowedActions:         []string{"s3:*"},
 		OIDCProviderARN:        testProvider,
 		EKSClusterName:         "eks-1",
@@ -167,6 +170,41 @@ func TestRoleNameDiffersForTwoEKSClusters(t *testing.T) {
 	assert.Len(t, names, 3)
 }
 
+func TestRoleNameUsesThePrefix(t *testing.T) {
+	request := &pluginsv1alpha1.PluginRequest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"},
+		Spec:       pluginsv1alpha1.PluginRequestSpec{ClaimRef: pluginsv1alpha1.ClaimRef{Name: "orders"}},
+	}
+	opts := validOptions()
+	p, err := newPlugin(opts)
+	require.NoError(t, err)
+	opts.RoleNamePrefix = "team-b"
+	other, err := newPlugin(opts)
+	require.NoError(t, err)
+
+	name, otherName := p.roleName(request), other.roleName(request)
+
+	assert.Regexp(t, `^camunda-[0-9a-f]{16}$`, name)
+	assert.Equal(t, "team-b-"+strings.TrimPrefix(name, "camunda-"), otherName)
+}
+
+func TestNewPluginAcceptsTheMostExtraTags(t *testing.T) {
+	opts := validOptions()
+	opts.ExtraTags = extraTags(46)
+
+	_, err := newPlugin(opts)
+
+	assert.NoError(t, err)
+}
+
+func extraTags(n int) awskit.ExtraTags {
+	tags := awskit.ExtraTags{}
+	for i := range n {
+		tags[fmt.Sprintf("k%d", i)] = "v"
+	}
+	return tags
+}
+
 func TestNewPluginAcceptsEachMode(t *testing.T) {
 	_, err := newPlugin(validOptions())
 	assert.NoError(t, err)
@@ -195,6 +233,14 @@ func TestNewPluginRefusesBadOptions(t *testing.T) {
 			o.Mode, o.Clients.EKS = awskit.ModePodIdentity, nil
 		}, "EKS client"},
 		{"no IAM client", func(o *Options) { o.Clients.IAM = nil }, "IAM"},
+		{"empty role name prefix", func(o *Options) { o.RoleNamePrefix = "" }, "role name prefix"},
+		{"role name prefix over 47 characters", func(o *Options) {
+			o.RoleNamePrefix = strings.Repeat("a", 48)
+		}, "at most 47"},
+		{"the prefix of aws-connectors-role", func(o *Options) {
+			o.RoleNamePrefix = "Camunda-Connectors"
+		}, "aws-connectors-role"},
+		{"too many extra tags", func(o *Options) { o.ExtraTags = extraTags(47) }, "at most 46"},
 	} {
 		opts := validOptions()
 		tc.change(&opts)

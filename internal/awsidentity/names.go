@@ -28,8 +28,12 @@ import (
 const (
 	// name is the controller name of the plugin.
 	name = "aws-identity"
-	// rolePrefix starts the name of each role of the hub.
-	rolePrefix = "camunda"
+	// connectorsRolePrefix starts the role names of aws-connectors-role by
+	// default.
+	connectorsRolePrefix = "camunda-connectors"
+	// ownTags is the number of tags that a role carries besides the request
+	// tags and the extra tags: awskit.TagRequestUID.
+	ownTags = 1
 	// policyPrefix starts the name of each inline policy that the hub writes
 	// for a Grant. The hub removes only policies with this prefix.
 	policyPrefix = "grant-"

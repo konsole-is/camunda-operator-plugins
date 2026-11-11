@@ -187,3 +187,48 @@ func TestExtraTagsRequestTagsAddTheRequestKeys(t *testing.T) {
 		ExtraTags(nil).RequestTags("team-a", "orders", "orders-kms"),
 	)
 }
+
+func TestOwnerTagsAddTheRequestUID(t *testing.T) {
+	tags := ExtraTags{"team": "payments"}
+
+	got := tags.OwnerTags("team-a", "orders", "orders-identity", "1f2e")
+
+	assert.Equal(t, map[string]string{
+		TagNamespace:  "team-a",
+		TagClaim:      "orders",
+		TagRequest:    "orders-identity",
+		TagRequestUID: "1f2e",
+		"team":        "payments",
+	}, got)
+	assert.Equal(t, ExtraTags{"team": "payments"}, tags, "OwnerTags returns a new map")
+}
+
+func TestCheckExtraTagsCountsTheTagsOfThePlugin(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		extra int
+		own   int
+		ok    bool
+	}{
+		{"one own tag, the most extra tags", 46, 1, true},
+		{"one own tag, one too many", 47, 1, false},
+		{"two own tags, the most extra tags", 45, 2, true},
+		{"two own tags, one too many", 46, 2, false},
+		{"no extra tags", 0, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tags := ExtraTags{}
+			for i := range tc.extra {
+				tags[fmt.Sprintf("k%d", i)] = "v"
+			}
+
+			err := CheckExtraTags(tags, tc.own)
+
+			if tc.ok {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, fmt.Sprintf("at most %d", MaxExtraTags-tc.own))
+		})
+	}
+}

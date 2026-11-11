@@ -56,7 +56,10 @@ serviceAccount:
 registrations:
   - name: aws-connectors-existing-role
     label: Existing role
-    description: The Connectors of each cluster use one IAM role that the admin made.
+    description: >-
+      The Connectors of each cluster use one IAM role that the admin made. An
+      AWS connector uses the role when it signs in with the default credentials
+      chain.
     parameters:
       type: object
       required: [roleArn]
@@ -67,7 +70,10 @@ registrations:
           pattern: '^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$'
   - name: aws-connectors-role
     label: Role for each cluster
-    description: The Connectors of each cluster get an IAM role of their own, with the policies that the admin allows.
+    description: >-
+      The Connectors of each cluster get an IAM role of their own, with the
+      policies that the admin allows. An AWS connector uses the role when it
+      signs in with the default credentials chain.
     parameters:
       type: object
       properties:

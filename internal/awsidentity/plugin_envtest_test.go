@@ -17,8 +17,12 @@ limitations under the License.
 package awsidentity_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -31,12 +35,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/awsidentity"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 const timeout = 30 * time.Second
@@ -172,9 +179,11 @@ var _ = Describe("the AWS identity hub", func() {
 			role := roleOf(g, irsa, ns)
 			g.Expect(role.PermissionsBoundary).To(Equal(boundary))
 			g.Expect(role.Tags).To(Equal(map[string]string{
-				awskit.TagNamespace: ns,
-				awskit.TagClaim:     "orders",
-				awskit.TagRequest:   request.Name,
+				awskit.TagNamespace:  ns,
+				awskit.TagClaim:      "orders",
+				awskit.TagRequest:    request.Name,
+				awskit.TagRequestUID: string(request.UID),
+				"cost-center":        "camunda",
 			}))
 
 			got := read(g, request.DeepCopy())
@@ -188,6 +197,34 @@ var _ = Describe("the AWS identity hub", func() {
 			g.Expect(got.Status.Links).To(HaveLen(1))
 			g.Expect(got.Status.Links[0].URL).To(HaveSuffix("/roles/details/" + role.Name))
 		}, timeout).Should(Succeed())
+	})
+
+	It("refuses a role of its name that another request owns", func() {
+		ns := newNamespace()
+		name := irsa.roleName(ns)
+		owner := awskit.ExtraTags(nil).OwnerTags(ns, "orders", "orders-identity", "uid-of-an-orphaned-request")
+		_, _, err := awskit.EnsureRole(ctx, irsa.iam, awskit.RoleSpec{
+			Name:        name,
+			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
+			Tags:        owner,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		before := len(irsa.iam.RoleCalls(name))
+
+		request := hubRequest(irsa.registration, ns)
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			got := read(g, request.DeepCopy())
+			for _, conditionType := range []string{pluginsv1alpha1.ConditionOutputsReady, v1.ConditionReady} {
+				c := conditionOf(got.Status.Conditions, conditionType)
+				g.Expect(c.Status).To(Equal(metav1.ConditionFalse), conditionType)
+				g.Expect(c.Reason).To(Equal(awsidentity.ReasonRoleNameInUse), conditionType)
+				g.Expect(c.Message).To(ContainSubstring("uid-of-an-orphaned-request"), conditionType)
+			}
+		}, timeout).Should(Succeed())
+		Expect(irsa.iam.RoleCalls(name)[before:]).To(HaveEach("GetRole"))
+		Expect(roleOf(Default, irsa, ns).Tags).To(Equal(owner))
 	})
 
 	It("trusts the target ServiceAccount and each additional one, and no other", func() {
@@ -634,3 +671,437 @@ var _ = Describe("the AWS identity hub", func() {
 		}, timeout).Should(Succeed())
 	})
 })
+
+// renameSetup is a request that was Ready on a hub with the prefix camunda,
+// and that hub stopped, before a hub with another prefix takes over its
+// registration and its fakes.
+type renameSetup struct {
+	mode         awskit.Mode
+	registration string
+	namespace    string
+	iam          *awsfake.IAM
+	eks          *awsfake.EKS
+	request      *pluginsv1alpha1.PluginRequest
+	// oldRole is the role of the request on the stopped hub.
+	oldRole awsfake.Role
+}
+
+// newRenameSetup makes s. Each of before runs while the hub with the prefix
+// camunda serves the Ready request.
+func newRenameSetup(mode awskit.Mode, registrationPrefix string, before ...func(renameSetup)) renameSetup {
+	ns := newNamespace()
+	s := renameSetup{
+		mode:         mode,
+		registration: registrationPrefix + ns,
+		namespace:    ns,
+		iam:          awsfake.NewIAM(),
+		eks:          awsfake.NewEKS(),
+	}
+
+	old, stop := startHub(mode, s.registration, "camunda", s.iam, s.eks)
+	s.request = hubRequest(s.registration, ns)
+	readyRequest(s.request)
+	for _, f := range before {
+		f(s)
+	}
+	stop()
+
+	s.oldRole = roleOf(Default, old, ns)
+	return s
+}
+
+// update changes the request of s with change while no hub runs.
+func (s renameSetup) update(change func(*pluginsv1alpha1.PluginRequest)) {
+	Eventually(func(g Gomega) {
+		got := read(g, s.request.DeepCopy())
+		change(got)
+		g.Expect(k8s.Update(ctx, got)).To(Succeed())
+	}, timeout).Should(Succeed())
+}
+
+// startNewHub starts the hub with the prefix team-b on the fakes of s, and
+// stops it at the end of the spec.
+func (s renameSetup) startNewHub(edits ...func(*awsidentity.Options)) *hub {
+	h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks, edits...)
+	DeferCleanup(stop)
+	return h
+}
+
+// putRole puts a role of name into the fakes of s, owned by the request
+// UID uid.
+func (s renameSetup) putRole(name, uid string) {
+	_, _, err := awskit.EnsureRole(ctx, s.iam, awskit.RoleSpec{
+		Name:        name,
+		TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
+		Tags:        awskit.ExtraTags(nil).OwnerTags(s.namespace, "orders", s.request.Name, uid),
+	})
+	Expect(err).NotTo(HaveOccurred())
+}
+
+var _ = Describe("a Grant sync that fails", Serial, func() {
+	It("still deletes the association of a ServiceAccount that left the request", func() {
+		ns := newNamespace()
+		iamFake, eksFake := awsfake.NewIAM(), awsfake.NewEKS()
+		h, stop := startHub(awskit.ModePodIdentity, "aws-pod-identity-"+ns, "camunda", iamFake, eksFake)
+		DeferCleanup(stop)
+		request := hubRequest(h.registration, ns, "orders-es-es")
+		readyRequest(request)
+		Expect(associationsIn(h, ns)).To(ConsistOf("orders-camunda", "orders-es-es"))
+
+		for range 1000 {
+			iamFake.FailNext("ListRolePolicies", errors.New("the policies cannot be listed"))
+		}
+		Eventually(func(g Gomega) {
+			got := read(g, request.DeepCopy())
+			got.Spec.Target.AdditionalServiceAccounts = nil
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(h, ns)).To(ConsistOf("orders-camunda"))
+		}, timeout).Should(Succeed())
+	})
+})
+
+var _ = Describe("a change of the role name prefix", Serial, func() {
+	DescribeTable("deletes the old role after the outputs name the new one",
+		func(mode awskit.Mode, registrationPrefix string) {
+			s := newRenameSetup(mode, registrationPrefix)
+			h := s.startNewHub()
+
+			Eventually(func(g Gomega) {
+				_, ok := s.iam.Role(s.oldRole.Name)
+				g.Expect(ok).To(BeFalse(), "the old role is gone")
+				role := roleOf(g, h, s.namespace)
+				got := read(g, s.request.DeepCopy())
+				g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(got.Status.Outputs).To(HaveKeyWithValue("principal", role.ARN))
+				g.Expect(got.Status.Resources).NotTo(ContainElement(HaveField("Name", s.oldRole.Name)))
+				g.Expect(eventNotes(g, s.namespace, "RoleDeleted")).To(ConsistOf(
+					And(ContainSubstring(s.oldRole.Name), ContainSubstring(role.Name)),
+				))
+			}, timeout).Should(Succeed())
+
+			if mode == awskit.ModePodIdentity {
+				role := roleOf(Default, h, s.namespace)
+				Expect(s.eks.Associations()).To(HaveEach(HaveField("RoleARN", role.ARN)))
+				Expect(s.eks.Calls()).To(ContainElement("UpdatePodIdentityAssociation"))
+			}
+		},
+		Entry("IRSA", awskit.ModeIRSA, "aws-irsa-"),
+		Entry("Pod Identity", awskit.ModePodIdentity, "aws-pod-identity-"),
+	)
+
+	It("deletes both roles when the request is deleted after a change of the prefix", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		newName := awskit.RoleName("team-b", issuer, s.namespace, "orders")
+		s.putRole(newName, string(s.request.UID))
+		// The finalizer holds the request until a hub runs Delete.
+		Expect(k8s.Delete(ctx, s.request)).To(Succeed())
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			err := k8s.Get(ctx, client.ObjectKeyFromObject(s.request), s.request.DeepCopy())
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the request is gone")
+			g.Expect(s.iam.Roles()).To(BeEmpty())
+			g.Expect(eventCount(g, s.namespace, "RoleDeleted")).To(Equal(2))
+		}, timeout).Should(Succeed())
+	})
+
+	It("keeps an old role whose UID tag names another request", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		_, err := s.iam.TagRole(ctx, &iam.TagRoleInput{
+			RoleName: aws.String(s.oldRole.Name),
+			Tags:     []iamtypes.Tag{{Key: aws.String(awskit.TagRequestUID), Value: aws.String("another-uid")}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		h := s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			role := roleOf(g, h, s.namespace)
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(got.Status.Outputs).To(HaveKeyWithValue("principal", role.ARN))
+			g.Expect(got.Status.Resources).NotTo(ContainElement(HaveField("Name", s.oldRole.Name)))
+			g.Expect(eventNotes(g, s.namespace, "RoleKept")).To(ConsistOf(
+				And(ContainSubstring(s.oldRole.Name), ContainSubstring("another-uid")),
+			))
+		}, timeout).Should(Succeed())
+		_, ok := s.iam.Role(s.oldRole.Name)
+		Expect(ok).To(BeTrue(), "the old role stays")
+		Expect(s.iam.RoleCalls(s.oldRole.Name)).NotTo(ContainElement("DeleteRole"))
+	})
+
+	It("keeps the old role while its new name is in use", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		s.putRole(awskit.RoleName("team-b", issuer, s.namespace, "orders"), "another-uid")
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			c := conditionOf(got.Status.Conditions, v1.ConditionReady)
+			g.Expect(c.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(c.Reason).To(Equal(awsidentity.ReasonRoleNameInUse))
+			g.Expect(got.Status.Resources).To(ContainElement(HaveField("Name", s.oldRole.Name)))
+			g.Expect(got.Status.Outputs).To(HaveKeyWithValue("principal", s.oldRole.ARN))
+		}, timeout).Should(Succeed())
+		_, ok := s.iam.Role(s.oldRole.Name)
+		Expect(ok).To(BeTrue(), "the old role stays")
+	})
+
+	It("deletes an old role that an older version of the plugin made", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		// An older version tagged its roles without the UID of the request.
+		_, err := awskit.DeleteRole(ctx, s.iam, s.oldRole.Name, string(s.request.UID))
+		Expect(err).NotTo(HaveOccurred())
+		_, _, err = awskit.EnsureRole(ctx, s.iam, awskit.RoleSpec{
+			Name:        s.oldRole.Name,
+			TrustPolicy: []byte(s.oldRole.TrustPolicy),
+			Tags:        awskit.RequestTags(s.namespace, "orders", s.request.Name),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		h := s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			_, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeFalse(), "the old role is gone")
+			role := roleOf(g, h, s.namespace)
+			g.Expect(eventNotes(g, s.namespace, "RoleDeleted")).To(ConsistOf(
+				And(ContainSubstring(s.oldRole.Name), ContainSubstring(role.Name)),
+			))
+		}, timeout).Should(Succeed())
+	})
+
+	It("removes the policy of a deleted grant from the old role while the new name is in use", func() {
+		var grant *pluginsv1alpha1.Grant
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant = grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		Expect(s.oldRole.InlinePolicies).To(HaveKey("grant-orders-backup-read"))
+		s.putRole(awskit.RoleName("team-b", issuer, s.namespace, "orders"), "another-uid")
+		Expect(k8s.Delete(ctx, grant)).To(Succeed())
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.InlinePolicies).To(BeEmpty())
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Reason).
+				To(Equal(awsidentity.ReasonRoleNameInUse))
+		}, timeout).Should(Succeed())
+	})
+
+	It("revokes the trust of the old role when the request names no ServiceAccount before the new role exists", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+
+		h := s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, pluginsv1alpha1.ConditionOutputsReady).Reason).
+				To(Equal(awsidentity.ReasonMissingServiceAccount))
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.TrustPolicy).To(ContainSubstring(`"Effect":"Deny"`))
+			g.Expect(old.TrustPolicy).NotTo(ContainSubstring("orders-camunda"))
+			g.Expect(got.Status.Resources).To(ContainElement(HaveField("Name", s.oldRole.Name)))
+		}, timeout).Should(Succeed())
+		_, ok := s.iam.Role(h.roleName(s.namespace))
+		Expect(ok).To(BeFalse(), "no role of the new name")
+	})
+
+	It(
+		"revokes the trust of both roles when the request names no ServiceAccount during a change of the prefix",
+		func() {
+			s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+			newName := awskit.RoleName("team-b", issuer, s.namespace, "orders")
+			s.putRole(newName, string(s.request.UID))
+			s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+
+			s.startNewHub()
+
+			Eventually(func(g Gomega) {
+				for _, name := range []string{s.oldRole.Name, newName} {
+					role, ok := s.iam.Role(name)
+					g.Expect(ok).To(BeTrue(), "the role %s stays", name)
+					g.Expect(role.TrustPolicy).To(ContainSubstring(`"Effect":"Deny"`), name)
+				}
+			}, timeout).Should(Succeed())
+		},
+	)
+
+	It("updates the trust of the old role while the new name is in use", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		s.putRole(awskit.RoleName("team-b", issuer, s.namespace, "orders"), "another-uid")
+		s.update(func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Target.AdditionalServiceAccounts = []string{"orders-es-es"}
+		})
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(subjects(g, old)).To(ConsistOf(
+				"system:serviceaccount:"+s.namespace+":orders-camunda",
+				"system:serviceaccount:"+s.namespace+":orders-es-es",
+			))
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Reason).
+				To(Equal(awsidentity.ReasonRoleNameInUse))
+		}, timeout).Should(Succeed())
+	})
+
+	It("removes the policy of a deleted grant from the old role while an association fails to move", func() {
+		var grant *pluginsv1alpha1.Grant
+		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant = grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		Expect(s.oldRole.InlinePolicies).To(HaveKey("grant-orders-backup-read"))
+		for range 1000 {
+			s.eks.FailNext("UpdatePodIdentityAssociation", errors.New("the association does not move"))
+		}
+		Expect(k8s.Delete(ctx, grant)).To(Succeed())
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.InlinePolicies).To(BeEmpty())
+		}, timeout).Should(Succeed())
+	})
+
+	It("says that an instance profile uses a role that it cannot delete", func() {
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-")
+		s.iam.AddRoleToInstanceProfile(s.oldRole.Name, "nodes")
+		Expect(k8s.Delete(ctx, s.request)).To(Succeed())
+		DeferCleanup(func() {
+			// The fake keeps the role in the instance profile, so the spec
+			// releases the request itself.
+			Eventually(func(g Gomega) {
+				got := read(g, s.request.DeepCopy())
+				got.Finalizers = nil
+				g.Expect(k8s.Update(ctx, got)).To(Succeed())
+			}, timeout).Should(Succeed())
+		})
+
+		s.startNewHub()
+
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			c := conditionOf(got.Status.Conditions, v1.ConditionReady)
+			g.Expect(c.Reason).To(Equal(pluginkit.ReasonDeleteFailed))
+			g.Expect(c.Message).To(ContainSubstring(s.oldRole.Name))
+			g.Expect(c.Message).To(ContainSubstring("an instance profile uses it"))
+		}, timeout).Should(Succeed())
+	})
+
+	It("removes the policy of a deleted grant from the old role while the Grants of the new role fail", func() {
+		var grant *pluginsv1alpha1.Grant
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant = grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		Expect(k8s.Delete(ctx, grant)).To(Succeed())
+
+		s.startNewHub(func(o *awsidentity.Options) {
+			o.Clients.IAM = &failingPolicyLists{IAM: s.iam, prefix: "team-b-"}
+		})
+
+		Eventually(func(g Gomega) {
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the old role stays")
+			g.Expect(old.InlinePolicies).To(BeEmpty())
+		}, timeout).Should(Succeed())
+	})
+
+	It("puts the Grants on the new role before it moves an association to it", func() {
+		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant := grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		moves := &policiesAtMove{EKS: s.eks, iam: s.iam}
+
+		s.startNewHub(func(o *awsidentity.Options) { o.Clients.EKS = moves })
+
+		Eventually(func(g Gomega) {
+			_, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeFalse(), "the old role is gone")
+		}, timeout).Should(Succeed())
+		Expect(moves.seen()).NotTo(BeEmpty())
+		for _, policies := range moves.seen() {
+			Expect(
+				policies,
+			).To(HaveKey("grant-orders-backup-read"), "the role had its Grants when the association moved")
+		}
+	})
+})
+
+// policiesAtMove records the inline policies of the target role of each
+// UpdatePodIdentityAssociation call.
+type policiesAtMove struct {
+	*awsfake.EKS
+	iam *awsfake.IAM
+
+	mu       sync.Mutex
+	policies []map[string]string
+}
+
+func (m *policiesAtMove) UpdatePodIdentityAssociation(
+	ctx context.Context,
+	in *eks.UpdatePodIdentityAssociationInput,
+	opts ...func(*eks.Options),
+) (*eks.UpdatePodIdentityAssociationOutput, error) {
+	arn := aws.ToString(in.RoleArn)
+	role, _ := m.iam.Role(arn[strings.LastIndex(arn, "/")+1:])
+	m.mu.Lock()
+	m.policies = append(m.policies, role.InlinePolicies)
+	m.mu.Unlock()
+	return m.EKS.UpdatePodIdentityAssociation(ctx, in, opts...)
+}
+
+func (m *policiesAtMove) seen() []map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.policies)
+}
+
+// failingPolicyLists refuses to list the inline policies of each role whose
+// name starts with prefix.
+type failingPolicyLists struct {
+	*awsfake.IAM
+	prefix string
+}
+
+func (f *failingPolicyLists) ListRolePolicies(
+	ctx context.Context,
+	in *iam.ListRolePoliciesInput,
+	opts ...func(*iam.Options),
+) (*iam.ListRolePoliciesOutput, error) {
+	if strings.HasPrefix(aws.ToString(in.RoleName), f.prefix) {
+		return nil, errors.New("the policies of the new role cannot be listed")
+	}
+	return f.IAM.ListRolePolicies(ctx, in, opts...)
+}

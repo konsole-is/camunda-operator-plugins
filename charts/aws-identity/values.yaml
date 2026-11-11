@@ -18,6 +18,18 @@ region: ""
 # controller does not start without it.
 permissionsBoundaryArn: ""
 
+# roleNamePrefix starts the name of each role, at most 47 characters. It must
+# differ from the prefix of aws-connectors-role, camunda-connectors by
+# default. A change creates new roles and deletes the old ones. Restart the
+# pods of each cluster after the change, with IRSA and with Pod Identity: see
+# "Change the role name prefix" in the docs of the plugin.
+roleNamePrefix: camunda
+
+# extraTags go on each AWS object of the plugin, next to the tags of the
+# request, for example a cost center. A key cannot start with aws: or
+# camunda.io/.
+extraTags: {}
+
 # allowedActions are the IAM action patterns, such as s3:*, that a grant of
 # another plugin can put on a role. They mirror the boundary. The controller
 # does not start without one.

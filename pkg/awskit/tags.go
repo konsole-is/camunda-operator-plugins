@@ -30,11 +30,32 @@ const (
 	TagNamespace = "camunda.io/namespace"
 	TagClaim     = "camunda.io/claim"
 	TagRequest   = "camunda.io/request"
+	// TagRequestUID binds an AWS object to the PluginRequest that created it.
+	// Request names do not name the Kubernetes cluster, so two clusters in one
+	// account can have a request of the same namespace and name.
+	TagRequestUID = "camunda.io/request-uid"
 )
 
-// MaxExtraTags is the most extra tags that ExtraTags holds: the 50 tags of
-// one AWS object, less the three request tags.
+// MaxExtraTags is the most extra tags that Set accepts: the 50 tags of one
+// AWS object, less the three request tags. A plugin that puts tags of its own
+// on an object checks CheckExtraTags too.
 const MaxExtraTags = 47
+
+// CheckExtraTags returns an error when tags and the own tags of a plugin do
+// not fit the 50 tags of one AWS object next to the three request tags: when
+// len(tags) is more than MaxExtraTags-own. own is the number of tags that the
+// plugin puts on an object besides the request tags and tags.
+func CheckExtraTags(tags ExtraTags, own int) error {
+	if most := MaxExtraTags - own; len(tags) > most {
+		return fmt.Errorf(
+			"%d tags, and the plugin puts %d of its own on each object, so at most %d",
+			len(tags),
+			own,
+			most,
+		)
+	}
+	return nil
+}
 
 var tagChars = regexp.MustCompile(`^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$`)
 
@@ -129,6 +150,15 @@ func (t ExtraTags) String() string {
 func (t ExtraTags) RequestTags(namespace, claim, request string) map[string]string {
 	tags := RequestTags(namespace, claim, request)
 	maps.Copy(tags, t)
+
+	return tags
+}
+
+// OwnerTags returns a new map with the tags of RequestTags, the extra tags,
+// and TagRequestUID with uid.
+func (t ExtraTags) OwnerTags(namespace, claim, request, uid string) map[string]string {
+	tags := t.RequestTags(namespace, claim, request)
+	tags[TagRequestUID] = uid
 
 	return tags
 }

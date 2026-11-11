@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -246,4 +247,38 @@ func grantFor(request *pluginsv1alpha1.PluginRequest, name, fragment string) *pl
 			Fragment: raw(fragment),
 		},
 	}
+}
+
+// eventNotes returns the notes of the events of reason in namespace.
+func eventNotes(g Gomega, namespace, reason string) []string {
+	var list eventsv1.EventList
+	g.Expect(k8s.List(ctx, &list, client.InNamespace(namespace))).To(Succeed())
+
+	var notes []string
+	for _, e := range list.Items {
+		if e.Reason == reason {
+			notes = append(notes, e.Note)
+		}
+	}
+	return notes
+}
+
+// eventCount returns how often events of reason happened in namespace. The
+// event recorder folds an event into an earlier one of the same reason as a
+// series, and keeps the note of the first.
+func eventCount(g Gomega, namespace, reason string) int {
+	var list eventsv1.EventList
+	g.Expect(k8s.List(ctx, &list, client.InNamespace(namespace))).To(Succeed())
+
+	var n int
+	for _, e := range list.Items {
+		switch {
+		case e.Reason != reason:
+		case e.Series != nil:
+			n += int(e.Series.Count)
+		default:
+			n++
+		}
+	}
+	return n
 }
