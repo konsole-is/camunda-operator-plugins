@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -51,20 +52,102 @@ func EmptyBucket(ctx context.Context, c S3, bucket string) error {
 		for _, o := range page.Contents {
 			objects = append(objects, types.ObjectIdentifier{Key: o.Key})
 		}
-		out, err := c.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: aws.String(bucket),
-			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
-		})
-		if err != nil {
-			return fmt.Errorf("deleting the objects of the bucket %q: %w", bucket, err)
-		}
-
-		if len(out.Errors) > 0 {
-			failed := make([]string, 0, len(out.Errors))
-			for _, e := range out.Errors {
-				failed = append(failed, aws.ToString(e.Key)+": "+aws.ToString(e.Code))
-			}
-			return fmt.Errorf("deleting the objects of the bucket %q: %s", bucket, strings.Join(failed, ", "))
+		if err := deleteObjects(ctx, c, bucket, objects); err != nil {
+			return err
 		}
 	}
+}
+
+// EmptyBucketWithin deletes the objects of bucket until the bucket is empty
+// or budget has passed, and reports whether objects remain. It deletes at
+// least one batch of at most 1,000 keys, so each call makes progress, and a
+// later call goes on where it stopped. When the versioning of the bucket is
+// on or suspended, it deletes each object version and each delete marker too,
+// so that the bucket can be deleted. A key that S3 refuses to delete is an
+// error that names the key and its code.
+func EmptyBucketWithin(ctx context.Context, c S3, bucket string, budget time.Duration) (bool, error) {
+	deadline := time.Now().Add(budget)
+
+	out, err := c.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		return false, fmt.Errorf("reading the versioning of the bucket %q: %w", bucket, err)
+	}
+	deletePage := deleteObjectPage
+	if out.Status != "" {
+		deletePage = deleteVersionPage
+	}
+
+	for {
+		remain, err := deletePage(ctx, c, bucket)
+		if err != nil || !remain || !time.Now().Before(deadline) {
+			return remain, err
+		}
+	}
+}
+
+// deleteObjectPage deletes the first page of objects of bucket, and reports
+// whether more objects remain.
+func deleteObjectPage(ctx context.Context, c S3, bucket string) (bool, error) {
+	page, err := c.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(bucket),
+		MaxKeys: aws.Int32(deleteBatch),
+	})
+	if err != nil {
+		return false, fmt.Errorf("listing the objects of the bucket %q: %w", bucket, err)
+	}
+
+	if len(page.Contents) == 0 {
+		return false, nil
+	}
+
+	objects := make([]types.ObjectIdentifier, 0, len(page.Contents))
+	for _, o := range page.Contents {
+		objects = append(objects, types.ObjectIdentifier{Key: o.Key})
+	}
+	return aws.ToBool(page.IsTruncated), deleteObjects(ctx, c, bucket, objects)
+}
+
+// deleteVersionPage deletes the first page of object versions and delete
+// markers of bucket, and reports whether more remain.
+func deleteVersionPage(ctx context.Context, c S3, bucket string) (bool, error) {
+	page, err := c.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{
+		Bucket:  aws.String(bucket),
+		MaxKeys: aws.Int32(deleteBatch),
+	})
+	if err != nil {
+		return false, fmt.Errorf("listing the object versions of the bucket %q: %w", bucket, err)
+	}
+
+	objects := make([]types.ObjectIdentifier, 0, len(page.Versions)+len(page.DeleteMarkers))
+	for _, v := range page.Versions {
+		objects = append(objects, types.ObjectIdentifier{Key: v.Key, VersionId: v.VersionId})
+	}
+	for _, m := range page.DeleteMarkers {
+		objects = append(objects, types.ObjectIdentifier{Key: m.Key, VersionId: m.VersionId})
+	}
+
+	if len(objects) == 0 {
+		return false, nil
+	}
+	return aws.ToBool(page.IsTruncated), deleteObjects(ctx, c, bucket, objects)
+}
+
+// deleteObjects deletes objects of bucket in one DeleteObjects call.
+func deleteObjects(ctx context.Context, c S3, bucket string, objects []types.ObjectIdentifier) error {
+	out, err := c.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucket),
+		Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+	})
+	if err != nil {
+		return fmt.Errorf("deleting the objects of the bucket %q: %w", bucket, err)
+	}
+
+	if len(out.Errors) > 0 {
+		failed := make([]string, 0, len(out.Errors))
+		for _, e := range out.Errors {
+			failed = append(failed, aws.ToString(e.Key)+": "+aws.ToString(e.Code))
+		}
+		return fmt.Errorf("deleting the objects of the bucket %q: %s", bucket, strings.Join(failed, ", "))
+	}
+	return nil
 }

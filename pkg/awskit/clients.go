@@ -270,6 +270,16 @@ type S3 interface {
 		in *s3.DeleteObjectsInput,
 		opts ...func(*s3.Options),
 	) (*s3.DeleteObjectsOutput, error)
+	GetBucketVersioning(
+		ctx context.Context,
+		in *s3.GetBucketVersioningInput,
+		opts ...func(*s3.Options),
+	) (*s3.GetBucketVersioningOutput, error)
+	ListObjectVersions(
+		ctx context.Context,
+		in *s3.ListObjectVersionsInput,
+		opts ...func(*s3.Options),
+	) (*s3.ListObjectVersionsOutput, error)
 }
 
 var (

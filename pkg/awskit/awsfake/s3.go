@@ -19,6 +19,7 @@ package awsfake
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"reflect"
 	"regexp"
@@ -42,6 +43,9 @@ const (
 	// maxBucketTags is the most tags of a bucket.
 	maxBucketTags = 50
 	usEast1       = "us-east-1"
+	// nullVersion is the version ID of an object that S3 wrote without
+	// versioning on.
+	nullVersion = "null"
 )
 
 var (
@@ -70,7 +74,9 @@ type S3 struct {
 	// refused holds bucket/key for each key that DeleteObjects refuses, with
 	// the code of the refusal.
 	refused map[string]string
-	fail    failures
+	// versions counts the delete markers, for their version IDs.
+	versions int
+	fail     failures
 }
 
 // Bucket is a bucket of the fake. A nil configuration is one that the bucket
@@ -82,8 +88,22 @@ type Bucket struct {
 	PublicAccessBlock     *types.PublicAccessBlockConfiguration
 	Encryption            *types.ServerSideEncryptionRule
 	LifecycleRules        []types.LifecycleRule
-	// Objects are the keys of the objects, in order.
+	// Objects are the keys of the current objects, in order. ListObjectVersions
+	// lists each of them as the version null.
 	Objects []string
+	// Versioning is the versioning status. Empty is a bucket that never had
+	// versioning on.
+	Versioning types.BucketVersioningStatus
+	// Versions are the noncurrent versions and the delete markers, oldest
+	// first. ListObjectsV2 does not list them, and a bucket with one cannot
+	// be deleted.
+	Versions []ObjectVersion
+}
+
+// ObjectVersion is a noncurrent version or a delete marker of a key.
+type ObjectVersion struct {
+	Key, VersionID string
+	DeleteMarker   bool
 }
 
 // NewS3 returns an S3 without buckets.
@@ -368,7 +388,8 @@ func checkLocation(region, constraint string) error {
 	return nil
 }
 
-// DeleteBucket deletes a bucket. A bucket with objects is BucketNotEmpty.
+// DeleteBucket deletes a bucket. A bucket with objects, versions, or delete
+// markers is BucketNotEmpty.
 func (r s3Region) DeleteBucket(
 	_ context.Context,
 	in *s3.DeleteBucketInput,
@@ -385,7 +406,7 @@ func (r s3Region) DeleteBucket(
 		return nil, err
 	}
 
-	if len(b.Objects) > 0 {
+	if len(b.Objects) > 0 || len(b.Versions) > 0 {
 		return nil, apiError("BucketNotEmpty", "The bucket you tried to delete is not empty")
 	}
 	delete(r.f.buckets, b.Name)
@@ -755,9 +776,11 @@ func (r s3Region) ListObjectsV2(
 	return out, nil
 }
 
-// DeleteObjects deletes up to 1,000 objects of a bucket. A key of
-// RefuseDelete stays and is reported in Errors; a quiet call reports only the
-// errors.
+// DeleteObjects deletes up to 1,000 objects of a bucket, as S3 does with the
+// versioning of the bucket: a key without a version ID gets a delete marker
+// when versioning is on or suspended, and a key with a version ID loses that
+// version for good. A key of RefuseDelete stays and is reported in Errors; a
+// quiet call reports only the errors.
 func (r s3Region) DeleteObjects(
 	_ context.Context,
 	in *s3.DeleteObjectsInput,
@@ -779,7 +802,6 @@ func (r s3Region) DeleteObjects(
 	}
 
 	out := &s3.DeleteObjectsOutput{}
-	gone := map[string]bool{}
 	for _, o := range in.Delete.Objects {
 		key := aws.ToString(o.Key)
 		if code, ok := r.f.refused[b.Name+"/"+key]; ok {
@@ -790,11 +812,181 @@ func (r s3Region) DeleteObjects(
 			})
 			continue
 		}
-		gone[key] = true
+		deleted := r.deleteObject(b, key, o.VersionId)
 		if !aws.ToBool(in.Delete.Quiet) {
-			out.Deleted = append(out.Deleted, types.DeletedObject{Key: aws.String(key)})
+			out.Deleted = append(out.Deleted, deleted)
 		}
 	}
-	b.Objects = slices.DeleteFunc(b.Objects, func(k string) bool { return gone[k] })
 	return out, nil
+}
+
+// deleteObject deletes key, or its version versionID, from b.
+func (r s3Region) deleteObject(b *Bucket, key string, versionID *string) types.DeletedObject {
+	deleted := types.DeletedObject{Key: aws.String(key), VersionId: versionID}
+	isKey := func(k string) bool { return k == key }
+
+	if versionID != nil {
+		if *versionID == nullVersion && slices.Contains(b.Objects, key) {
+			b.Objects = slices.DeleteFunc(b.Objects, isKey)
+			return deleted
+		}
+		i := slices.IndexFunc(b.Versions, func(v ObjectVersion) bool {
+			return v.Key == key && v.VersionID == *versionID
+		})
+		if i >= 0 {
+			deleted.DeleteMarker = aws.Bool(b.Versions[i].DeleteMarker)
+			b.Versions = slices.Delete(b.Versions, i, i+1)
+		}
+		return deleted
+	}
+
+	current := slices.Contains(b.Objects, key)
+	b.Objects = slices.DeleteFunc(b.Objects, isKey)
+
+	var marker ObjectVersion
+	switch b.Versioning {
+	case types.BucketVersioningStatusEnabled:
+		if current {
+			b.Versions = append(b.Versions, ObjectVersion{Key: key, VersionID: nullVersion})
+		}
+		r.f.versions++
+		marker = ObjectVersion{Key: key, VersionID: fmt.Sprintf("marker-%d", r.f.versions), DeleteMarker: true}
+	case types.BucketVersioningStatusSuspended:
+		b.Versions = slices.DeleteFunc(b.Versions, func(v ObjectVersion) bool {
+			return v.Key == key && v.VersionID == nullVersion
+		})
+		marker = ObjectVersion{Key: key, VersionID: nullVersion, DeleteMarker: true}
+	default:
+		return deleted
+	}
+
+	b.Versions = append(b.Versions, marker)
+	deleted.DeleteMarker = aws.Bool(true)
+	deleted.DeleteMarkerVersionId = aws.String(marker.VersionID)
+	return deleted
+}
+
+// GetBucketVersioning returns the versioning status of a bucket, with no
+// status for a bucket that never had versioning on.
+func (r s3Region) GetBucketVersioning(
+	_ context.Context,
+	in *s3.GetBucketVersioningInput,
+	_ ...func(*s3.Options),
+) (*s3.GetBucketVersioningOutput, error) {
+	region, err := r.begin("GetBucketVersioning")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+	return &s3.GetBucketVersioningOutput{Status: b.Versioning}, nil
+}
+
+// ListObjectVersions returns the versions and the delete markers of a bucket
+// in key order, the newest version of each key first, in pages of MaxKeys, at
+// most 1,000. Each current object is the version null.
+func (r s3Region) ListObjectVersions(
+	_ context.Context,
+	in *s3.ListObjectVersionsInput,
+	_ ...func(*s3.Options),
+) (*s3.ListObjectVersionsOutput, error) {
+	region, err := r.begin("ListObjectVersions")
+	defer r.f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.bucket(region, in.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	size := maxKeys
+	if in.MaxKeys != nil {
+		size = min(max(int(*in.MaxKeys), 0), maxKeys)
+	}
+
+	all := listedVersions(b)
+	start := 0
+	if marker := aws.ToString(in.KeyMarker); marker != "" {
+		start = len(all)
+		for i, v := range all {
+			if v.Key == marker && v.VersionID == aws.ToString(in.VersionIdMarker) {
+				start = i + 1
+				break
+			}
+			if v.Key > marker {
+				start = i
+				break
+			}
+		}
+	}
+	all = all[start:]
+
+	truncated := len(all) > size
+	page := all[:min(size, len(all))]
+	out := &s3.ListObjectVersionsOutput{
+		Name:            in.Bucket,
+		MaxKeys:         aws.Int32(int32(size)),
+		IsTruncated:     aws.Bool(truncated),
+		KeyMarker:       in.KeyMarker,
+		VersionIdMarker: in.VersionIdMarker,
+	}
+	for _, v := range page {
+		if v.DeleteMarker {
+			out.DeleteMarkers = append(out.DeleteMarkers, types.DeleteMarkerEntry{
+				Key:       aws.String(v.Key),
+				VersionId: aws.String(v.VersionID),
+				IsLatest:  aws.Bool(v.latest),
+			})
+			continue
+		}
+		out.Versions = append(out.Versions, types.ObjectVersion{
+			Key:       aws.String(v.Key),
+			VersionId: aws.String(v.VersionID),
+			IsLatest:  aws.Bool(v.latest),
+		})
+	}
+	if truncated && len(page) > 0 {
+		last := page[len(page)-1]
+		out.NextKeyMarker, out.NextVersionIdMarker = aws.String(last.Key), aws.String(last.VersionID)
+	}
+	return out, nil
+}
+
+// listedVersion is one item of ListObjectVersions.
+type listedVersion struct {
+	ObjectVersion
+	latest bool
+}
+
+// listedVersions returns every version and delete marker of b in key order,
+// the newest of each key first.
+func listedVersions(b *Bucket) []listedVersion {
+	byKey := map[string][]ObjectVersion{}
+	for _, k := range b.Objects {
+		byKey[k] = nil
+	}
+	for _, v := range b.Versions {
+		byKey[v.Key] = append(byKey[v.Key], v)
+	}
+
+	var all []listedVersion
+	for _, key := range slices.Sorted(maps.Keys(byKey)) {
+		latest := true
+		if slices.Contains(b.Objects, key) {
+			all = append(all, listedVersion{ObjectVersion{Key: key, VersionID: nullVersion}, true})
+			latest = false
+		}
+		versions := byKey[key]
+		for i := len(versions) - 1; i >= 0; i-- {
+			all = append(all, listedVersion{versions[i], latest})
+			latest = false
+		}
+	}
+	return all
 }
