@@ -165,3 +165,22 @@ func TestIAMFailNextFailsOneCall(t *testing.T) {
 	assert.NoError(t, second)
 	assert.Equal(t, []string{"CreateRole", "GetRole", "GetRole"}, f.Calls())
 }
+
+func TestIAMFailRoleFailsEachCallOnTheRoleUntilCleared(t *testing.T) {
+	f := NewIAM()
+	createRole(t, f)
+	boom := errors.New("boom")
+	f.FailRole("r", boom)
+
+	_, get := f.GetRole(context.Background(), &iam.GetRoleInput{RoleName: aws.String("r")})
+	_, tag := f.TagRole(context.Background(), &iam.TagRoleInput{RoleName: aws.String("r")})
+	_, other := f.GetRole(context.Background(), &iam.GetRoleInput{RoleName: aws.String("other")})
+	f.FailRole("r", nil)
+	_, cleared := f.GetRole(context.Background(), &iam.GetRoleInput{RoleName: aws.String("r")})
+
+	assert.ErrorIs(t, get, boom)
+	assert.ErrorIs(t, tag, boom)
+	assert.True(t, awskit.IsNotFound(other), "another role is not failed")
+	assert.NoError(t, cleared)
+	assert.Equal(t, []string{"CreateRole", "GetRole", "TagRole", "GetRole", "GetRole"}, f.Calls())
+}

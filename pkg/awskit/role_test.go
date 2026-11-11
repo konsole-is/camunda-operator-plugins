@@ -756,3 +756,11 @@ func TestPolicyChangeCorrectionsNameEachPolicy(t *testing.T) {
 	}, change.Corrections("camunda-0123"))
 	assert.Empty(t, awskit.PolicyChange{}.Corrections("camunda-0123"))
 }
+
+func TestInlinePolicyCorrectionsNameEachPolicy(t *testing.T) {
+	assert.Equal(t, []string{
+		"the inline policy grant-a of the IAM role camunda-0123",
+		"the inline policy grant-b of the IAM role camunda-0123",
+	}, awskit.InlinePolicyCorrections("camunda-0123", "grant-a", "grant-b"))
+	assert.Empty(t, awskit.InlinePolicyCorrections("camunda-0123"))
+}

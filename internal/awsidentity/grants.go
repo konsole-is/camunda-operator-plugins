@@ -144,16 +144,6 @@ func (p *Plugin) syncGrants(
 	return sync, nil
 }
 
-// policyCorrections names each policy of policies on role, for
-// pluginkit.Result.Corrected.
-func policyCorrections(role awskit.Role, policies []string) []string {
-	out := make([]string, 0, len(policies))
-	for _, policy := range policies {
-		out = append(out, "the inline policy "+policy+" of the IAM role "+role.Name)
-	}
-	return out
-}
-
 // clusterGrants returns the Grants of the cluster of request that belong to
 // its claim, read fresh, sorted by creation time and then by name. It also
 // returns, as refused, the policy of each Grant whose request is gone, does

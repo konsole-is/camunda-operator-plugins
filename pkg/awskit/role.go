@@ -428,6 +428,16 @@ func (c PolicyChange) Corrections(name string) []string {
 	return out
 }
 
+// InlinePolicyCorrections names each inline policy of policies on the role
+// name, for pluginkit.Result.Corrected.
+func InlinePolicyCorrections(name string, policies ...string) []string {
+	out := make([]string, 0, len(policies))
+	for _, policy := range policies {
+		out = append(out, "the inline policy "+policy+" of the IAM role "+name)
+	}
+	return out
+}
+
 // EnsureAttachedPolicies makes the managed policies of the role exactly
 // arns, which may hold an ARN twice. It detaches each other policy before it
 // attaches a missing one, so a swap does not hit the quota of managed

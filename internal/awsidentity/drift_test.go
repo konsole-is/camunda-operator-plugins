@@ -23,7 +23,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
-	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	gomegatypes "github.com/onsi/gomega/types"
@@ -35,6 +34,7 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/internal/awsidentity"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 const (
@@ -163,19 +163,11 @@ var _ = Describe("drift of a role", Serial, func() {
 			PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[]}`),
 		})
 		Expect(err).NotTo(HaveOccurred())
-		_, err = s.hub.iam.TagRole(ctx, &iam.TagRoleInput{
-			RoleName: aws.String(s.role),
-			Tags:     []iamtypes.Tag{{Key: aws.String(awskit.TagClaim), Value: aws.String("changed")}},
-		})
-		Expect(err).NotTo(HaveOccurred())
-		s.hub.iam.FailNext("TagRole", errors.New("the role cannot be tagged"))
+		// The Grant sync reads the inline policies after the role is repaired.
+		s.hub.iam.FailNext("ListRolePolicies", errors.New("the policies cannot be listed"))
 
-		Eventually(func(g Gomega) {
-			g.Expect(eventCount(g, s.namespace, "DriftCorrected")).To(Equal(2))
-			g.Expect(roleOf(g, s.hub, s.namespace).Tags).To(HaveKeyWithValue(awskit.TagClaim, "orders"))
-		}, timeout).Should(Succeed())
-		Expect(eventNotes(Default, s.namespace, "DriftCorrected")).
-			To(ContainElement(ContainSubstring("the trust policy of the IAM role " + s.role)))
+		s.expectOneDriftCorrected("the trust policy of the IAM role " + s.role)
+		Expect(roleOf(Default, s.hub, s.namespace).TrustPolicy).NotTo(ContainSubstring(`"Statement":[]`))
 	})
 
 	It("records one DriftCorrected for an association of a ServiceAccount that the request does not name", func() {
@@ -207,6 +199,53 @@ var _ = Describe("drift of a role", Serial, func() {
 
 		s.expectOneDriftCorrected("the Pod Identity association of the ServiceAccount orders-camunda")
 		Expect(associationsIn(s.hub, s.namespace)).To(ConsistOf("orders-camunda"))
+	})
+
+	It("records no DriftCorrected when the ServiceAccounts come back after a pass without them failed "+
+		"during a change of the prefix", func() {
+		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-")
+		// The old role stays in the status while the new hub cannot delete it.
+		s.iam.FailRole(s.oldRole.Name, errors.New("the role cannot be read"))
+		h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks)
+		var current awsfake.Role
+		Eventually(func(g Gomega) {
+			current = roleOf(g, h, s.namespace)
+			g.Expect(current.Tags).To(HaveKey(awskit.TagDesired))
+			got := read(g, s.request.DeepCopy())
+			g.Expect(got.Status.Outputs).To(HaveKeyWithValue(awskit.OutputPrincipal, current.ARN))
+			g.Expect(got.Status.Resources).To(ContainElement(HaveField("Name", s.oldRole.Name)))
+		}, timeout).Should(Succeed())
+		stop()
+		s.iam.FailRole(s.oldRole.Name, nil)
+
+		// The outputs name the old role again, as after a status write that
+		// did not land, and the request names no ServiceAccount.
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			got.Status.Outputs[awskit.OutputPrincipal] = s.oldRole.ARN
+			g.Expect(k8s.Status().Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+		s.iam.FailRole(current.Name, errors.New("the role cannot be read"))
+		DeferCleanup(func() { s.iam.FailRole(current.Name, nil) })
+		// Controller names are unique in the process.
+		s.startNewHub(func(o *awsidentity.Options) { o.Name += "-again" })
+		Eventually(func(g Gomega) {
+			ready := conditionOf(read(g, s.request.DeepCopy()).Status.Conditions, v1.ConditionReady)
+			g.Expect(ready.Reason).To(Equal(pluginkit.ReasonReconcileError))
+			g.Expect(ready.Message).To(ContainSubstring(current.Name + ": the role cannot be read"))
+		}, timeout).Should(Succeed())
+
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "orders-camunda" })
+		s.iam.FailRole(current.Name, nil)
+
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(got.Status.Outputs).To(HaveKeyWithValue(awskit.OutputPrincipal, current.ARN))
+		}, timeout).Should(Succeed())
+		Expect(associationsIn(h, s.namespace)).To(ConsistOf("orders-camunda"))
+		expectNoDriftCorrected(s.namespace)
 	})
 
 	It("records no DriftCorrected for a change of the request", func() {

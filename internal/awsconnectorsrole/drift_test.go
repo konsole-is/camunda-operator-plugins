@@ -24,7 +24,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
-	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	gomegatypes "github.com/onsi/gomega/types"
@@ -33,6 +32,7 @@ import (
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 // driftQuiet is longer than two resyncs of rolePodIdentity.
@@ -137,26 +137,27 @@ var _ = Describe("drift of a Connectors role", func() {
 
 	It("records the repair of the trust policy when a later step of the pass fails", func() {
 		req, name := readyDriftRequest(managedParams(policyA))
+		// The pass repairs the trust policy before it attaches policyA again.
+		rolePodIdentity.iam.FailNext("AttachRolePolicy", errors.New("the policy cannot be attached"))
 
 		_, err := rolePodIdentity.iam.UpdateAssumeRolePolicy(ctx, &iam.UpdateAssumeRolePolicyInput{
 			RoleName:       aws.String(name),
 			PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[]}`),
 		})
 		Expect(err).NotTo(HaveOccurred())
-		_, err = rolePodIdentity.iam.TagRole(ctx, &iam.TagRoleInput{
-			RoleName: aws.String(name),
-			Tags:     []iamtypes.Tag{{Key: aws.String(awskit.TagClaim), Value: aws.String("changed")}},
+		_, err = rolePodIdentity.iam.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+			RoleName:  aws.String(name),
+			PolicyArn: aws.String(policyA),
 		})
 		Expect(err).NotTo(HaveOccurred())
-		rolePodIdentity.iam.FailNext("TagRole", errors.New("the role cannot be tagged"))
 
+		trust := "the trust policy of the IAM role " + name
 		Eventually(func(g Gomega) {
-			g.Expect(eventCount(g, rolePodIdentity, req.Namespace, "DriftCorrected")).To(Equal(2))
-			iamRole, _ := rolePodIdentity.iam.Role(name)
-			g.Expect(iamRole.Tags).To(HaveKeyWithValue(awskit.TagClaim, "orders"))
+			g.Expect(eventNotes(g, rolePodIdentity, req.Namespace, "DriftCorrected")).To(ConsistOf(
+				And(ContainSubstring(trust), Not(ContainSubstring("managed policy"))),
+				ContainSubstring("the managed policy "+policyA+" of the IAM role "+name),
+			))
 		}, timeout).Should(Succeed())
-		Expect(eventNotes(Default, rolePodIdentity, req.Namespace, "DriftCorrected")).
-			To(ContainElement(ContainSubstring("the trust policy of the IAM role " + name)))
 	})
 
 	It("records one DriftCorrected for an association of a request that names no ServiceAccount", func() {
@@ -177,6 +178,24 @@ var _ = Describe("drift of a Connectors role", func() {
 
 		expectOneDriftCorrected(req, "the Pod Identity association of the ServiceAccount orders-connectors")
 		Expect(associationsIn(rolePodIdentity, req.Namespace)).To(BeEmpty())
+	})
+
+	It("records no DriftCorrected when the ServiceAccount comes back after a pass without it failed", func() {
+		req, name := readyDriftRequest(managedParams(policyA))
+		rolePodIdentity.iam.FailRole(name, errors.New("the role cannot be read"))
+		DeferCleanup(func() { rolePodIdentity.iam.FailRole(name, nil) })
+
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+		Expect(waitReason(rolePodIdentity, req, v1.ConditionReady, pluginkit.ReasonReconcileError)).
+			To(ContainSubstring(name + ": the role cannot be read"))
+		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
+			r.Spec.Target.ServiceAccountName = "orders-connectors"
+		})
+		rolePodIdentity.iam.FailRole(name, nil)
+
+		waitReady(rolePodIdentity, req)
+		Expect(associationsIn(rolePodIdentity, req.Namespace)).To(HaveLen(1))
+		expectNoDriftCorrected(req)
 	})
 
 	It("records no DriftCorrected for a change of the parameters", func() {

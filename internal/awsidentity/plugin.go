@@ -157,7 +157,7 @@ func (p *Plugin) Reconcile(
 	// never holds the role without its policies.
 	sync, err := p.syncGrants(ctx, req, role)
 	if drift {
-		corrected = append(corrected, policyCorrections(role, sync.repaired)...)
+		corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
 	}
 	if err := errors.Join(leftErr, err); err != nil {
 		// The ServiceAccounts that the old role trusts keep their sessions, so
@@ -294,42 +294,50 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 		Resources: oldRoleRows(status, current),
 	}
 
-	old, err := p.activeOldRole(ctx, req, current)
-	if err != nil {
-		return res, err
-	}
-	if old.ARN != "" {
-		_, conflicted, corrected, err := p.trustNobody(ctx, req, old.Name)
-		res.Corrected = corrected
-		if err != nil {
-			return pluginkit.Result{Corrected: res.Corrected}, err
-		}
-		if conflicted {
-			res.RequeueAfter = conflictRequeue
-		}
-	}
-
 	arn, err := p.liveRoleARN(ctx, current)
 	if err != nil {
 		return res, err
 	}
-	if arn == "" {
-		if old.ARN != "" {
-			return res, nil
+
+	// The pass of the old role deletes the associations of the request, also
+	// those of the role of the current name, so that role gets its desired
+	// tag first.
+	var role awskit.Role
+	var conflicted, inUse bool
+	var pending pluginkit.Result
+	if arn != "" {
+		role, conflicted, res.Corrected, err = p.trustNobody(ctx, req, current)
+		pending, inUse = roleNameInUse(err, status)
+		if err != nil && !inUse {
+			return pluginkit.Result{Corrected: res.Corrected}, err
 		}
+	}
+
+	old, err := p.activeOldRole(ctx, req, current)
+	if err != nil {
+		return pluginkit.Result{Corrected: res.Corrected}, err
+	}
+	if old.ARN != "" {
+		_, oldConflicted, corrected, err := p.trustNobody(ctx, req, old.Name)
+		res.Corrected = append(res.Corrected, corrected...)
+		if err != nil {
+			return pluginkit.Result{Corrected: res.Corrected}, err
+		}
+		if oldConflicted {
+			res.RequeueAfter = conflictRequeue
+		}
+	}
+
+	switch {
+	case inUse:
+		pending.Corrected = res.Corrected
+		return pending, nil
+	case arn == "" && old.ARN == "":
 		// The associations of a role that someone deleted by hand still hold
 		// the ServiceAccounts.
 		return res, p.deleteAssociations(ctx, req, current)
-	}
-
-	role, conflicted, corrected, err := p.trustNobody(ctx, req, current)
-	res.Corrected = append(res.Corrected, corrected...)
-	if inUse, ok := roleNameInUse(err, status); ok {
-		inUse.Corrected = res.Corrected
-		return inUse, nil
-	}
-	if err != nil {
-		return pluginkit.Result{Corrected: res.Corrected}, err
+	case arn == "":
+		return res, nil
 	}
 
 	left, again, err := p.retireOldRoles(ctx, req, role)
@@ -347,8 +355,8 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 	return res, nil
 }
 
-// trustNobody makes the role name of req trust nobody, deletes its
-// associations, keeps its Grants in sync, and then tags the role with the
+// trustNobody makes the role name of req trust nobody, deletes the
+// associations of req, keeps the Grants of the role in sync, and then tags the role with the
 // hash of that state. It returns the drift that it repaired, also with an
 // error, and whether a Grant changed after it was read.
 func (p *Plugin) trustNobody(
@@ -379,7 +387,7 @@ func (p *Plugin) trustNobody(
 		if err != nil {
 			sync, syncErr := p.syncGrants(ctx, req, role)
 			if drift {
-				corrected = append(corrected, policyCorrections(role, sync.repaired)...)
+				corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
 			}
 			return awskit.Role{}, false, corrected, errors.Join(err, syncErr)
 		}
@@ -387,7 +395,7 @@ func (p *Plugin) trustNobody(
 
 	sync, err := p.syncGrants(ctx, req, role)
 	if drift {
-		corrected = append(corrected, policyCorrections(role, sync.repaired)...)
+		corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
 	}
 	if err != nil {
 		return awskit.Role{}, false, corrected, err

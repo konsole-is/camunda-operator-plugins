@@ -106,7 +106,7 @@ func (p *Plugin) reconcileRole(
 
 	updated, err := p.ensureInlinePolicy(ctx, req, role, doc)
 	if drift && updated {
-		corrected = append(corrected, "the inline policy "+inlinePolicyName+" of the IAM role "+role.Name)
+		corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, inlinePolicyName)...)
 	}
 	if err != nil {
 		return pluginkit.Result{Corrected: corrected}, err
@@ -194,36 +194,48 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 	status := req.Object.Status.Resources
 	res := pluginkit.Result{Pending: missingServiceAccount(), Resources: oldRoleRows(status, current)}
 
+	arn, err := p.liveRoleARN(ctx, current)
+	if err != nil {
+		return res, err
+	}
+
+	// trustNobody deletes the associations of the request, also those of the
+	// old role, so the role of the current name gets its desired tag first.
+	var role awskit.Role
+	var inUse bool
+	var pending pluginkit.Result
+	if arn != "" {
+		role, res.Corrected, err = p.trustNobody(ctx, req, current)
+		pending, inUse = roleNameInUse(err, status)
+		if err != nil && !inUse {
+			return pluginkit.Result{Corrected: res.Corrected}, err
+		}
+	}
+
 	old, err := p.activeOldRole(ctx, req, current)
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: res.Corrected}, err
 	}
 	if old.ARN != "" {
-		_, corrected, err := p.trustNobody(ctx, req, old.Name, nil)
-		res.Corrected = corrected
+		_, corrected, err := p.trustNobody(ctx, req, old.Name)
+		res.Corrected = append(res.Corrected, corrected...)
 		if err != nil {
 			return pluginkit.Result{Corrected: res.Corrected}, err
 		}
 	}
 
-	deleted, err := p.deleteAssociations(ctx, req)
-	if err != nil {
-		return pluginkit.Result{Corrected: res.Corrected}, err
+	if old.ARN == "" && (arn == "" || inUse) {
+		// No trustNobody of this pass deleted the associations of the request.
+		if _, err := p.deleteAssociations(ctx, req); err != nil {
+			return pluginkit.Result{Corrected: res.Corrected}, err
+		}
 	}
-
-	arn, err := p.liveRoleARN(ctx, current)
-	if err != nil || arn == "" {
-		return res, err
+	if inUse {
+		pending.Corrected = res.Corrected
+		return pending, nil
 	}
-
-	role, corrected, err := p.trustNobody(ctx, req, current, deleted)
-	res.Corrected = append(res.Corrected, corrected...)
-	if inUse, ok := roleNameInUse(err, status); ok {
-		inUse.Corrected = res.Corrected
-		return inUse, nil
-	}
-	if err != nil {
-		return pluginkit.Result{Corrected: res.Corrected}, err
+	if arn == "" {
+		return res, nil
 	}
 
 	left, again, err := p.retireOldRoles(ctx, req, role)
@@ -237,15 +249,13 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 	return res, nil
 }
 
-// trustNobody makes the role name of req trust nobody, and then tags the
-// role with the hash of that state. It returns the drift that it repaired,
-// also with an error. The associations of the ServiceAccounts in deleted,
-// which the pass deleted, count as drift of the role.
+// trustNobody makes the role name of req trust nobody, deletes the
+// associations of req, and then tags the role with the hash of that state.
+// It returns the drift that it repaired, also with an error.
 func (p *Plugin) trustNobody(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	name string,
-	deleted []string,
 ) (awskit.Role, []string, error) {
 	spec, err := p.roleSpec(req.Object, name, nil)
 	if err != nil {
@@ -254,9 +264,18 @@ func (p *Plugin) trustNobody(
 
 	hash := spec.DesiredHash()
 	role, change, err := p.ensureRole(ctx, req, spec, hash)
+	drift := role.Desired == hash
 	var corrected []string
-	if role.Desired == hash {
-		corrected = append(change.Corrections(role.Name), awskit.AssociationChange{Deleted: deleted}.Corrections()...)
+	if drift {
+		corrected = change.Corrections(role.Name)
+	}
+	if err != nil {
+		return awskit.Role{}, corrected, err
+	}
+
+	deleted, err := p.deleteAssociations(ctx, req)
+	if drift {
+		corrected = append(corrected, awskit.AssociationChange{Deleted: deleted}.Corrections()...)
 	}
 	if err != nil {
 		return awskit.Role{}, corrected, err
