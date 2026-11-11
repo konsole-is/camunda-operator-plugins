@@ -97,14 +97,15 @@ jobs:
   conformance-aws:
     name: Conformance of ${{ matrix.plugin }} in the AWS sandbox
     # A pull request runs these rows only when the trusted user opened it
-    # from a branch of this repository and triggered the event. Every other
-    # pull request, Renovate included, skips them, and they run on main after
-    # the merge. GitHub gives a fork no OIDC token, and the CI role checks the
-    # actor ID in the token.
+    # from a branch of this repository, and opened or pushed it in this event.
+    # A reopen skips them. Every other pull request, Renovate included, skips
+    # them, and they run on main after the merge. GitHub gives a fork no OIDC
+    # token, and the CI role checks the actor ID in the token.
     if: >-
       github.repository == 'konsole-is/camunda-operator-plugins' &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action == 'opened' || github.event.action == 'synchronize') &&
       format('{0}', github.event.pull_request.user.id) == vars.AWS_SANDBOX_ACTOR_ID &&
       github.actor_id == vars.AWS_SANDBOX_ACTOR_ID))
     runs-on: ubuntu-latest
