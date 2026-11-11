@@ -94,8 +94,8 @@ type Plugin struct {
 }
 
 // Reconcile keeps the role of the request, its trust, and with Pod Identity
-// its associations, then puts the allowed Grants of the cluster on the role
-// and writes their conditions. It is Pending with the reason
+// its associations, puts the allowed Grants of the cluster on the role, and
+// writes their conditions. It is Pending with the reason
 // MissingServiceAccount when spec.target names no ServiceAccount, and with
 // the reason RoleNameInUse when the role of its name belongs to another
 // request. After a change of the role name, it deletes the old role once the
@@ -103,10 +103,7 @@ type Plugin struct {
 // status.resources. A failed AWS call is an error, except a policy document
 // that IAM refuses, which sets Applied=False on its Grant.
 //
-// After each step of a pass succeeded, it tags the role with the hash of
-// its desired state. A repair on a role whose tag holds the hash of the pass
-// is drift, and so is a put of the policy of a Grant that had Applied=True
-// for its generation: the result names them in Corrected, also with an
+// The result names in Corrected the drift that it repaired, also with an
 // error.
 func (p *Plugin) Reconcile(
 	ctx context.Context,

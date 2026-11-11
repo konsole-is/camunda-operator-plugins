@@ -40,9 +40,8 @@ import (
 // size limit, and Pending when the role of its name belongs to another
 // request. A Pending result keeps the old roles of the status.
 //
-// After each step of a pass succeeded, it tags the role with the hash of
-// its desired state. A repair on a role whose tag holds the hash of the pass
-// is drift: the result names it in Corrected, also with an error.
+// The result names in Corrected the drift that it repaired, also with an
+// error.
 func (p *Plugin) reconcileRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -186,8 +185,7 @@ func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) plug
 // it exists, and the old role that the outputs name trust nobody, and deletes
 // the associations of the request. It creates no role, and deletes the other
 // old roles of the status only once the outputs name the role of its current
-// name. The Pending result keeps the role and the old roles that stay. The
-// result names the drift that it repaired, also with an error.
+// name. The Pending result keeps the role and the old roles that stay.
 func (p *Plugin) reconcileRoleWithoutServiceAccount(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
