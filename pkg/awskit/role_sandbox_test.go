@@ -150,7 +150,9 @@ func TestSandboxRoleNamesAreOneNameInAnyCase(t *testing.T) {
 		RoleName:                 aws.String(other),
 		AssumeRolePolicyDocument: aws.String(sandboxTrust),
 		PermissionsBoundary:      aws.String(s.boundary),
-		Tags:                     []types.Tag{{Key: aws.String("cpo-ci-run"), Value: aws.String(s.extra["cpo-ci-run"])}},
+		Tags: []types.Tag{
+			{Key: aws.String("cpo-ci-run"), Value: aws.String(s.extra["cpo-ci-run"])},
+		},
 	})
 	if err == nil {
 		t.Cleanup(func() { s.deleteRole(t, other) })
