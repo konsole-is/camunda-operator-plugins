@@ -1,9 +1,21 @@
-# The targets of config.yaml. The Services have no selector: the Gateway
-# needs each backend of a route to exist, not to answer.
+# The targets of config.yaml. The registration offers Delete and Orphan, so
+# the suite runs each case once for each policy, against the target of the
+# case with the policy as a suffix. The targets of one case share their
+# Services. The Services have no selector: the Gateway needs each backend of
+# a route to exist, not to answer.
 apiVersion: core.camunda.io/v1
 kind: CamundaCluster
 metadata:
-  name: conf-cluster
+  name: conf-cluster-delete
+spec:
+  pause: true
+  platformConfigRef: platform
+  storageRef: storage
+---
+apiVersion: core.camunda.io/v1
+kind: CamundaCluster
+metadata:
+  name: conf-cluster-orphan
 spec:
   pause: true
   platformConfigRef: platform
@@ -12,7 +24,23 @@ spec:
 apiVersion: core.camunda.io/v1
 kind: CamundaManagementCluster
 metadata:
-  name: conf-plane
+  name: conf-plane-delete
+spec:
+  platformConfigRef: platform
+  identityProvider:
+    oidc: {}
+  identity:
+    version: 8.9.0
+    externalUrl: https://identity.example.com
+    databaseConfigRef: identity-db
+    admin:
+      claimName: oid
+      claimValue: admin
+---
+apiVersion: core.camunda.io/v1
+kind: CamundaManagementCluster
+metadata:
+  name: conf-plane-orphan
 spec:
   platformConfigRef: platform
   identityProvider:

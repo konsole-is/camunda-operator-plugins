@@ -28,18 +28,21 @@ fmt: golangci-lint ## Format the code with the formatters of .golangci.yml.
 	"$(GOLANGCI_LINT)" fmt
 
 .PHONY: vet
-vet: ## Run go vet against the code.
+vet: ## Run go vet against the code, and against the journeys behind the e2e build tag.
 	go vet ./...
+	go vet -tags e2e ./test/e2e/
 
 .PHONY: tidy
 tidy: ## Run go mod tidy.
 	go mod tidy
 
 .PHONY: test
-test: fmt vet setup-envtest envtest-crds ## Run the unit tests and the envtest suites.
+test: fmt vet setup-envtest envtest-crds ## Run the unit tests, the envtest suites, and the helper tests of the journeys.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" \
 	ENVTEST_CRDS="$(ENVTEST_CRDS_DIR)" \
 		go test $$(go list ./... | grep -v /test/e2e) -coverprofile cover.out
+	@# An empty JOURNEY skips the journeys, so this runs no spec against the cluster of the kubeconfig.
+	JOURNEY= go test -tags e2e -count=1 ./test/e2e/
 
 .PHONY: test-api-ref
 test-api-ref: ## Check that a pseudo-version and a tag of the api module map to the operator ref of their CRD bases.
@@ -191,6 +194,19 @@ CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
 ENVOY_GATEWAY_VERSION ?= v1.9.3
 # renovate: datasource=docker depName=rustfs/rustfs
 RUSTFS_VERSION ?= 1.0.4
+# JOURNEY is the journey that journey-kind runs, a directory of test/e2e/.
+JOURNEY ?= bare-metal
+# JOURNEY_REPORT is the JUnit report of journey-kind.
+JOURNEY_REPORT ?= $(LOCALBIN)/journeys/$(JOURNEY).xml
+# CAMUNDA_MINOR is the Camunda minor of the journeys. The versions come from
+# the matrix file of that minor in the operator checkout.
+CAMUNDA_MINOR ?= 8.9
+# CURL_VERSION and AWS_CLI_VERSION are the images of the helper pods of the
+# journeys.
+# renovate: datasource=docker depName=curlimages/curl
+CURL_VERSION ?= 8.23.0
+# renovate: datasource=docker depName=amazon/aws-cli
+AWS_CLI_VERSION ?= 2.37.13
 
 .PHONY: operator-source
 operator-source: ## Check out the operator at API_REF into OPERATOR_DIR.
@@ -202,6 +218,14 @@ conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run
 	REPORT="$(CONFORMANCE_REPORT)" GATEWAY_API_VERSION="$(GATEWAY_API_VERSION)" \
 	ENVOY_GATEWAY_VERSION="$(ENVOY_GATEWAY_VERSION)" RUSTFS_VERSION="$(RUSTFS_VERSION)" \
 		test/conformance/run.sh "$(PLUGIN)"
+
+.PHONY: journey-kind
+journey-kind: ## Create a kind cluster with the operator, ECK, and the plugins of JOURNEY, and run the journey. CI only.
+	KIND_CLUSTER="$(KIND_CLUSTER)" OPERATOR_DIR="$(OPERATOR_DIR)" CHART_NAMESPACE="$(CHART_NAMESPACE)" \
+	REPORT="$(JOURNEY_REPORT)" CAMUNDA_MINOR="$(CAMUNDA_MINOR)" GATEWAY_API_VERSION="$(GATEWAY_API_VERSION)" \
+	ENVOY_GATEWAY_VERSION="$(ENVOY_GATEWAY_VERSION)" RUSTFS_VERSION="$(RUSTFS_VERSION)" \
+	CURL_IMAGE="curlimages/curl:$(CURL_VERSION)" AWS_CLI_IMAGE="amazon/aws-cli:$(AWS_CLI_VERSION)" \
+		test/e2e/run.sh "$(JOURNEY)"
 
 ##@ Dependencies
 
