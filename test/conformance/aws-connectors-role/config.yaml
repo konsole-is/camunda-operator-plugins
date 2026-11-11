@@ -1,0 +1,23 @@
+# The run of plugin-conformance against the registration aws-connectors-role.
+# The case policy is the one that setup.sh creates. The case runs once with
+# Delete and once with Orphan.
+registration: aws-connectors-role
+namespace: conformance-aws-connectors-role
+timeouts:
+  outputsReady: 2m
+  ready: 5m
+  deletion: 3m
+cases:
+  - name: basic
+    parameters:
+      managedPolicyArns: ["arn:aws:iam::${AWS_ACCOUNT_ID}:policy/${RUN_ID}-conn-case"]
+      inlinePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource: arn:aws:s3:::${RUN_ID}-none
+    target:
+      kind: CamundaCluster
+      name: orders
+      serviceAccountName: orders-connectors

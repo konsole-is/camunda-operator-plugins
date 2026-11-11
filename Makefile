@@ -28,9 +28,10 @@ fmt: golangci-lint ## Format the code with the formatters of .golangci.yml.
 	"$(GOLANGCI_LINT)" fmt
 
 .PHONY: vet
-vet: ## Run go vet against the code, and against the journeys behind the e2e build tag.
+vet: ## Run go vet against the code, the journeys behind the e2e build tag, and the sandbox tests of awskit.
 	go vet ./...
 	go vet -tags e2e ./test/e2e/
+	go vet -tags sandbox ./pkg/awskit/
 
 .PHONY: tidy
 tidy: ## Run go mod tidy.

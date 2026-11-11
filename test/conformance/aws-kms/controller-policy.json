@@ -1,0 +1,32 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateAndList",
+      "Effect": "Allow",
+      "Action": ["kms:CreateKey", "kms:TagResource", "kms:ListAliases"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Aliases",
+      "Effect": "Allow",
+      "Action": ["kms:CreateAlias", "kms:DeleteAlias"],
+      "Resource": [
+        "arn:aws:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:alias/${RUN_ID}/*",
+        "arn:aws:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/*"
+      ]
+    },
+    {
+      "Sid": "Keys",
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey", "kms:ListResourceTags", "kms:TagResource", "kms:UntagResource",
+        "kms:GetKeyRotationStatus", "kms:EnableKeyRotation", "kms:ReplicateKey", "kms:ScheduleKeyDeletion"
+      ],
+      "Resource": [
+        "arn:aws:kms:${AWS_REGION}:${AWS_ACCOUNT_ID}:key/*",
+        "arn:aws:kms:${AWS_KMS_REPLICA_REGION}:${AWS_ACCOUNT_ID}:key/*"
+      ]
+    }
+  ]
+}

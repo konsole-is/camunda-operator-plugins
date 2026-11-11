@@ -1,0 +1,18 @@
+# The run of plugin-conformance against the registration
+# aws-kms-key-multi-region, with a replica in the replica region of the
+# sandbox. The case runs once with Delete and once with Orphan.
+registration: aws-kms-key-multi-region
+namespace: conformance-aws-kms-multi-region
+timeouts:
+  outputsReady: 2m
+  ready: 5m
+  deletion: 3m
+cases:
+  - name: basic
+    parameters:
+      pendingWindowDays: 7
+      replicaRegions: ["${AWS_KMS_REPLICA_REGION}"]
+    target:
+      kind: CamundaCluster
+      name: orders
+      serviceAccountName: orders-camunda
