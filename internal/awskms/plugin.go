@@ -167,7 +167,7 @@ func result(status keyStatus, request *pluginsv1alpha1.PluginRequest) (pluginkit
 	}
 
 	res := pluginkit.Result{
-		Outputs:   map[string]string{outputKeyRef: status.ARN, outputFormat: formatKMSARN},
+		Outputs:   map[string]string{outputKeyRef: status.ARN},
 		Summary:   summary(status),
 		Links:     []pluginsv1alpha1.Link{{Name: "KMS key", URL: consoleURL}},
 		Resources: resources(status, request),
