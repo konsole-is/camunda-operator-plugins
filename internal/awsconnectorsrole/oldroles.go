@@ -94,15 +94,14 @@ func oldRoleRows(rows []pluginsv1alpha1.ResourceRef, current string) []pluginsv1
 }
 
 // markOldRoleChanging sets the desired tag of the old role that the outputs
-// of req name to awskit.DesiredChanging, when that role is not role.
+// of req name to awskit.DesiredChanging, when that role is not serving.
 func (p *Plugin) markOldRoleChanging(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
-	current string,
-	role awskit.Role,
+	current, serving string,
 ) error {
 	old, err := p.activeOldRole(ctx, req, current)
-	if err != nil || old.ARN == "" || old.Name == role.Name {
+	if err != nil || old.ARN == "" || old.Name == serving {
 		return err
 	}
 

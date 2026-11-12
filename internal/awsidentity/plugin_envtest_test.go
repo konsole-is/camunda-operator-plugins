@@ -1047,6 +1047,42 @@ var _ = Describe("a change of the role name prefix", Serial, func() {
 		}, 3*time.Second).Should(Succeed())
 	})
 
+	It("records no DriftCorrected when the prefix changes back after a pass without ServiceAccounts "+
+		"could not read the old role", func() {
+		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-")
+		s.iam.FailRole(s.oldRole.Name, errors.New("the role cannot be read"))
+		DeferCleanup(func() { s.iam.FailRole(s.oldRole.Name, nil) })
+
+		h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks)
+		Eventually(func(g Gomega) {
+			_, ok := s.iam.Role(h.roleName(s.namespace))
+			g.Expect(ok).To(BeTrue(), "the new role exists")
+		}, timeout).Should(Succeed())
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			ready := conditionOf(got.Status.Conditions, v1.ConditionReady)
+			g.Expect(ready.ObservedGeneration).To(Equal(got.Generation))
+			g.Expect(ready.Message).To(ContainSubstring(s.oldRole.Name + ": the role cannot be read"))
+		}, timeout).Should(Succeed())
+		stop()
+
+		s.iam.FailRole(s.oldRole.Name, nil)
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "orders-camunda" })
+		_, stop = startHub(s.mode, s.registration, "camunda", s.iam, s.eks, func(o *awsidentity.Options) {
+			o.Name += "-back"
+		})
+		DeferCleanup(stop)
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(s.eks.Associations()).To(ConsistOf(HaveField("RoleARN", s.oldRole.ARN)))
+		}, timeout).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(eventNotes(g, s.namespace, "DriftCorrected")).To(BeEmpty())
+		}, 3*time.Second).Should(Succeed())
+	})
+
 	It("removes the policy of a deleted grant from the old role while the Grants of the new role fail", func() {
 		var grant *pluginsv1alpha1.Grant
 		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-", func(s renameSetup) {

@@ -96,7 +96,7 @@ func (p *Plugin) reconcileRole(
 
 	// The pass moves the request off the old role that the outputs name. A
 	// later pass that serves that role again must not count the move as drift.
-	if err := p.markOldRoleChanging(ctx, req, current, role); err != nil {
+	if err := p.markOldRoleChanging(ctx, req, current, role.Name); err != nil {
 		return pluginkit.Result{Corrected: corrected}, err
 	}
 
@@ -202,6 +202,12 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 
 	arn, err := p.liveRoleARN(ctx, current)
 	if err != nil {
+		return res, err
+	}
+
+	// trustNobody of the current role deletes the associations of the old
+	// role too.
+	if err := p.markOldRoleChanging(ctx, req, current, current); err != nil {
 		return res, err
 	}
 

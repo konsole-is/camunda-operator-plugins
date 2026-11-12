@@ -17,6 +17,7 @@ limitations under the License.
 package awsconnectorsrole_test
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -326,6 +327,47 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 			g.Expect(associationsIn(back, s.namespace)).To(ConsistOf("orders-connectors=" + s.oldRole.ARN))
 			old, _ := s.iam.Role(s.oldRole.Name)
 			g.Expect(old.Attached).To(ConsistOf(policyA))
+		}, timeout).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(eventNotes(g, back, s.namespace, "DriftCorrected")).To(BeEmpty())
+		}, 3*time.Second).Should(Succeed())
+	})
+
+	It("records no DriftCorrected when the prefix changes back after a pass without a ServiceAccount "+
+		"could not read the old role", func() {
+		s := newRenameSetup(awskit.ModePodIdentity)
+		s.iam.FailRole(s.oldRole.Name, errors.New("the role cannot be read"))
+		DeferCleanup(func() { s.iam.FailRole(s.oldRole.Name, nil) })
+
+		c, stop := startConnectors(s.mode, newPrefix, s.iam, s.eks)
+		Eventually(func(g Gomega) {
+			_, ok := s.iam.Role(c.roleName(s.namespace))
+			g.Expect(ok).To(BeTrue(), "the new role exists")
+		}, timeout).Should(Succeed())
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+		Eventually(func(g Gomega) {
+			got := read(g, c, s.request)
+			ready := conditionOf(got.Status.Conditions, v1.ConditionReady)
+			g.Expect(ready.ObservedGeneration).To(Equal(got.Generation))
+			g.Expect(ready.Message).To(ContainSubstring(s.oldRole.Name + ": the role cannot be read"))
+		}, timeout).Should(Succeed())
+		stop()
+
+		s.iam.FailRole(s.oldRole.Name, nil)
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "orders-connectors" })
+		back, stop := startConnectors(s.mode, rolePrefix, s.iam, s.eks)
+		DeferCleanup(stop)
+		DeferCleanup(func() {
+			Expect(back.k8s.Delete(ctx, s.request)).To(Succeed())
+			Eventually(func(g Gomega) {
+				err := back.k8s.Get(ctx, client.ObjectKeyFromObject(s.request), &pluginsv1alpha1.PluginRequest{})
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the request is gone: %v", err)
+			}, timeout).Should(Succeed())
+		})
+		Eventually(func(g Gomega) {
+			got := read(g, back, s.request)
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(associationsIn(back, s.namespace)).To(ConsistOf("orders-connectors=" + s.oldRole.ARN))
 		}, timeout).Should(Succeed())
 		Consistently(func(g Gomega) {
 			g.Expect(eventNotes(g, back, s.namespace, "DriftCorrected")).To(BeEmpty())
