@@ -76,5 +76,25 @@
       matchUpdateTypes: ["minor", "patch"],
       groupName: "tool-versions",
     },
+    {
+      // Without this, a newer Go minor takes the place of the patch update,
+      // and the patch rule below never matches.
+      matchFileNames: [".tool-versions"],
+      matchDepNames: ["golang"],
+      separateMinorPatch: true,
+    },
+    {
+      // A Go patch release usually fixes a vulnerability of the standard
+      // library. The Security workflow runs govulncheck with the Go of
+      // .tool-versions, so the check can fail on every pull request until this
+      // update lands. The vulnerability alerts above do not match a Go
+      // release, so this rule removes the wait and the schedule.
+      matchFileNames: [".tool-versions"],
+      matchDepNames: ["golang"],
+      matchUpdateTypes: ["patch"],
+      groupName: "go-patch",
+      minimumReleaseAge: null,
+      schedule: ["at any time"],
+    },
   ],
 }
