@@ -47,23 +47,35 @@ type RoleSpec struct {
 
 // DesiredHash returns 16 hex digits of a hash of the trust policy, the
 // permissions boundary, and the tags of s without TagDesired, and then of
-// each part of extra. Two lists of parts that differ give two hashes, also
-// when their bytes join to the same text.
-func (s RoleSpec) DesiredHash(extra ...[]byte) string {
+// each list of extra. Two inputs that differ give two hashes, also when a
+// value holds a comma or an equals sign.
+func (s RoleSpec) DesiredHash(extra ...[]string) string {
 	tags := maps.Clone(s.Tags)
 	delete(tags, TagDesired)
 
-	var input []byte
-	for _, part := range append([][]byte{
-		s.TrustPolicy,
-		[]byte(s.PermissionsBoundary),
-		[]byte(ExtraTags(tags).String()),
-	}, extra...) {
-		input = binary.BigEndian.AppendUint64(input, uint64(len(part)))
-		input = append(input, part...)
+	pairs := make([]string, 0, 2*len(tags))
+	for _, key := range slices.Sorted(maps.Keys(tags)) {
+		pairs = append(pairs, key, tags[key])
+	}
+
+	input := appendList(nil, []string{string(s.TrustPolicy), s.PermissionsBoundary})
+	input = appendList(input, pairs)
+	for _, list := range extra {
+		input = appendList(input, list)
 	}
 	sum := sha256.Sum256(input)
 	return hex.EncodeToString(sum[:8])
+}
+
+// appendList appends list to b so that two lists that differ never append
+// the same bytes.
+func appendList(b []byte, list []string) []byte {
+	b = binary.BigEndian.AppendUint64(b, uint64(len(list)))
+	for _, item := range list {
+		b = binary.BigEndian.AppendUint64(b, uint64(len(item)))
+		b = append(b, item...)
+	}
+	return b
 }
 
 // Role is an IAM role.

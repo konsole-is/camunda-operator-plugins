@@ -71,7 +71,7 @@ func (p *Plugin) reconcileRole(
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
-	hash := spec.DesiredHash([]byte(strings.Join(sas, ",")), doc, []byte(strings.Join(wanted, ",")))
+	hash := spec.DesiredHash(sas, []string{string(doc)}, wanted)
 
 	role, change, err := p.ensureRole(ctx, req, spec, hash)
 	pending, inUse := roleNameInUse(err, status)

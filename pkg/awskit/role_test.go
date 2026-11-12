@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -215,15 +216,16 @@ func TestRoleInUseErrorNamesTheRoleAndItsOwner(t *testing.T) {
 
 func TestDesiredHashChangesWithEachPart(t *testing.T) {
 	base := roleSpec()
-	hash := base.DesiredHash([]byte("orders-camunda"))
+	sas := []string{"orders-camunda"}
+	hash := base.DesiredHash(sas)
 
 	assert.Regexp(t, `^[0-9a-f]{16}$`, hash)
-	assert.Equal(t, hash, base.DesiredHash([]byte("orders-camunda")), "the hash is stable")
+	assert.Equal(t, hash, base.DesiredHash(sas), "the hash is stable")
 
 	withDesired := base
 	withDesired.Tags = maps.Clone(base.Tags)
 	withDesired.Tags[awskit.TagDesired] = "0000000000000000"
-	assert.Equal(t, hash, withDesired.DesiredHash([]byte("orders-camunda")), "the desired tag is not part of the hash")
+	assert.Equal(t, hash, withDesired.DesiredHash(sas), "the desired tag is not part of the hash")
 
 	for name, change := range map[string]func(*awskit.RoleSpec){
 		"trust": func(s *awskit.RoleSpec) {
@@ -234,14 +236,79 @@ func TestDesiredHashChangesWithEachPart(t *testing.T) {
 	} {
 		s := base
 		change(&s)
-		assert.NotEqual(t, hash, s.DesiredHash([]byte("orders-camunda")), name)
+		assert.NotEqual(t, hash, s.DesiredHash(sas), name)
 	}
-	assert.NotEqual(t, hash, base.DesiredHash([]byte("orders-camunda"), nil), "one more part")
+	assert.NotEqual(t, hash, base.DesiredHash(sas, nil), "one more part")
+}
+
+func TestDesiredHashTellsTwoPoliciesFromOneARNThatHoldsAComma(t *testing.T) {
+	a := "arn:aws:iam::111122223333:policy/a"
+	b := "arn:aws:iam::111122223333:policy/b"
+	sas := []string{"orders-connectors"}
+	doc := []string{`{"Version":"2012-10-17","Statement":[]}`}
+
 	assert.NotEqual(t,
-		base.DesiredHash([]byte("ab"), []byte("c")),
-		base.DesiredHash([]byte("a"), []byte("bc")),
-		"two lists of parts never give one input",
+		roleSpec().DesiredHash(sas, doc, []string{a, b}),
+		roleSpec().DesiredHash(sas, doc, []string{a + "," + b}),
 	)
+}
+
+func TestDesiredHashTellsApartInputsThatAJoinedTextMixesUp(t *testing.T) {
+	spec := func(trust, boundary string, tags map[string]string) awskit.RoleSpec {
+		return awskit.RoleSpec{TrustPolicy: []byte(trust), PermissionsBoundary: boundary, Tags: tags}
+	}
+	for name, pair := range map[string][2]func() string{
+		"an item that holds the comma of a join": {
+			func() string { return spec("", "", nil).DesiredHash([]string{"a,b"}) },
+			func() string { return spec("", "", nil).DesiredHash([]string{"a", "b"}) },
+		},
+		"an empty item": {
+			func() string { return spec("", "", nil).DesiredHash([]string{"a,"}) },
+			func() string { return spec("", "", nil).DesiredHash([]string{"a", ""}) },
+		},
+		"two parts and one part": {
+			func() string { return spec("", "", nil).DesiredHash([]string{"a"}, []string{"b"}) },
+			func() string { return spec("", "", nil).DesiredHash([]string{"a", "b"}) },
+		},
+		"the same text split between two parts": {
+			func() string { return spec("", "", nil).DesiredHash([]string{"ab"}, []string{"c"}) },
+			func() string { return spec("", "", nil).DesiredHash([]string{"a"}, []string{"bc"}) },
+		},
+		"a tag key that holds the equals sign": {
+			func() string { return spec("", "", map[string]string{"a": "b=c"}).DesiredHash() },
+			func() string { return spec("", "", map[string]string{"a=b": "c"}).DesiredHash() },
+		},
+		"a tag value that holds a comma": {
+			func() string { return spec("", "", map[string]string{"a": "x,b=y"}).DesiredHash() },
+			func() string { return spec("", "", map[string]string{"a": "x", "b": "y"}).DesiredHash() },
+		},
+		"the trust policy and the boundary": {
+			func() string { return spec("ab", "", nil).DesiredHash() },
+			func() string { return spec("a", "b", nil).DesiredHash() },
+		},
+	} {
+		assert.NotEqual(t, pair[0](), pair[1](), name)
+	}
+}
+
+func TestDesiredHashIsStableForATypicalRequest(t *testing.T) {
+	tags := awskit.ExtraTags{"cost-center": "camunda", "team": "orders", "env": "prod"}.
+		OwnerTags("team-a", "orders", "orders-identity", "uid-1")
+	reversed := map[string]string{}
+	for _, k := range slices.Backward(slices.Sorted(maps.Keys(tags))) {
+		reversed[k] = tags[k]
+	}
+	spec := roleSpec()
+	spec.Tags = tags
+	other := spec
+	other.Tags = reversed
+
+	want := spec.DesiredHash([]string{"orders-camunda", "orders-es"})
+	for range 100 {
+		require.Equal(t, want, spec.DesiredHash([]string{"orders-camunda", "orders-es"}))
+		require.Equal(t, want, other.DesiredHash([]string{"orders-camunda", "orders-es"}))
+	}
+	assert.Equal(t, "7c80f1905437a80d", want, "a role keeps its tag across restarts of the controller")
 }
 
 func TestEnsureRoleReadsTheDesiredTagBeforeItChanges(t *testing.T) {

@@ -452,7 +452,7 @@ func (p *Plugin) desiredRole(
 	}
 	// With Pod Identity the trust policy does not name the ServiceAccounts,
 	// and the associations follow them.
-	return spec, spec.DesiredHash([]byte(strings.Join(sas, ","))), nil
+	return spec, spec.DesiredHash(sas), nil
 }
 
 // ensureRole calls awskit.EnsureRole with spec and hash, records an event
