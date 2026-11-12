@@ -33,6 +33,9 @@ const MaxRolePrefix = 47
 // 256 characters of KMS.
 const MaxAliasPrefix = 128
 
+// maxBucketName is the longest name that S3 accepts for a bucket.
+const maxBucketName = 63
+
 var (
 	rolePrefixChars  = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]+$`)
 	aliasPrefixChars = regexp.MustCompile(`^[A-Za-z0-9/_-]+$`)
@@ -99,9 +102,6 @@ func FitName(name string, maxLen int) string {
 	return name[:maxLen-9] + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// maxBucketName is the longest name that S3 accepts for a bucket.
-const maxBucketName = 63
-
 // BucketName returns a valid S3 bucket name of at most 63 characters for
 // parts, which hold only a-z, 0-9, "-", and ".": the parts joined by "-",
 // each "." as "-", cut after 46 characters, and a dash and 16 hex digits of
@@ -110,6 +110,8 @@ const maxBucketName = 63
 // must never change for the same parts, because a live bucket has it.
 func BucketName(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "/")))
+	// Two requests whose names share the hash share one bucket, so the hash
+	// keeps 16 hex digits.
 	suffix := "-" + hex.EncodeToString(sum[:])[:16]
 
 	readable := strings.ReplaceAll(strings.Join(parts, "-"), ".", "-")
