@@ -107,7 +107,9 @@ type Plugin struct {
 // has or the key is in another region, and with RecordingBucket for the one
 // reconcile that records a new bucket before it creates the bucket. A failed
 // AWS call is an error. A failed read of the stored size only shows the size
-// as not known.
+// as not known. Within the settle time of a write of the plugin, S3 can show a
+// setting late, so a setting that differs is not repaired: the request
+// reconciles again when the settle time ends.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -168,7 +170,15 @@ func (p *Plugin) Reconcile(
 	if inUse, ok := errors.AsType[bucketInUseError](err); ok {
 		return inUseResult(inUse, req.Object, corrected), nil
 	}
-	if err != nil {
+	settling, late := errors.AsType[settlingError](err)
+	if late {
+		req.Log.Info(
+			"Did not repair a setting of the S3 bucket within the settle time of the last write",
+			"bucket", ref.Name,
+			"recheckAfter", settling.Left,
+		)
+	}
+	if err != nil && !late {
 		return pluginkit.Result{Corrected: corrected}, err
 	}
 
@@ -183,12 +193,13 @@ func (p *Plugin) Reconcile(
 	}
 
 	return pluginkit.Result{
-		Outputs:   outputs(req.Object.Name, ref.Name, p.settings.Partition, keyARN),
-		Objects:   []client.Object{contract(p.settings, req.Object.Name, ref, req.Inputs[inputPrincipal])},
-		Summary:   summary(ref, keyARN, size, sizeKnown),
-		Links:     []pluginsv1alpha1.Link{{Name: "S3 bucket", URL: link}},
-		Resources: resources(p.settings, ref, req.Object),
-		Corrected: corrected,
+		Outputs:      outputs(req.Object.Name, ref.Name, p.settings.Partition, keyARN),
+		Objects:      []client.Object{contract(p.settings, req.Object.Name, ref, req.Inputs[inputPrincipal])},
+		Summary:      summary(ref, keyARN, size, sizeKnown),
+		Links:        []pluginsv1alpha1.Link{{Name: "S3 bucket", URL: link}},
+		Resources:    resources(p.settings, ref, req.Object),
+		RequeueAfter: settling.Left,
+		Corrected:    corrected,
 	}, nil
 }
 

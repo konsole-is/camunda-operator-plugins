@@ -63,6 +63,8 @@ type buckets struct {
 	s3 func(region string) awskit.S3
 	// deleteBudget is the time for which one call of delete deletes objects.
 	deleteBudget time.Duration
+	// writes keeps the last write of the plugin on each bucket.
+	writes *writeTimes
 }
 
 // bucketRef names the bucket of one request.
@@ -117,6 +119,37 @@ func (e bucketInUseError) Error() string {
 	)
 }
 
+// settlingError means that a setting of the bucket differs from the desired
+// state within the settle time of the last write of the plugin, so ensure did
+// not repair it. Left is the time until the settle time ends.
+type settlingError struct {
+	Bucket string
+	Left   time.Duration
+}
+
+func (e settlingError) Error() string {
+	return fmt.Sprintf("S3 does not show a setting of the bucket %s as the plugin wrote it yet", e.Bucket)
+}
+
+// errShownLate means that a step with repairLater found a setting that
+// differs from the desired state, and wrote nothing.
+var errShownLate = errors.New("S3 can still show the setting as it was before the last write")
+
+// repair says how a step treats a setting that differs from the desired
+// state.
+type repair int
+
+const (
+	// repairChange writes the setting as a part of a create or of a change of
+	// the request.
+	repairChange repair = iota
+	// repairDrift writes the setting as a correction of drift.
+	repairDrift
+	// repairLater writes nothing, because S3 can still show the setting as it
+	// was before the last write of the plugin.
+	repairLater
+)
+
 // claimable returns bucketInUseError when the bucket of ref exists and does
 // not carry the UID of ref, or when headBucket refuses it. It reads only.
 func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
@@ -144,7 +177,9 @@ func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
 // bucketInUseError, and changes nothing, when the bucket does not carry the
 // UID of ref, also after a create that S3 answered with success. With
 // p.Served, a repair of a bucket that the request had is drift. A changed key
-// is not drift: p.KeyARN is the key that the plugin wrote last.
+// is not drift: p.KeyARN is the key that the plugin wrote last. Within the
+// settle time of the last write of the plugin, it repairs no drift and
+// returns settlingError.
 func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]action, error) {
 	c := b.s3(ref.Region)
 
@@ -176,28 +211,48 @@ func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]
 			a.Corrected = "created the bucket " + ref.Name + ", which was gone"
 		}
 		actions = append(actions, a)
+		b.writes.wrote(ref.Name)
 	}
 
+	left := b.writes.left(ref.Name)
 	// The settings of a bucket that the reconcile created are part of the
 	// create, also of a create that repairs drift.
-	drift := p.Served && !created
+	fix := repairDrift
+	switch {
+	case !p.Served || created:
+		fix = repairChange
+	case left > 0:
+		fix = repairLater
+	}
+	keyFix := fix
+	if p.KeyARN != w.KeyARN {
+		keyFix = repairChange
+	}
+
+	late := false
 	for _, step := range []func() (*action, error){
 		func() (*action, error) { return ensureTags(ctx, c, ref.Name, tags, w.Tags) },
-		func() (*action, error) { return ensurePublicAccessBlock(ctx, c, ref.Name, drift) },
-		func() (*action, error) {
-			return ensureEncryption(ctx, c, ref.Name, w.KeyARN, drift && p.KeyARN == w.KeyARN)
-		},
-		func() (*action, error) { return ensureAbortRule(ctx, c, ref.Name, w.AbortDays, drift) },
+		func() (*action, error) { return ensurePublicAccessBlock(ctx, c, ref.Name, fix) },
+		func() (*action, error) { return ensureEncryption(ctx, c, ref.Name, w.KeyARN, keyFix) },
+		func() (*action, error) { return ensureAbortRule(ctx, c, ref.Name, w.AbortDays, fix) },
 	} {
 		a, err := step()
 		if a != nil {
 			actions = append(actions, *a)
+			b.writes.wrote(ref.Name)
+		}
+		if errors.Is(err, errShownLate) {
+			late = true
+			continue
 		}
 		if err != nil {
 			return actions, err
 		}
 	}
 
+	if late {
+		return actions, settlingError{Bucket: ref.Name, Left: left}
+	}
 	return actions, nil
 }
 
@@ -312,9 +367,8 @@ func ensureTags(ctx context.Context, c awskit.S3, name string, current, want map
 }
 
 // ensurePublicAccessBlock turns on the four flags of the public access block
-// of the bucket name when one is off or the block is missing. With drift, the
-// write is a correction.
-func ensurePublicAccessBlock(ctx context.Context, c awskit.S3, name string, drift bool) (*action, error) {
+// of the bucket name when one is off or the block is missing.
+func ensurePublicAccessBlock(ctx context.Context, c awskit.S3, name string, fix repair) (*action, error) {
 	out, err := c.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: aws.String(name)})
 	if err != nil && !awskit.IsNotConfigured(err) {
 		return nil, fmt.Errorf("reading the public access block of the bucket %s: %w", name, err)
@@ -325,6 +379,9 @@ func ensurePublicAccessBlock(ctx context.Context, c awskit.S3, name string, drif
 			aws.ToBool(block.BlockPublicPolicy) && aws.ToBool(block.RestrictPublicBuckets) {
 			return nil, nil
 		}
+	}
+	if fix == repairLater {
+		return nil, errShownLate
 	}
 
 	_, err = c.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{
@@ -345,16 +402,15 @@ func ensurePublicAccessBlock(ctx context.Context, c awskit.S3, name string, drif
 		Verb:   eventActionUpdate,
 		Note:   "Blocked the public access of the S3 bucket " + name,
 	}
-	if drift {
+	if fix == repairDrift {
 		a.Corrected = "blocked the public access of the bucket " + name + " again"
 	}
 	return a, nil
 }
 
 // ensureEncryption sets the default encryption of the bucket name: SSE-KMS
-// with keyARN and an S3 Bucket Key, or SSE-S3 when keyARN is empty. With
-// drift, the write is a correction.
-func ensureEncryption(ctx context.Context, c awskit.S3, name, keyARN string, drift bool) (*action, error) {
+// with keyARN and an S3 Bucket Key, or SSE-S3 when keyARN is empty.
+func ensureEncryption(ctx context.Context, c awskit.S3, name, keyARN string, fix repair) (*action, error) {
 	wanted := types.ServerSideEncryptionByDefault{SSEAlgorithm: types.ServerSideEncryptionAes256}
 	if keyARN != "" {
 		wanted = types.ServerSideEncryptionByDefault{
@@ -367,8 +423,11 @@ func ensureEncryption(ctx context.Context, c awskit.S3, name, keyARN string, dri
 	if err != nil && !awskit.IsNotConfigured(err) {
 		return nil, fmt.Errorf("reading the default encryption of the bucket %s: %w", name, err)
 	}
-	if err == nil && hasEncryption(out.ServerSideEncryptionConfiguration, wanted) {
+	switch {
+	case err == nil && hasEncryption(out.ServerSideEncryptionConfiguration, wanted):
 		return nil, nil
+	case fix == repairLater:
+		return nil, errShownLate
 	}
 
 	_, err = c.PutBucketEncryption(ctx, &s3.PutBucketEncryptionInput{
@@ -389,7 +448,7 @@ func ensureEncryption(ctx context.Context, c awskit.S3, name, keyARN string, dri
 		Verb:   eventActionUpdate,
 		Note:   "Set the default encryption of the S3 bucket " + name + " to " + encryptionOf(keyARN),
 	}
-	if drift {
+	if fix == repairDrift {
 		a.Corrected = "set the default encryption of the bucket " + name + " again"
 	}
 	return a, nil
@@ -421,9 +480,9 @@ func encryptionOf(keyARN string) string {
 
 // ensureAbortRule sets the lifecycle rule abortRuleID of the bucket name,
 // which aborts an incomplete multipart upload after days, and keeps every
-// other rule. It replaces the rule by its ID. With drift, a write of a missing
-// rule is a correction; a rule with other days is a change of the request.
-func ensureAbortRule(ctx context.Context, c awskit.S3, name string, days int32, drift bool) (*action, error) {
+// other rule. It replaces the rule by its ID. Only a missing rule is drift: a
+// rule with other days is a change of the request.
+func ensureAbortRule(ctx context.Context, c awskit.S3, name string, days int32, fix repair) (*action, error) {
 	out, err := c.GetBucketLifecycleConfiguration(
 		ctx,
 		&s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String(name)},
@@ -442,6 +501,8 @@ func ensureAbortRule(ctx context.Context, c awskit.S3, name string, days int32, 
 	i := slices.IndexFunc(rules, func(r types.LifecycleRule) bool { return aws.ToString(r.ID) == abortRuleID })
 	missing := i < 0
 	switch {
+	case missing && fix == repairLater:
+		return nil, errShownLate
 	case missing:
 		rules = append(slices.Clone(rules), wanted)
 	case sameAbortRule(rules[i], days):
@@ -470,7 +531,7 @@ func ensureAbortRule(ctx context.Context, c awskit.S3, name string, days int32, 
 			days,
 		),
 	}
-	if drift && missing {
+	if fix == repairDrift && missing {
 		a.Corrected = "added the lifecycle rule " + abortRuleID + " of the bucket " + name + " again"
 	}
 	return a, nil
@@ -529,6 +590,7 @@ func (b buckets) delete(ctx context.Context, ref bucketRef) ([]action, bool, err
 		return nil, false, fmt.Errorf("deleting the bucket %s: %w", ref.Name, err)
 	}
 
+	b.writes.forget(ref.Name)
 	return []action{{
 		Reason: eventReasonBucketDeleted,
 		Verb:   eventActionDelete,
@@ -588,6 +650,7 @@ func (b buckets) release(ctx context.Context, ref bucketRef) ([]action, error) {
 	if err != nil {
 		return nil, fmt.Errorf("removing the request tags of the bucket %s: %w", ref.Name, err)
 	}
+	b.writes.forget(ref.Name)
 
 	return []action{{
 		Reason: eventReasonBucketReleased,

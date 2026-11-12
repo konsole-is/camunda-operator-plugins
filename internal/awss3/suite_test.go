@@ -92,6 +92,9 @@ var _ = BeforeSuite(func() {
 			// than 1,000 objects takes more than one pass.
 			DeleteBudget: time.Nanosecond,
 		},
+		// Long enough for the spec of a setting that S3 shows late, short
+		// enough for the specs of drift.
+		SettleTime: 15 * time.Second,
 		S3:         fake.In,
 		CloudWatch: cloudWatch.In,
 	}

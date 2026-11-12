@@ -17,6 +17,7 @@ limitations under the License.
 package awss3
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"time"
@@ -63,6 +64,9 @@ type Options struct {
 	Settings Settings
 	// Resync is the pluginkit.Config.Resync of the plugin.
 	Resync time.Duration
+	// SettleTime is how long S3 can show a bucket setting as it was before a
+	// write of the plugin. Zero is five minutes.
+	SettleTime time.Duration
 	// S3 returns the S3 client of a region.
 	S3 func(region string) awskit.S3
 	// CloudWatch returns the CloudWatch client of a region.
@@ -107,8 +111,12 @@ func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 	}
 
 	plugin := &Plugin{
-		settings:   opts.Settings,
-		buckets:    buckets{s3: opts.S3, deleteBudget: opts.Settings.DeleteBudget},
+		settings: opts.Settings,
+		buckets: buckets{
+			s3:           opts.S3,
+			deleteBudget: opts.Settings.DeleteBudget,
+			writes:       newWriteTimes(cmp.Or(opts.SettleTime, settleTime), time.Now),
+		},
 		cloudWatch: opts.CloudWatch,
 		reader:     mgr.GetAPIReader(),
 		writer:     mgr.GetClient(),

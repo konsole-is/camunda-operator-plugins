@@ -18,7 +18,9 @@ package awss3_test
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -405,6 +407,24 @@ var _ = Describe("the AWS S3 plugin", func() {
 			g.Expect(aws.ToBool(bucketOf(g, name).PublicAccessBlock.BlockPublicPolicy)).To(BeTrue())
 			g.Expect(eventReasons(g, ns)).To(ContainElement("DriftCorrected"))
 		}, timeout).Should(Succeed())
+	})
+
+	It("reports no drift for the rule of a new bucket that S3 shows late", func() {
+		fake.ShowLate("GetBucketLifecycleConfiguration", -1)
+		DeferCleanup(func() { fake.ShowLate("GetBucketLifecycleConfiguration", 0) })
+		ns := newNamespace()
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
+		readyRequest(request)
+
+		poke(request)
+
+		Consistently(func(g Gomega) {
+			reasons := eventReasons(g, ns)
+			g.Expect(reasons).NotTo(ContainElement("DriftCorrected"))
+			g.Expect(slices.DeleteFunc(reasons, func(r string) bool { return r != "LifecycleUpdated" })).
+				To(HaveLen(1), "the plugin writes the rule once")
+			g.Expect(conditionOf(g, request, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+		}, 3*time.Second).Should(Succeed())
 	})
 
 	It("deletes a bucket with objects and its contract in more than one pass", func() {
