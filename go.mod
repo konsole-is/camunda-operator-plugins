@@ -14,7 +14,7 @@ require (
 	github.com/aws/smithy-go v1.28.7
 	github.com/go-logr/logr v1.4.4
 	github.com/konsole-is/camunda-operator/api v0.2.1-0.20261111223906-af574314547a
-	github.com/konsole-is/camunda-operator/conformance v0.0.0-20261110110011-05aa496cc245
+	github.com/konsole-is/camunda-operator/conformance v0.0.0-20261112190647-120a42976e91
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 	github.com/sourcehawk/operator-component-framework v0.24.0
