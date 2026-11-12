@@ -123,10 +123,9 @@ type Result struct {
 	Corrected []string
 }
 
-// Deleting is the error of a Delete that made progress and has more to
-// delete. pluginkit sets Ready=False with ReasonDeleting and Message, keeps
-// the finalizer, and calls Delete again after a second, without an error and
-// without a backoff.
+// Deleting is the error of a Delete or Orphan pass that is not done yet,
+// because more remains to delete or the plugin waits for a resource outside
+// the cluster.
 type Deleting struct {
 	Message string
 }

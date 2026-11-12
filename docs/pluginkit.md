@@ -168,7 +168,7 @@ When a request is deleted, pluginkit calls `Delete` or `Orphan`, by `spec.deleti
 
 The finalizer stays until the method of the plugin returns nil and each Grant is gone. When the method returns an error, `Ready` is `False` with reason `DeleteFailed`, and pluginkit calls the method again with the backoff of controller-runtime. A Grant can hold a finalizer of the identity extension, and pluginkit waits for it.
 
-A delete can take longer than one reconcile should. Then `Delete` works in passes: each call deletes a bounded part, and returns `pluginkit.Deleting{Message: ...}` while more remains. pluginkit sets `Ready` to `False` with reason `Deleting` and that message, keeps the finalizer, and calls `Delete` again after a second, without a backoff. Each pass must start from what is left, because a restart of the plugin loses everything that the pass kept in memory. Return `Deleting` only when the pass made progress, or found the resource still there. pluginkit has no limit on the number of passes.
+A delete can take longer than one reconcile should. Then `Delete` works in passes: each call deletes a bounded part, and returns `pluginkit.Deleting{Message: ...}` while more remains. pluginkit sets `Ready` to `False` with reason `Deleting` and that message, keeps the finalizer, and calls the method again after a second, without a backoff. Each pass must start from what is left, because a restart of the plugin loses everything that the pass kept in memory. Return `Deleting` from a `Delete` or `Orphan` pass that is not done yet: more remains to delete, or the plugin waits for a resource outside the cluster. pluginkit has no limit on the number of passes.
 
 ### Reasons
 
@@ -181,7 +181,7 @@ pluginkit uses the reasons of the api module, and adds these reasons of its own:
 | `ReconcileError` | `Ready` | `Reconcile` returned an error, or an output key that the registration does not declare. |
 | `GrantTemplateInvalid` | `Ready` | A grant template does not render for the request. |
 | `DeleteFailed` | `Ready` | `Delete` or `Orphan` returned an error. The finalizer stays. |
-| `Deleting` | `Ready` | `Delete` returned `pluginkit.Deleting`: it has more to delete, and pluginkit calls it again. The message comes from the plugin. The finalizer stays. |
+| `Deleting` | `Ready` | `Delete` or `Orphan` returned `pluginkit.Deleting`: the pass is not done yet, and pluginkit calls the method again. The message comes from the plugin. The finalizer stays. |
 | `Unhealthy` | `Ready` of a registration | `Health` returned an error. |
 
 ## The chart of a plugin
