@@ -51,6 +51,13 @@ func TestBucketNameKeepsTwoClaimsApart(t *testing.T) {
 		"names that differ only after the cut")
 }
 
+func TestBucketNameKeepsTwoPrefixesApart(t *testing.T) {
+	namespace := strings.Repeat("eu-", 19) + "eu"
+
+	assert.NotEqual(t, bucketName("prod", namespace, "orders"), bucketName("prod-eu", namespace, "orders"),
+		"prefixes whose difference the cut removes")
+}
+
 func TestBucketNameReplacesDots(t *testing.T) {
 	assert.NotContains(t, bucketName("camunda", "team", "orders.v2"), ".")
 }

@@ -35,11 +35,11 @@ const (
 
 // bucketName returns <prefix>-<namespace>-<claim>-<16 hex>, at most 63
 // characters, with each "." of namespace and claim as "-". The hash is of
-// namespace/claim, so a-b/c and a/b-c get two names, and so do two claims
-// whose names differ only after the cut. A prefix that the parameter schema
-// allows always stays whole.
+// prefix/namespace/claim, so a-b/c and a/b-c get two names, and so do two
+// prefixes or claims whose names differ only after the cut. A prefix that the
+// parameter schema allows always stays whole.
 func bucketName(prefix, namespace, claim string) string {
-	sum := sha256.Sum256([]byte(namespace + "/" + claim))
+	sum := sha256.Sum256([]byte(prefix + "/" + namespace + "/" + claim))
 	suffix := "-" + hex.EncodeToString(sum[:])[:hashLength]
 
 	readable := strings.ReplaceAll(prefix+"-"+namespace+"-"+claim, ".", "-")
