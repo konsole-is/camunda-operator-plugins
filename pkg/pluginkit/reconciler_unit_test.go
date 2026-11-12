@@ -19,12 +19,14 @@ package pluginkit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
+	v1 "github.com/konsole-is/camunda-operator/api/v1"
 )
 
 func TestTemplateDataKeepsLargeIntegers(t *testing.T) {
@@ -100,6 +103,62 @@ func TestDeleteUnwantedGrantsReturnsTheListedGrantsWhenADeleteFails(t *testing.T
 		names = append(names, g.Name)
 	}
 	assert.ElementsMatch(t, []string{"wanted", "unwanted"}, names)
+}
+
+// deleteFails is a plugin whose Delete fails with err of its context.
+type deleteFails struct {
+	err func(ctx context.Context) error
+}
+
+func (deleteFails) Reconcile(context.Context, Request[struct{}, struct{}]) (Result, error) {
+	return Result{}, nil
+}
+
+func (p deleteFails) Delete(ctx context.Context, _ Request[struct{}, struct{}]) error {
+	return fmt.Errorf("reading the versioning of the bucket b1: %w", p.err(ctx))
+}
+
+func (deleteFails) Orphan(context.Context, Request[struct{}, struct{}]) error { return nil }
+
+// deletingRequest is a deleted request with the cleanup finalizer, whose
+// last pass deleted objects.
+func deletingRequest() *pluginsv1alpha1.PluginRequest {
+	request := ownedRequest()
+	request.Finalizers = []string{pluginsv1alpha1.FinalizerCleanup}
+	request.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	meta.SetStatusCondition(&request.Status.Conditions, metav1.Condition{
+		Type:    v1.ConditionReady,
+		Status:  metav1.ConditionFalse,
+		Reason:  ReasonDeleting,
+		Message: "Deleting the objects of the bucket b1",
+	})
+	return request
+}
+
+func TestDeleteStagesNoFailureForAPassThatTheManagerStops(t *testing.T) {
+	request := deletingRequest()
+	plugin := deleteFails{err: func(ctx context.Context) error { return ctx.Err() }}
+	r := &reconciler[struct{}, struct{}]{events: events.NewFakeRecorder(10), plugin: plugin}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := r.delete(ctx, request, &pluginsv1alpha1.PluginRegistration{})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, ReasonDeleting, meta.FindStatusCondition(request.Status.Conditions, v1.ConditionReady).Reason,
+		"the next start of the manager goes on with the delete")
+}
+
+func TestDeleteStagesTheFailureOfACancelOfThePlugin(t *testing.T) {
+	request := deletingRequest()
+	plugin := deleteFails{err: func(context.Context) error { return context.Canceled }}
+	r := &reconciler[struct{}, struct{}]{events: events.NewFakeRecorder(10), plugin: plugin}
+
+	_, err := r.delete(context.Background(), request, &pluginsv1alpha1.PluginRegistration{})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, ReasonDeleteFailed, meta.FindStatusCondition(request.Status.Conditions, v1.ConditionReady).Reason,
+		"the manager runs, so the delete failed")
 }
 
 func TestStageGrantsListsTheGrantsThatStillExist(t *testing.T) {

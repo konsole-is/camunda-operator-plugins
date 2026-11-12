@@ -90,7 +90,7 @@ func (r *reconciler[P, I]) delete(
 		return ctrl.Result{RequeueAfter: deletingRequeue}, nil
 	}
 	if err != nil {
-		stage(request, v1.ConditionReady, ReasonDeleteFailed, err.Error())
+		stageDeleteFailed(ctx, request, err)
 		return ctrl.Result{}, fmt.Errorf("applying the deletion policy %s: %w", policy, err)
 	}
 
@@ -104,7 +104,7 @@ func (r *reconciler[P, I]) delete(
 		}
 	}
 	if err != nil {
-		stage(request, v1.ConditionReady, ReasonDeleteFailed, err.Error())
+		stageDeleteFailed(ctx, request, err)
 		return ctrl.Result{}, err
 	}
 
@@ -115,6 +115,15 @@ func (r *reconciler[P, I]) delete(
 	log.Info("Released the cleanup finalizer of PluginRequest", "deletionPolicy", policy)
 
 	return ctrl.Result{}, nil
+}
+
+// stageDeleteFailed stages Ready=False with ReasonDeleteFailed and err. A pass
+// that the stop of the manager cancelled did not fail, so it stages nothing.
+func stageDeleteFailed(ctx context.Context, request *pluginsv1alpha1.PluginRequest, err error) {
+	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+		return
+	}
+	stage(request, v1.ConditionReady, ReasonDeleteFailed, err.Error())
 }
 
 // deleteGrants deletes each Grant with the request label of request, also a
