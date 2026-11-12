@@ -40,7 +40,7 @@ tidy: ## Run go mod tidy.
 test: fmt vet setup-envtest envtest-crds ## Run the unit tests, the envtest suites, and the helper tests of the journeys.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" \
 	ENVTEST_CRDS="$(ENVTEST_CRDS_DIR)" \
-		go test $$(go list ./... | grep -v /test/e2e) -coverprofile cover.out
+		go test $$(go list ./... | grep -v /test/e2e)
 	@# An empty JOURNEY skips the journeys, so this runs no spec against the cluster of the kubeconfig.
 	JOURNEY= go test -tags e2e -count=1 ./test/e2e/
 
