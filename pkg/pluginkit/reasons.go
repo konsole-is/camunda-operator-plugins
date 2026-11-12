@@ -16,6 +16,8 @@ limitations under the License.
 
 package pluginkit
 
+import pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
+
 // The reasons that pluginkit sets beside those of the api module.
 const (
 	// ReasonUnhealthy means that the health check of the plugin failed. It is
@@ -30,11 +32,7 @@ const (
 	// ReasonDeleteFailed means that the plugin failed to apply the deletion
 	// policy of a deleted request. The finalizer stays.
 	ReasonDeleteFailed = "DeleteFailed"
-	// ReasonMissingInput means that an input that the registration marks
-	// required has no value in spec.inputs. It is the reason of
-	// OutputsReady=False and Ready=False, and the message names each such
-	// input.
-	// TODO(konsole-is/camunda-operator#599): use pluginsv1alpha1.ReasonMissingInput
-	// once the api pin of go.mod has it, and keep this name as an alias of it.
-	ReasonMissingInput = "MissingInput"
 )
+
+// ReasonMissingInput is pluginsv1alpha1.ReasonMissingInput.
+const ReasonMissingInput = pluginsv1alpha1.ReasonMissingInput

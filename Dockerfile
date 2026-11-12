@@ -2,7 +2,7 @@
 # builder runs on the platform of the build host and cross-compiles, so a
 # multi-platform build needs no emulation. The base images are pinned by
 # digest, so the release publishes the same layers that its scan checked.
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:01aa404fa56b604b6f48e90c1d6e2c79fe5cd78f9592f78d80303fbe171cdcc0 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:ec47ea3725fea0cc88f6de94919aef19f40f12fc1ec0e2d1b3426dbf15ecca04 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG PLUGIN
