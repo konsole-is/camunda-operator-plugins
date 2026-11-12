@@ -62,6 +62,23 @@ func TestBucketNameReplacesDots(t *testing.T) {
 	assert.NotContains(t, bucketName("camunda", "team", "orders.v2"), ".")
 }
 
+// TestBucketNameStaysTheSame pins names of live buckets: a changed name
+// makes a second bucket for each request.
+func TestBucketNameStaysTheSame(t *testing.T) {
+	for _, c := range []struct{ prefix, namespace, claim, want string }{
+		{"camunda", "team-a", "orders", "camunda-team-a-orders-ae796c5f4c00991c"},
+		{"prod-eu", "team.a", "orders.v2", "prod-eu-team-a-orders-v2-f992e3c9176a7752"},
+		{
+			strings.Repeat("p", 40),
+			strings.Repeat("n", 63),
+			"c",
+			strings.Repeat("p", 40) + "-nnnnn-3d1ae7aac2e8d020",
+		},
+	} {
+		assert.Equal(t, c.want, bucketName(c.prefix, c.namespace, c.claim))
+	}
+}
+
 func TestBucketTagsHoldTheRequestTheUIDAndTheExtraTags(t *testing.T) {
 	s := Settings{ExtraTags: awskit.ExtraTags{"team": "platform"}}
 	ref := bucketRef{Namespace: "team-a", Claim: "orders", Request: "orders-backup", UID: "uid-1"}
