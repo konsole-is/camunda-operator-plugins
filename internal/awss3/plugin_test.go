@@ -18,7 +18,9 @@ package awss3
 
 import (
 	"testing"
+	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -28,6 +30,8 @@ import (
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
 
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
+	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
 const roleARN = "arn:aws:iam::111122223333:role/cpo-test"
@@ -101,10 +105,40 @@ func TestInUseRowsDropABindingThatNeverHadTheBucket(t *testing.T) {
 
 func TestInUseRowsKeepABindingWhenS3RefusesToShowTheBucket(t *testing.T) {
 	bound := bucketRow("b1", "eu-west-1")
-	unread := bucketInUseError{Bucket: "b1", Owner: "another AWS account", Unread: true}
+	unread := bucketInUseError{Bucket: "b1", Owner: "another AWS account", MaybeOwn: true}
 
 	assert.Equal(t, []pluginsv1alpha1.ResourceRef{bound}, inUseRows(request(bound), unread),
 		"the plugin can have created the bucket before S3 refused to show it")
+}
+
+func TestReconcileKeepsTheRecordOfANewBucketWhoseTagsShowLate(t *testing.T) {
+	f := awsfake.NewS3()
+	p := &Plugin{settings: chartDefaults(), buckets: buckets{s3: f.In, deleteBudget: time.Minute}}
+	req := request()
+	// pass reconciles req once with params, and writes the rows of the result
+	// into its status, as pluginkit does.
+	pass := func(params Params) pluginkit.Result {
+		t.Helper()
+		res, err := p.Reconcile(t.Context(), pluginkit.Request[Params, map[string]string]{
+			Object:     req,
+			Parameters: params,
+		})
+		require.NoError(t, err)
+		req.Status.Resources = res.Resources
+		return res
+	}
+
+	pass(Params{})
+	f.FailNext("GetBucketTagging", &smithy.GenericAPIError{Code: "NoSuchTagSet"})
+	created := pass(Params{})
+	require.NotNil(t, created.Pending)
+	require.Len(t, f.Buckets(), 1)
+
+	changed := pass(Params{BucketPrefix: "team"})
+	require.NotNil(t, changed.Pending)
+	require.Equal(t, pluginsv1alpha1.ReasonInvalidParameters, changed.Pending.Reason)
+	pass(Params{BucketPrefix: "team"})
+	assert.Len(t, f.Buckets(), 1, "a changed bucketPrefix makes no second bucket")
 }
 
 func TestKeyOfAnotherRegionIsRefused(t *testing.T) {

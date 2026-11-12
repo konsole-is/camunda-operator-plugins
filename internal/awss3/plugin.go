@@ -286,10 +286,10 @@ func inUseResult(
 }
 
 // inUseRows returns the rows of ownRows, without an S3Bucket row that has no
-// ARN when inUse names the owner: the request never had that bucket, so a
-// changed bucketPrefix may free it from the name.
+// ARN when inUse is sure of another owner: the request never had that bucket,
+// so a changed bucketPrefix may free it from the name.
 func inUseRows(request *pluginsv1alpha1.PluginRequest, inUse bucketInUseError) []pluginsv1alpha1.ResourceRef {
-	if inUse.Unread {
+	if inUse.MaybeOwn {
 		return ownRows(request)
 	}
 	return slices.DeleteFunc(ownRows(request), func(r pluginsv1alpha1.ResourceRef) bool {

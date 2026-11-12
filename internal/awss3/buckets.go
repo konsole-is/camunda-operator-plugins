@@ -105,9 +105,10 @@ type action struct {
 // region, or that S3 refuses to show the bucket.
 type bucketInUseError struct {
 	Bucket, Owner string
-	// Unread says that S3 refused to show the bucket, so it can still be the
-	// bucket of the request.
-	Unread bool
+	// MaybeOwn says that the bucket can still be the bucket of the request:
+	// S3 refused to show it, or the call created it and S3 shows no UID tag
+	// on it yet.
+	MaybeOwn bool
 }
 
 func (e bucketInUseError) Error() string {
@@ -159,7 +160,11 @@ func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]
 		return nil, err
 	}
 	if !awskit.OwnedBy(tags, ref.UID) {
-		return nil, bucketInUseError{Bucket: ref.Name, Owner: awskit.OwnerOf(tags)}
+		return nil, bucketInUseError{
+			Bucket:   ref.Name,
+			Owner:    awskit.OwnerOf(tags),
+			MaybeOwn: created && tags[awskit.TagRequestUID] == "",
+		}
 	}
 
 	var actions []action
@@ -243,9 +248,9 @@ func headBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) {
 		return false, bucketInUseError{Bucket: ref.Name, Owner: "a bucket of the same name in another region"}
 	case awskit.IsAccessDenied(err):
 		return false, bucketInUseError{
-			Bucket: ref.Name,
-			Owner:  "another AWS account, or a bucket that the controller may not read",
-			Unread: true,
+			Bucket:   ref.Name,
+			Owner:    "another AWS account, or a bucket that the controller may not read",
+			MaybeOwn: true,
 		}
 	}
 	return false, fmt.Errorf("reading the bucket %s: %w", ref.Name, err)
