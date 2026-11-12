@@ -26,6 +26,19 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
+func TestChartRegion(t *testing.T) {
+	registrations, err := chartRegistrations(t.TempDir())
+	require.NoError(t, err)
+	schema := registrations[0].Spec.Parameters
+
+	for _, region := range []string{"", "eu-west-1", "us-gov-west-1"} {
+		assert.NoError(t, pluginkit.ValidateParameters(context.Background(), schema, raw(`{"region":"`+region+`"}`)),
+			"region %q", region)
+	}
+	assert.ErrorContains(t, pluginkit.ValidateParameters(context.Background(), schema, raw(`{"region":"EU"}`)),
+		"spec.parameters.region")
+}
+
 func TestChartBucketPrefix(t *testing.T) {
 	registrations, err := chartRegistrations(t.TempDir())
 	require.NoError(t, err)

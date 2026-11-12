@@ -119,7 +119,7 @@ registrations:
           description: The start of each bucket name. It cannot change after the bucket exists.
         region:
           type: string
-          pattern: '^([a-z]+-){2,3}[0-9]+$'
+          pattern: '^(([a-z]+-){2,3}[0-9]+)?$'
           description: The region of the bucket. Empty is the region of the chart. It cannot change after the bucket exists.
         abortIncompleteUploadDays:
           type: integer
