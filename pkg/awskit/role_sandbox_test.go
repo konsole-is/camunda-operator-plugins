@@ -124,7 +124,7 @@ func TestSandboxEnsureRoleCreatesTheRoleWithTheRequestUID(t *testing.T) {
 	ctx := context.Background()
 	spec := s.role(t, "uid", "uid-1")
 
-	_, change, err := awskit.EnsureRole(ctx, s.iam, spec)
+	_, change, err := awskit.EnsureRole(ctx, s.iam, spec, "")
 
 	require.NoError(t, err)
 	assert.True(t, change.Created)
@@ -137,7 +137,7 @@ func TestSandboxRoleNamesAreOneNameInAnyCase(t *testing.T) {
 	s := newSandbox(t)
 	ctx := context.Background()
 	spec := s.role(t, "case", "uid-1")
-	_, _, err := awskit.EnsureRole(ctx, s.iam, spec)
+	_, _, err := awskit.EnsureRole(ctx, s.iam, spec, "")
 	require.NoError(t, err)
 	// The prefix keeps its case, so that the name stays inside cpo-ci-*.
 	other := s.prefix + "-CASE"
@@ -172,7 +172,7 @@ func TestSandboxDeleteClaimedRoleDeletesARoleThatItClaimed(t *testing.T) {
 	var longest time.Duration
 	for i := range 10 {
 		spec := s.role(t, fmt.Sprintf("claim-%d", i), "")
-		_, _, err := awskit.EnsureRole(ctx, s.iam, spec)
+		_, _, err := awskit.EnsureRole(ctx, s.iam, spec, "")
 		require.NoError(t, err)
 
 		start := time.Now()
@@ -194,7 +194,7 @@ func TestSandboxDeleteRoleRemovesTheManagedAndInlinePoliciesFirst(t *testing.T) 
 	s := newSandbox(t)
 	ctx := context.Background()
 	spec := s.role(t, "policies", "uid-1")
-	_, _, err := awskit.EnsureRole(ctx, s.iam, spec)
+	_, _, err := awskit.EnsureRole(ctx, s.iam, spec, "")
 	require.NoError(t, err)
 	pol, err := s.iam.CreatePolicy(ctx, &iam.CreatePolicyInput{
 		PolicyName: aws.String(s.prefix + "-policies"),
@@ -237,7 +237,7 @@ func TestSandboxARoleHoldsAtMostFiftyTags(t *testing.T) {
 	for i := len(spec.Tags); i < 50; i++ {
 		spec.Tags[fmt.Sprintf("k%02d", i)] = "v"
 	}
-	_, _, err := awskit.EnsureRole(ctx, s.iam, spec)
+	_, _, err := awskit.EnsureRole(ctx, s.iam, spec, "")
 	require.NoError(t, err)
 	tags := maps.Clone(spec.Tags)
 	tags[awskit.TagRequestUID] = "uid-1"
