@@ -49,6 +49,11 @@ const (
 	// region of the bucket in status.resources, and creates the bucket at the
 	// next reconcile.
 	ReasonRecordingBucket = "RecordingBucket"
+	// ReasonWaitingForBucketTags means that S3 does not show the UID tag of
+	// the new bucket of the request yet. The plugin changes nothing on the
+	// bucket, and gives BucketNameInUse when the tag does not show within the
+	// settle time.
+	ReasonWaitingForBucketTags = "WaitingForBucketTags"
 )
 
 // The inputs and the outputs of a request, and the kinds of its rows of
@@ -69,8 +74,11 @@ const (
 	// sets none.
 	defaultAbortDays int32 = 7
 	// inUseRequeue is the wait before a request whose bucket name is in use
-	// reconciles again. S3 can show the tags of a new bucket a moment late.
+	// reconciles again.
 	inUseRequeue = time.Minute
+	// tagsRequeue is the longest wait before a request whose new bucket shows
+	// no tags yet reconciles again.
+	tagsRequeue = 10 * time.Second
 	// recordRequeue is the wait between the record of a bucket and its
 	// create.
 	recordRequeue = time.Second
@@ -104,12 +112,13 @@ type Plugin struct {
 // ObjectStorageConfig. It is Pending with the reason BucketNameInUse when the
 // bucket name belongs to another owner, with InvalidParameters when
 // bucketPrefix or region names another bucket than the one that the request
-// has or the key is in another region, and with RecordingBucket for the one
-// reconcile that records a new bucket before it creates the bucket. A failed
-// AWS call is an error. A failed read of the stored size only shows the size
-// as not known. Within the settle time of a write of the plugin, S3 can show a
-// setting late, so a setting that differs is not repaired: the request
-// reconciles again when the settle time ends.
+// has or the key is in another region, with RecordingBucket for the one
+// reconcile that records a new bucket before it creates the bucket, and with
+// WaitingForBucketTags while S3 shows no UID tag on the bucket, for at most
+// the settle time. A failed AWS call is an error. A failed read of the stored
+// size only shows the size as not known. Within the settle time of a write of
+// the plugin, S3 can show a setting late, so a setting that differs is not
+// repaired: the request reconciles again when the settle time ends.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -169,6 +178,14 @@ func (p *Plugin) Reconcile(
 
 	if inUse, ok := errors.AsType[bucketInUseError](err); ok {
 		return inUseResult(inUse, req.Object, corrected), nil
+	}
+	if waiting, ok := errors.AsType[tagsNotShownError](err); ok {
+		return pluginkit.Result{
+			Pending:      &pluginkit.Waiting{Reason: ReasonWaitingForBucketTags, Message: waiting.Error()},
+			Resources:    ownRows(req.Object),
+			RequeueAfter: min(waiting.Left, tagsRequeue),
+			Corrected:    corrected,
+		}, nil
 	}
 	settling, late := errors.AsType[settlingError](err)
 	if late {
@@ -411,12 +428,17 @@ func resources(s Settings, ref bucketRef, request *pluginsv1alpha1.PluginRequest
 // Delete deletes the objects of the bucket of the request for at most the
 // delete budget. While objects remain, it returns pluginkit.Deleting, and the
 // next pass goes on. Then it deletes the bucket and the ObjectStorageConfig.
-// A bucket that is gone, or that is not the request's, is not an error.
+// A bucket that is gone, or that is not the request's, is not an error. While
+// S3 shows no UID tag on the recorded bucket, for at most the settle time, it
+// returns pluginkit.Deleting and deletes nothing.
 func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	ref := bucketOf(req.Object, req.Parameters, p.settings)
 
 	actions, remain, err := p.buckets.delete(ctx, ref)
 	record(req, actions)
+	if waiting, ok := errors.AsType[tagsNotShownError](err); ok {
+		return pluginkit.Deleting{Message: waiting.Error()}
+	}
 	switch {
 	case err != nil:
 		return err
@@ -430,10 +452,15 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 }
 
 // Orphan keeps the bucket of the request with its objects, and removes the
-// request tags and the UID tag from it.
+// request tags and the UID tag from it. While S3 shows no UID tag on the
+// recorded bucket, for at most the settle time, it returns pluginkit.Deleting
+// and changes nothing.
 func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	actions, err := p.buckets.release(ctx, bucketOf(req.Object, req.Parameters, p.settings))
 	record(req, actions)
+	if waiting, ok := errors.AsType[tagsNotShownError](err); ok {
+		return pluginkit.Deleting{Message: waiting.Error()}
+	}
 	return err
 }
 

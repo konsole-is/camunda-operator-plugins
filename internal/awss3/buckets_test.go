@@ -580,6 +580,125 @@ func TestEnsureRepairsDriftOnlyAfterTheSettleTimeOfAStart(t *testing.T) {
 	assert.Len(t, corrected(repaired), 1)
 }
 
+// lateTags returns the buckets of a new fake whose writes settle for five
+// minutes on the clock of the result, and the recorded bucket of testRef. S3
+// shows the tags of a new bucket late until the test releases them.
+func lateTags() (buckets, *awsfake.S3, *clock, bucketRef) {
+	b, f := newBuckets()
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	b.writes = newWriteTimes(5*time.Minute, c.Now)
+	f.ShowLate("GetBucketTagging", -1)
+	ref := testRef("eu-west-1")
+	ref.Bound = true
+	return b, f, c, ref
+}
+
+func tagsLeft(t *testing.T, err error) time.Duration {
+	t.Helper()
+	late, ok := errors.AsType[tagsNotShownError](err)
+	require.True(t, ok, "a tagsNotShownError, got %v", err)
+	return late.Left
+}
+
+func TestEnsureWaitsForTheTagsOfANewBucketThatS3ShowsLate(t *testing.T) {
+	b, f, c, ref := lateTags()
+
+	created, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
+	assert.Equal(t, 5*time.Minute, tagsLeft(t, err))
+	c.now = c.now.Add(2 * time.Minute)
+	late, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
+
+	assert.Equal(t, 3*time.Minute, tagsLeft(t, err))
+	assert.Equal(t, []string{eventReasonBucketCreated}, reasons(created))
+	assert.Empty(t, late)
+	assert.Equal(t, 1, count(f.Calls(), "CreateBucket"))
+	assert.Zero(t, count(f.Calls(), "PutBucketTagging"), "the plugin changes nothing on the bucket")
+}
+
+func TestDeleteWaitsForTheTagsOfANewBucketThatS3ShowsLate(t *testing.T) {
+	b, f, c, ref := lateTags()
+	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
+	tagsLeft(t, err)
+	c.now = c.now.Add(2 * time.Minute)
+
+	_, _, err = b.delete(context.Background(), ref)
+	assert.Equal(t, 3*time.Minute, tagsLeft(t, err))
+	_, kept := f.Bucket(ref.Name)
+	require.True(t, kept, "the plugin deletes no bucket without its UID tag")
+	f.ShowLate("GetBucketTagging", 0)
+	actions, remain, err := b.delete(context.Background(), ref)
+
+	require.NoError(t, err)
+	assert.False(t, remain)
+	assert.Equal(t, []string{eventReasonBucketDeleted}, reasons(actions))
+	_, kept = f.Bucket(ref.Name)
+	assert.False(t, kept)
+}
+
+func TestABucketWhoseTagsNeverShowIsNotTheRequestsAfterTheSettleTime(t *testing.T) {
+	b, f, c, ref := lateTags()
+	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
+	tagsLeft(t, err)
+	c.now = c.now.Add(5 * time.Minute)
+
+	_, ensureErr := b.ensure(context.Background(), ref, testWant(ref), prior{})
+	_, remain, deleteErr := b.delete(context.Background(), ref)
+
+	var inUse bucketInUseError
+	require.ErrorAs(t, ensureErr, &inUse)
+	assert.Equal(t, "no request", inUse.Owner)
+	assert.False(t, inUse.MaybeOwn)
+	require.NoError(t, deleteErr)
+	assert.False(t, remain)
+	_, kept := f.Bucket(ref.Name)
+	assert.True(t, kept, "the plugin deletes no bucket without its UID tag")
+}
+
+func TestReleaseWaitsForTheTagsOfANewBucketThatS3ShowsLate(t *testing.T) {
+	b, f, _, ref := lateTags()
+	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
+	tagsLeft(t, err)
+
+	_, err = b.release(context.Background(), ref)
+
+	tagsLeft(t, err)
+	assert.Equal(t, testWant(ref).Tags, bucketOfFake(t, f, ref.Name).Tags)
+}
+
+func TestDeleteWaitsOneSettleTimeAfterAStartForTheTagsOfARecordedBucket(t *testing.T) {
+	old, f := newBuckets()
+	f.ShowLate("GetBucketTagging", -1)
+	ref := testRef("eu-west-1")
+	ref.Bound = true
+	_, err := old.ensure(context.Background(), ref, testWant(ref), prior{})
+	require.Error(t, err)
+	// A new plugin process knows no create of the process before.
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteTimes(5*time.Minute, c.Now)}
+
+	_, _, err = restarted.delete(context.Background(), ref)
+	assert.Equal(t, 5*time.Minute, tagsLeft(t, err))
+	c.now = c.now.Add(5 * time.Minute)
+	_, _, err = restarted.delete(context.Background(), ref)
+
+	require.NoError(t, err)
+	_, kept := f.Bucket(ref.Name)
+	assert.True(t, kept, "the plugin deletes no bucket without its UID tag")
+}
+
+func TestDeleteDoesNotWaitForTheTagsOfABucketThatTheRequestNeverRecorded(t *testing.T) {
+	b, f, _, ref := lateTags()
+	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
+	tagsLeft(t, err)
+	ref.Bound = false
+
+	_, _, err = b.delete(context.Background(), ref)
+
+	require.NoError(t, err)
+	_, kept := f.Bucket(ref.Name)
+	assert.True(t, kept)
+}
+
 // fill puts n objects into the bucket name.
 func fill(f *awsfake.S3, name string, n int) {
 	keys := make([]string, n)

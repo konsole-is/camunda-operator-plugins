@@ -869,3 +869,25 @@ func TestS3ShowLateShowsTheOldTagsAfterAPut(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "b", aws.ToString(out.TagSet[0].Value))
 }
+
+func TestS3ShowLateShowsNoTagsOfANewBucket(t *testing.T) {
+	f := NewS3()
+	f.ShowLate("GetBucketTagging", 1)
+	_, err := f.CreateBucket(context.Background(), &s3.CreateBucketInput{
+		Bucket: aws.String("bucket-1"),
+		CreateBucketConfiguration: &types.CreateBucketConfiguration{
+			LocationConstraint: "eu-west-1",
+			Tags:               []types.Tag{{Key: aws.String("team"), Value: aws.String("a")}},
+		},
+	})
+	require.NoError(t, err)
+	get := func() (*s3.GetBucketTaggingOutput, error) {
+		return f.GetBucketTagging(context.Background(), &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
+	}
+
+	_, err = get()
+	assert.Equal(t, "NoSuchTagSet", awskit.ErrorCode(err))
+	out, err := get()
+	require.NoError(t, err)
+	assert.Equal(t, "a", aws.ToString(out.TagSet[0].Value))
+}

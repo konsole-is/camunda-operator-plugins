@@ -221,7 +221,8 @@ func (f *S3) FailNext(operation string, err error) {
 // ShowLate makes the read operation get show a setting late, as S3 does for a
 // while after a write of a bucket configuration. After each Put of the
 // setting, the next reads calls of get on the bucket answer the setting as it
-// was before the Put. get is GetBucketTagging, GetPublicAccessBlock,
+// was before the Put. A CreateBucket is a Put of the tags of a bucket without
+// tags. get is GetBucketTagging, GetPublicAccessBlock,
 // GetBucketEncryption, or GetBucketLifecycleConfiguration. A negative reads
 // shows the old setting until a call with zero reads, which shows each
 // setting as it is.
@@ -456,6 +457,7 @@ func (r s3Region) CreateBucket(
 		},
 	}
 	r.f.buckets[name] = b
+	r.f.beforePut("GetBucketTagging", &Bucket{Name: name, Region: region, Account: r.account()})
 
 	return &s3.CreateBucketOutput{Location: aws.String("/" + name)}, nil
 }

@@ -349,6 +349,45 @@ var _ = Describe("the AWS S3 plugin", func() {
 		}, timeout).Should(Succeed())
 	})
 
+	It("waits for the tags of a new bucket that S3 shows late, also in a delete", func() {
+		fake.ShowLate("GetBucketTagging", -1)
+		DeferCleanup(func() { fake.ShowLate("GetBucketTagging", 0) })
+		ns := newNamespace()
+		name := bucketNameOf(ns)
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+		Eventually(func(g Gomega) {
+			c := conditionOf(g, request, pluginsv1alpha1.ConditionOutputsReady)
+			g.Expect(c.Reason).To(Equal(awss3.ReasonWaitingForBucketTags))
+			g.Expect(c.Message).To(ContainSubstring(name))
+		}, timeout).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			got := read(g, request)
+			got.Spec.Parameters = raw(`{"bucketPrefix":"other"}`)
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		Eventually(func(g Gomega) {
+			c := conditionOf(g, request, pluginsv1alpha1.ConditionOutputsReady)
+			g.Expect(c.Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters))
+		}, timeout).Should(Succeed())
+		Expect(bucketsOf(ns)).To(HaveLen(1), "no second bucket")
+
+		Expect(k8s.Delete(ctx, request)).To(Succeed())
+		Eventually(func(g Gomega) {
+			c := conditionOf(g, request, v1.ConditionReady)
+			g.Expect(c.Reason).To(Equal(pluginkit.ReasonDeleting))
+			g.Expect(c.Message).To(Equal("Waiting for S3 to show the tags of the new bucket " + name))
+		}, timeout).Should(Succeed())
+		_, kept := fake.Bucket(name)
+		Expect(kept).To(BeTrue(), "the plugin deletes no bucket without its UID tag")
+
+		fake.ShowLate("GetBucketTagging", 0)
+		Eventually(gone(request), timeout).Should(BeTrue())
+		_, kept = fake.Bucket(name)
+		Expect(kept).To(BeFalse())
+	})
+
 	It("keeps the contract of an orphaned bucket when a new request of the claim is deleted", func() {
 		ns := newNamespace()
 		orphaned := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyOrphan)

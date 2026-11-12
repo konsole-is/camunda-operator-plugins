@@ -119,6 +119,21 @@ func (e bucketInUseError) Error() string {
 	)
 }
 
+// tagsNotShownError means that S3 shows no UID tag on the recorded bucket of
+// the request, within the settle time of the last write of the plugin or of
+// its first look at the bucket. S3 can show the tags of a new bucket late, so
+// the bucket can still be the bucket of the request. The plugin changes,
+// empties, and deletes nothing on it. Left is the time until the settle time
+// ends.
+type tagsNotShownError struct {
+	Bucket string
+	Left   time.Duration
+}
+
+func (e tagsNotShownError) Error() string {
+	return fmt.Sprintf("Waiting for S3 to show the tags of the new bucket %s", e.Bucket)
+}
+
 // settlingError means that a setting of the bucket differs from the desired
 // state within the settle time of the last write of the plugin, so ensure did
 // not repair it. Left is the time until the settle time ends.
@@ -175,29 +190,19 @@ func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
 // public access, sets the default encryption, and sets the abort rule. It
 // returns what it did as actions, also with an error. It returns
 // bucketInUseError, and changes nothing, when the bucket does not carry the
-// UID of ref, also after a create that S3 answered with success. With
-// p.Served, a repair of a bucket that the request had is drift. A changed key
-// is not drift: p.KeyARN is the key that the plugin wrote last. Within the
-// settle time of the last write of the plugin, it writes no setting that
-// differs, except a changed key, and returns settlingError.
+// UID of ref, also after a create that S3 answered with success. It returns
+// tagsNotShownError instead while the recorded bucket of ref has no UID tag
+// within the settle time. With p.Served, a repair of a bucket that the
+// request had is drift. A changed key is not drift: p.KeyARN is the key that
+// the plugin wrote last. Within the settle time of the last write of the
+// plugin, it writes no setting that differs, except a changed key, and
+// returns settlingError.
 func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]action, error) {
 	c := b.s3(ref.Region)
 
 	created, err := createBucket(ctx, c, ref, w.Tags)
 	if err != nil {
 		return nil, err
-	}
-
-	tags, err := bucketTagsOf(ctx, c, ref.Name)
-	if err != nil {
-		return nil, err
-	}
-	if !awskit.OwnedBy(tags, ref.UID) {
-		return nil, bucketInUseError{
-			Bucket:   ref.Name,
-			Owner:    awskit.OwnerOf(tags),
-			MaybeOwn: created && tags[awskit.TagRequestUID] == "",
-		}
 	}
 
 	var actions []action
@@ -212,6 +217,17 @@ func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]
 		}
 		actions = append(actions, a)
 		b.writes.wrote(ref.Name)
+	}
+
+	tags, err := bucketTagsOf(ctx, c, ref.Name)
+	if err != nil {
+		return actions, err
+	}
+	if !awskit.OwnedBy(tags, ref.UID) {
+		if late := b.tagsLate(ref, tags); late != nil {
+			return actions, late
+		}
+		return nil, bucketInUseError{Bucket: ref.Name, Owner: awskit.OwnerOf(tags)}
 	}
 
 	left := b.writes.left(ref.Name)
@@ -341,6 +357,18 @@ func bucketTagsOf(ctx context.Context, c awskit.S3, name string) (map[string]str
 		tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
 	}
 	return tags, nil
+}
+
+// tagsLate returns a tagsNotShownError when the recorded bucket of ref has no
+// UID tag within the settle time, and nil otherwise.
+func (b buckets) tagsLate(ref bucketRef, tags map[string]string) error {
+	if !ref.Bound || tags[awskit.TagRequestUID] != "" {
+		return nil
+	}
+	if left := b.writes.left(ref.Name); left > 0 {
+		return tagsNotShownError{Bucket: ref.Name, Left: left}
+	}
+	return nil
 }
 
 // ensureTags writes the tags of want that current lacks or holds with another
@@ -569,7 +597,7 @@ func sameAbortRule(r types.LifecycleRule, days int32) bool {
 func (b buckets) delete(ctx context.Context, ref bucketRef) ([]action, bool, error) {
 	c := b.s3(ref.Region)
 
-	owned, err := ownedBucket(ctx, c, ref)
+	owned, err := b.ownedBucket(ctx, c, ref)
 	if !owned || err != nil {
 		return nil, false, err
 	}
@@ -600,8 +628,9 @@ func (b buckets) delete(ctx context.Context, ref bucketRef) ([]action, bool, err
 
 // ownedBucket reports whether the bucket of ref exists and carries the UID of
 // ref. A bucket in another region than ref is not owned. A bucket that S3
-// refuses to show is not owned only when ref is not Bound.
-func ownedBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) {
+// refuses to show is not owned only when ref is not Bound. It returns
+// tagsNotShownError for a bucket that ensure would wait for.
+func (b buckets) ownedBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) {
 	_, err := c.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(ref.Name)})
 	switch {
 	case awskit.IsNotFound(err) || inOtherRegion(err):
@@ -617,7 +646,10 @@ func ownedBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	return awskit.OwnedBy(tags, ref.UID), nil
+	if awskit.OwnedBy(tags, ref.UID) {
+		return true, nil
+	}
+	return false, b.tagsLate(ref, tags)
 }
 
 // release removes the request tags and the UID tag from the bucket of ref.
@@ -626,7 +658,7 @@ func ownedBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) 
 func (b buckets) release(ctx context.Context, ref bucketRef) ([]action, error) {
 	c := b.s3(ref.Region)
 
-	owned, err := ownedBucket(ctx, c, ref)
+	owned, err := b.ownedBucket(ctx, c, ref)
 	if !owned || err != nil {
 		return nil, err
 	}
