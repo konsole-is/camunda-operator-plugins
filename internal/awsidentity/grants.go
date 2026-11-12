@@ -59,18 +59,70 @@ type clusterGrant struct {
 	matches cond
 }
 
-// syncGrants puts the Grants on role with putGrants, and writes Applied,
-// MatchesTemplate, and Ready of each Grant of the claim of req. With an
-// error, the result still holds the policies that it repaired.
+// syncGrants puts the allowed Grants of the cluster of req on role, and
+// removes the policies of Grants that are gone. When served, it also writes
+// Applied, MatchesTemplate, and Ready of each Grant of the claim of req, and
+// counts them. It ignores a Grant that is being deleted, and one whose
+// request is gone or belongs to another claim. With an error, the result
+// still holds the policies that it repaired.
 func (p *Plugin) syncGrants(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	role awskit.Role,
+	served bool,
 ) (grantSync, error) {
-	grants, plan, repaired, err := p.putGrants(ctx, req, role)
-	sync := grantSync{repaired: repaired}
+	grants, retained, err := p.clusterGrants(ctx, req.Object)
+	if err != nil {
+		return grantSync{}, err
+	}
+
+	current, err := awskit.InlinePolicies(ctx, p.clients.IAM, role.Name)
+	if err != nil {
+		return grantSync{}, err
+	}
+
+	policies := make([]grantPolicy, 0, len(grants)+len(retained))
+	var applied []string
+	for _, g := range grants {
+		policies = append(policies, g.policy)
+		if appliedAt(&g.grant) {
+			applied = append(applied, g.policy.policy)
+		}
+	}
+
+	plan, put, removed, err := p.writePolicies(ctx, role, current, append(policies, retained...))
+	var sync grantSync
+	for _, policy := range put {
+		if slices.Contains(applied, policy) {
+			sync.repaired = append(sync.repaired, policy)
+		}
+	}
 	if err != nil {
 		return sync, err
+	}
+
+	for _, policy := range removed {
+		req.Event(
+			corev1.EventTypeNormal,
+			eventReasonPolicyRemoved,
+			eventActionDelete,
+			"Removed the inline policy %s of a Grant that is gone from the IAM role %s",
+			policy,
+			role.Name,
+		)
+	}
+	for _, policy := range put {
+		req.Event(
+			corev1.EventTypeNormal,
+			eventReasonPolicyApplied,
+			eventActionUpdate,
+			"Put the inline policy %s of a Grant on the IAM role %s",
+			policy,
+			role.Name,
+		)
+	}
+	if !served {
+		return sync, nil
 	}
 
 	sync.counts = grantCounts{total: len(grants), size: plan.size}
@@ -95,71 +147,6 @@ func (p *Plugin) syncGrants(
 	}
 
 	return sync, nil
-}
-
-// putGrants puts the allowed Grants of the cluster of req on role and removes
-// the policies of Grants that are gone. It ignores a Grant that is being
-// deleted, and one whose request is gone or belongs to another claim. It
-// returns the Grants of the claim, the plan that it wrote, and the policies
-// that it put for a Grant with Applied=True for its generation, also with an
-// error.
-func (p *Plugin) putGrants(
-	ctx context.Context,
-	req pluginkit.Request[Params, map[string]string],
-	role awskit.Role,
-) ([]clusterGrant, policyPlan, []string, error) {
-	grants, retained, err := p.clusterGrants(ctx, req.Object)
-	if err != nil {
-		return nil, policyPlan{}, nil, err
-	}
-
-	current, err := awskit.InlinePolicies(ctx, p.clients.IAM, role.Name)
-	if err != nil {
-		return nil, policyPlan{}, nil, err
-	}
-
-	policies := make([]grantPolicy, 0, len(grants)+len(retained))
-	var applied []string
-	for _, g := range grants {
-		policies = append(policies, g.policy)
-		if appliedAt(&g.grant) {
-			applied = append(applied, g.policy.policy)
-		}
-	}
-
-	plan, put, removed, err := p.writePolicies(ctx, role, current, append(policies, retained...))
-	var repaired []string
-	for _, policy := range put {
-		if slices.Contains(applied, policy) {
-			repaired = append(repaired, policy)
-		}
-	}
-	if err != nil {
-		return nil, policyPlan{}, repaired, err
-	}
-
-	for _, policy := range removed {
-		req.Event(
-			corev1.EventTypeNormal,
-			eventReasonPolicyRemoved,
-			eventActionDelete,
-			"Removed the inline policy %s of a Grant that is gone from the IAM role %s",
-			policy,
-			role.Name,
-		)
-	}
-	for _, policy := range put {
-		req.Event(
-			corev1.EventTypeNormal,
-			eventReasonPolicyApplied,
-			eventActionUpdate,
-			"Put the inline policy %s of a Grant on the IAM role %s",
-			policy,
-			role.Name,
-		)
-	}
-
-	return grants, plan, repaired, nil
 }
 
 // clusterGrants returns the Grants of the cluster of request that belong to

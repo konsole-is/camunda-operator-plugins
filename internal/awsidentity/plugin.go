@@ -161,7 +161,7 @@ func (p *Plugin) Reconcile(
 
 	// The Grants reach the role before an association moves to it, so a pod
 	// never holds the role without its policies.
-	sync, err := p.syncGrants(ctx, req, role)
+	sync, err := p.syncGrants(ctx, req, role, true)
 	if drift {
 		corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
 	}
@@ -254,8 +254,7 @@ func roleNameInUse(err error, status []pluginsv1alpha1.ResourceRef) (pluginkit.R
 }
 
 // syncOldRoleGrants keeps the Grants of the old role that the outputs of req
-// name in sync, when it is not role. It writes no Grant status, because
-// Applied tells what role holds.
+// name in sync, when it is not role.
 func (p *Plugin) syncOldRoleGrants(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -267,7 +266,7 @@ func (p *Plugin) syncOldRoleGrants(
 		return err
 	}
 
-	_, _, _, err = p.putGrants(ctx, req, old)
+	_, err = p.syncGrants(ctx, req, old, false)
 	return err
 }
 
@@ -319,7 +318,7 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 	var conflicted, inUse bool
 	var pending pluginkit.Result
 	if arn != "" {
-		role, conflicted, res.Corrected, err = p.trustNobody(ctx, req, current)
+		role, conflicted, res.Corrected, err = p.trustNobody(ctx, req, current, true)
 		pending, inUse = roleNameInUse(err, status)
 		if err != nil && !inUse {
 			return pluginkit.Result{Corrected: res.Corrected}, err
@@ -331,7 +330,9 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 		return pluginkit.Result{Corrected: res.Corrected}, err
 	}
 	if old.ARN != "" {
-		_, oldConflicted, corrected, err := p.trustNobody(ctx, req, old.Name)
+		// The old role serves the request when no role of the current name
+		// took the Grants.
+		_, oldConflicted, corrected, err := p.trustNobody(ctx, req, old.Name, arn == "" || inUse)
 		res.Corrected = append(res.Corrected, corrected...)
 		if err != nil {
 			return pluginkit.Result{Corrected: res.Corrected}, err
@@ -370,12 +371,14 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 
 // trustNobody makes the role name of req trust nobody, deletes the
 // associations of req, keeps the Grants of the role in sync, and then tags
-// the role with its desired hash. It returns the drift that it repaired, also
-// with an error, and whether a Grant changed after it was read.
+// the role with its desired hash. It writes the status of the Grants only
+// when served. It returns the drift that it repaired, also with an error,
+// and whether a Grant changed after it was read.
 func (p *Plugin) trustNobody(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	name string,
+	served bool,
 ) (awskit.Role, bool, []string, error) {
 	spec, hash, err := p.desiredRole(req.Object, name, nil)
 	if err != nil {
@@ -398,7 +401,7 @@ func (p *Plugin) trustNobody(
 			corrected = append(corrected, deleted.Corrections()...)
 		}
 		if err != nil {
-			sync, syncErr := p.syncGrants(ctx, req, role)
+			sync, syncErr := p.syncGrants(ctx, req, role, served)
 			if drift {
 				corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
 			}
@@ -406,7 +409,7 @@ func (p *Plugin) trustNobody(
 		}
 	}
 
-	sync, err := p.syncGrants(ctx, req, role)
+	sync, err := p.syncGrants(ctx, req, role, served)
 	if drift {
 		corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
 	}

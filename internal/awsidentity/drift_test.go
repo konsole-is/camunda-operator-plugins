@@ -335,4 +335,47 @@ var _ = Describe("drift after a change of the role name prefix", Serial, func() 
 		expectGrant(grant, pluginsv1alpha1.ConditionApplied, metav1.ConditionTrue, v1.ReasonHealthy)
 		expectNoDriftCorrected(s.namespace)
 	})
+
+	It("records no DriftCorrected when a Grant that only the old role could hold reaches the new role "+
+		"while the request names no ServiceAccount", func() {
+		var other *pluginsv1alpha1.PluginRequest
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other = newOtherRequest(s.namespace, "orders-backup", "orders")
+		})
+		newName := awskit.RoleName("team-b", issuer, s.namespace, "orders")
+		s.putRole(newName, string(s.request.UID))
+		// A policy that the plugin does not own leaves no room for the Grant
+		// on the new role.
+		_, err := s.iam.PutRolePolicy(ctx, &iam.PutRolePolicyInput{
+			RoleName:       aws.String(newName),
+			PolicyName:     aws.String("manual"),
+			PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[` + statementOfSize(6000) + `]}`),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+		grant := grantFor(other, "orders-backup-big", statementOfSize(5000))
+		Expect(k8s.Create(ctx, grant)).To(Succeed())
+
+		s.startNewHub(withResync(driftResync))
+		Eventually(func(g Gomega) {
+			old, _ := s.iam.Role(s.oldRole.Name)
+			g.Expect(old.InlinePolicies).To(HaveKey("grant-orders-backup-big"))
+			role, _ := s.iam.Role(newName)
+			g.Expect(role.Tags).To(HaveKey(awskit.TagDesired))
+			g.Expect(role.Tags[awskit.TagDesired]).NotTo(Equal(awskit.DesiredChanging))
+		}, timeout).Should(Succeed())
+		_, err = s.iam.DeleteRolePolicy(ctx, &iam.DeleteRolePolicyInput{
+			RoleName:   aws.String(newName),
+			PolicyName: aws.String("manual"),
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			role, _ := s.iam.Role(newName)
+			g.Expect(role.InlinePolicies).To(HaveKey("grant-orders-backup-big"))
+		}, timeout).Should(Succeed())
+		expectGrant(grant, pluginsv1alpha1.ConditionApplied, metav1.ConditionTrue, v1.ReasonHealthy)
+		expectNoDriftCorrected(s.namespace)
+	})
 })
