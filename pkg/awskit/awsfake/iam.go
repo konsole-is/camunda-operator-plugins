@@ -103,6 +103,14 @@ func (f *IAM) AddRoleToInstanceProfile(name, profile string) {
 	f.profiles[name] = append(f.profiles[name], profile)
 }
 
+// RemoveRoleFromInstanceProfile takes the role name out of the instance
+// profile profile.
+func (f *IAM) RemoveRoleFromInstanceProfile(name, profile string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.profiles[name] = slices.DeleteFunc(f.profiles[name], func(p string) bool { return p == profile })
+}
+
 // Role returns a copy of the role name.
 func (f *IAM) Role(name string) (Role, bool) {
 	f.mu.Lock()

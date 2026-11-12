@@ -142,6 +142,12 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{Corrected: corrected}, err
 	}
 
+	// The pass moves the request off the old role that the outputs name. A
+	// later pass that serves that role again must not count the move as drift.
+	if err := p.markOldRoleChanging(ctx, req, current, role); err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
+	}
+
 	// A ServiceAccount that left the request loses its association before a
 	// Grant step can fail.
 	var leftErr error

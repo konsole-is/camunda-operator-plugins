@@ -69,8 +69,9 @@ func (s RoleSpec) DesiredHash(extra ...[]byte) string {
 // Role is an IAM role.
 type Role struct {
 	Name, ARN string
-	// Desired is the TagDesired value of the role as EnsureRole read it,
-	// before any change. It is empty for a role that EnsureRole created.
+	// Desired is the TagDesired value of the role as EnsureRole or ClaimRole
+	// read it, before any change. It is empty for a role that EnsureRole
+	// created.
 	Desired string
 }
 
@@ -305,7 +306,7 @@ func ClaimRole(ctx context.Context, c IAM, name string, tags map[string]string) 
 			return Role{}, fmt.Errorf("tagging the IAM role %s: %w", name, err)
 		}
 	}
-	return Role{Name: name, ARN: aws.ToString(out.Role.Arn)}, nil
+	return Role{Name: name, ARN: aws.ToString(out.Role.Arn), Desired: live[TagDesired]}, nil
 }
 
 // ErrTagNotVisible means that a read of IAM did not show the TagRequestUID

@@ -94,6 +94,12 @@ func (p *Plugin) reconcileRole(
 		return pluginkit.Result{Corrected: corrected}, err
 	}
 
+	// The pass moves the request off the old role that the outputs name. A
+	// later pass that serves that role again must not count the move as drift.
+	if err := p.markOldRoleChanging(ctx, req, current, role); err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
+	}
+
 	// Like the trust policy of IRSA, so that a former ServiceAccount loses its
 	// access before a policy step can fail.
 	associations, moved, err := p.ensureAssociations(ctx, req, sas, role.ARN)

@@ -1014,6 +1014,39 @@ var _ = Describe("a change of the role name prefix", Serial, func() {
 		}, timeout).Should(Succeed())
 	})
 
+	It("records no DriftCorrected when the prefix changes back to an old role that it could not delete", func() {
+		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other := newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant := grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, v1.ConditionReady, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		s.iam.AddRoleToInstanceProfile(s.oldRole.Name, "nodes")
+
+		h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks)
+		Eventually(func(g Gomega) {
+			g.Expect(s.eks.Associations()).To(HaveEach(HaveField("RoleARN", roleOf(g, h, s.namespace).ARN)))
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the instance profile keeps the old role")
+			g.Expect(old.InlinePolicies).To(BeEmpty(), "the delete of the old role started")
+		}, timeout).Should(Succeed())
+		stop()
+
+		_, stop = startHub(s.mode, s.registration, "camunda", s.iam, s.eks, func(o *awsidentity.Options) {
+			o.Name += "-back"
+		})
+		DeferCleanup(stop)
+		Eventually(func(g Gomega) {
+			g.Expect(s.eks.Associations()).To(HaveEach(HaveField("RoleARN", s.oldRole.ARN)))
+			old, _ := s.iam.Role(s.oldRole.Name)
+			g.Expect(old.InlinePolicies).To(HaveKey("grant-orders-backup-read"))
+		}, timeout).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(eventNotes(g, s.namespace, "DriftCorrected")).To(BeEmpty())
+		}, 3*time.Second).Should(Succeed())
+	})
+
 	It("removes the policy of a deleted grant from the old role while the Grants of the new role fail", func() {
 		var grant *pluginsv1alpha1.Grant
 		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-", func(s renameSetup) {

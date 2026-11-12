@@ -202,3 +202,16 @@ func TestIAMFailNextOnRoleFailsOnlyTheNextCallOfTheOperationOnTheRole(t *testing
 	assert.NoError(t, next)
 	assert.Equal(t, []string{"CreateRole", "GetRole", "TagRole", "GetRole", "GetRole"}, f.Calls())
 }
+
+func TestIAMDeleteRoleRefusesARoleInAnInstanceProfileUntilItIsRemoved(t *testing.T) {
+	f := NewIAM()
+	createRole(t, f)
+	f.AddRoleToInstanceProfile("r", "nodes")
+
+	_, refused := f.DeleteRole(context.Background(), &iam.DeleteRoleInput{RoleName: aws.String("r")})
+	f.RemoveRoleFromInstanceProfile("r", "nodes")
+	_, deleted := f.DeleteRole(context.Background(), &iam.DeleteRoleInput{RoleName: aws.String("r")})
+
+	assert.ErrorContains(t, refused, "instance profile")
+	assert.NoError(t, deleted)
+}

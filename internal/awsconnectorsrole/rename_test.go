@@ -18,6 +18,7 @@ package awsconnectorsrole_test
 
 import (
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -292,5 +293,42 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 			g.Expect(old.Attached).To(ConsistOf(policyB))
 			g.Expect(old.InlinePolicies).NotTo(HaveKey("connectors"))
 		}, timeout).Should(Succeed())
+	})
+
+	It("records no DriftCorrected when the prefix changes back to an old role that it could not delete", func() {
+		s := newRenameSetup(awskit.ModePodIdentity)
+		s.iam.AddRoleToInstanceProfile(s.oldRole.Name, "nodes")
+
+		c, stop := startConnectors(s.mode, newPrefix, s.iam, s.eks)
+		Eventually(func(g Gomega) {
+			role, ok := s.iam.Role(c.roleName(s.namespace))
+			g.Expect(ok).To(BeTrue(), "the new role exists")
+			g.Expect(associationsIn(c, s.namespace)).To(ConsistOf("orders-connectors=" + role.ARN))
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the instance profile keeps the old role")
+			g.Expect(old.Attached).To(BeEmpty(), "the delete of the old role started")
+		}, timeout).Should(Succeed())
+		stop()
+
+		back, stop := startConnectors(s.mode, rolePrefix, s.iam, s.eks)
+		DeferCleanup(stop)
+		DeferCleanup(func() {
+			// The instance profile keeps the role, so the spec releases the
+			// request itself.
+			Expect(back.k8s.Delete(ctx, s.request)).To(Succeed())
+			Eventually(func(g Gomega) {
+				got := read(g, back, s.request)
+				got.Finalizers = nil
+				g.Expect(back.k8s.Update(ctx, got)).To(Succeed())
+			}, timeout).Should(Succeed())
+		})
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(back, s.namespace)).To(ConsistOf("orders-connectors=" + s.oldRole.ARN))
+			old, _ := s.iam.Role(s.oldRole.Name)
+			g.Expect(old.Attached).To(ConsistOf(policyA))
+		}, timeout).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(eventNotes(g, back, s.namespace, "DriftCorrected")).To(BeEmpty())
+		}, 3*time.Second).Should(Succeed())
 	})
 })

@@ -205,7 +205,7 @@ var _ = Describe("drift of a role", Serial, func() {
 		"during a change of the prefix", func() {
 		s := newRenameSetup(awskit.ModePodIdentity, "aws-pod-identity-")
 		// The old role stays in the status while the new hub cannot delete it.
-		s.iam.FailRole(s.oldRole.Name, errors.New("the role cannot be read"))
+		s.iam.AddRoleToInstanceProfile(s.oldRole.Name, "nodes")
 		h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks)
 		var current awsfake.Role
 		Eventually(func(g Gomega) {
@@ -216,7 +216,7 @@ var _ = Describe("drift of a role", Serial, func() {
 			g.Expect(got.Status.Resources).To(ContainElement(HaveField("Name", s.oldRole.Name)))
 		}, timeout).Should(Succeed())
 		stop()
-		s.iam.FailRole(s.oldRole.Name, nil)
+		s.iam.RemoveRoleFromInstanceProfile(s.oldRole.Name, "nodes")
 
 		// The outputs name the old role again, as after a status write that
 		// did not land, and the request names no ServiceAccount.

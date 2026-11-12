@@ -494,6 +494,19 @@ func TestClaimRoleReturnsARoleOfTheUID(t *testing.T) {
 	assert.Equal(t, []string{"GetRole"}, f.Calls()[before:])
 }
 
+func TestClaimRoleReadsTheDesiredTag(t *testing.T) {
+	f := awsfake.NewIAM()
+	role, _, err := awskit.EnsureRole(context.Background(), f, roleSpec(), "")
+	require.NoError(t, err)
+	_, err = awskit.MarkDesired(context.Background(), f, role, roleSpec().Tags, "0123456789abcdef")
+	require.NoError(t, err)
+
+	claimed, err := awskit.ClaimRole(context.Background(), f, roleSpec().Name, roleSpec().Tags)
+
+	require.NoError(t, err)
+	assert.Equal(t, "0123456789abcdef", claimed.Desired)
+}
+
 func TestClaimRoleTakesARoleOfItsRequestWithoutAUID(t *testing.T) {
 	f := awsfake.NewIAM()
 	legacy := roleSpec()
