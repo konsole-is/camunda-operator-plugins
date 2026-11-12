@@ -51,7 +51,7 @@ const (
 	// next reconcile.
 	ReasonRecordingBucket = "RecordingBucket"
 	// ReasonWaitingForBucketTags means that S3 does not show the UID tag of
-	// the new bucket of the request yet. The plugin changes nothing on the
+	// the bucket of the request yet. The plugin changes nothing on the
 	// bucket, and gives BucketNameInUse when the tag does not show within the
 	// settle time.
 	ReasonWaitingForBucketTags = "WaitingForBucketTags"
@@ -77,8 +77,8 @@ const (
 	// inUseRequeue is the wait before a request whose bucket name is in use
 	// reconciles again.
 	inUseRequeue = time.Minute
-	// tagsRequeue is the longest wait before a request whose new bucket shows
-	// no tags yet reconciles again.
+	// tagsRequeue is the longest wait before a request whose bucket shows no
+	// tags yet reconciles again.
 	tagsRequeue = 10 * time.Second
 	// recordRequeue is the wait between the record of a bucket and its
 	// create.

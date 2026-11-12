@@ -377,7 +377,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 		Eventually(func(g Gomega) {
 			c := conditionOf(g, request, v1.ConditionReady)
 			g.Expect(c.Reason).To(Equal(pluginkit.ReasonDeleting))
-			g.Expect(c.Message).To(Equal("Waiting for S3 to show the tags of the new bucket " + name))
+			g.Expect(c.Message).To(Equal("Waiting for S3 to show the tags of the bucket " + name))
 		}, timeout).Should(Succeed())
 		_, kept := fake.Bucket(name)
 		Expect(kept).To(BeTrue(), "the plugin deletes no bucket without its UID tag")

@@ -131,7 +131,7 @@ type tagsNotShownError struct {
 }
 
 func (e tagsNotShownError) Error() string {
-	return fmt.Sprintf("Waiting for S3 to show the tags of the new bucket %s", e.Bucket)
+	return fmt.Sprintf("Waiting for S3 to show the tags of the bucket %s", e.Bucket)
 }
 
 // settlingError means that a setting of the bucket differs from the desired
@@ -195,8 +195,8 @@ func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
 // within the settle time. With p.Served, a repair of a bucket that the
 // request had is drift. A changed key is not drift: p.KeyARN is the key that
 // the plugin wrote last. Within the settle time of the last write of the
-// plugin, it writes no setting that differs, except a changed key, and
-// returns settlingError.
+// plugin, it writes no public access block, encryption, or abort rule that
+// differs, except a changed key, and returns settlingError.
 func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]action, error) {
 	c := b.s3(ref.Region)
 
