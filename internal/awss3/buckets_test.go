@@ -468,22 +468,46 @@ func TestEnsureChangesTheKeyWithinTheSettleTime(t *testing.T) {
 	assert.Equal(t, 1, count(f.Calls(), "PutBucketEncryption"))
 }
 
-func TestEnsureChangesTheDaysOfTheRuleWithinTheSettleTime(t *testing.T) {
-	b, f, _ := settling()
+func TestEnsureWritesOtherDaysOfTheRuleWhenTheSettleTimeEnds(t *testing.T) {
+	b, f, c := settling()
 	ref := testRef("eu-west-1")
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
 	require.NoError(t, err)
 	w := testWant(ref)
 	w.AbortDays = 3
 
-	actions, err := b.ensure(context.Background(), ref, w, prior{Served: true})
+	held, err := b.ensure(context.Background(), ref, w, prior{Served: true})
+	assert.Equal(t, time.Minute, settlingLeft(t, err))
+	c.now = c.now.Add(time.Minute)
+	changed, err := b.ensure(context.Background(), ref, w, prior{Served: true})
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{eventReasonLifecycleUpdated}, reasons(actions))
-	assert.Empty(t, corrected(actions), "other days are a change of the request")
+	assert.Empty(t, held)
+	assert.Equal(t, []string{eventReasonLifecycleUpdated}, reasons(changed))
+	assert.Empty(t, corrected(changed), "other days are a change of the request")
 	assert.Equal(t, int32(3), aws.ToInt32(
 		bucketOfFake(t, f, ref.Name).LifecycleRules[0].AbortIncompleteMultipartUpload.DaysAfterInitiation,
 	))
+}
+
+func TestEnsureWritesOtherDaysOnceWhenS3ShowsTheChangeLate(t *testing.T) {
+	b, f, c := settling()
+	ref := testRef("eu-west-1")
+	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
+	require.NoError(t, err)
+	c.now = c.now.Add(2 * time.Minute)
+	w := testWant(ref)
+	w.AbortDays = 3
+	f.ShowLate("GetBucketLifecycleConfiguration", -1)
+
+	_, err = b.ensure(context.Background(), ref, w, prior{Served: true})
+	require.NoError(t, err)
+	c.now = c.now.Add(10 * time.Second)
+	late, err := b.ensure(context.Background(), ref, w, prior{Served: true})
+
+	assert.Equal(t, 50*time.Second, settlingLeft(t, err), "S3 still shows the rule with 7 days")
+	assert.Empty(t, late)
+	assert.Equal(t, 2, count(f.Calls(), "PutBucketLifecycleConfiguration"))
 }
 
 func TestEnsureAddsARuleThatS3StillDoesNotShowAsDriftAfterTheSettleTime(t *testing.T) {

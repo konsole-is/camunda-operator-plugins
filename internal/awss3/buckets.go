@@ -178,8 +178,8 @@ func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
 // UID of ref, also after a create that S3 answered with success. With
 // p.Served, a repair of a bucket that the request had is drift. A changed key
 // is not drift: p.KeyARN is the key that the plugin wrote last. Within the
-// settle time of the last write of the plugin, it repairs no drift and
-// returns settlingError.
+// settle time of the last write of the plugin, it writes no setting that
+// differs, except a changed key, and returns settlingError.
 func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]action, error) {
 	c := b.s3(ref.Region)
 
@@ -501,12 +501,12 @@ func ensureAbortRule(ctx context.Context, c awskit.S3, name string, days int32, 
 	i := slices.IndexFunc(rules, func(r types.LifecycleRule) bool { return aws.ToString(r.ID) == abortRuleID })
 	missing := i < 0
 	switch {
-	case missing && fix == repairLater:
+	case !missing && sameAbortRule(rules[i], days):
+		return nil, nil
+	case fix == repairLater:
 		return nil, errShownLate
 	case missing:
 		rules = append(slices.Clone(rules), wanted)
-	case sameAbortRule(rules[i], days):
-		return nil, nil
 	default:
 		rules = slices.Clone(rules)
 		rules[i] = wanted
