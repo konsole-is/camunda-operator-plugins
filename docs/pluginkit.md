@@ -168,7 +168,7 @@ When a request is deleted, pluginkit calls `Delete` or `Orphan`, by `spec.deleti
 
 The finalizer stays until the method of the plugin returns nil and each Grant is gone. When the method returns an error, `Ready` is `False` with reason `DeleteFailed`, and pluginkit calls the method again with the backoff of controller-runtime. A Grant can hold a finalizer of the identity extension, and pluginkit waits for it.
 
-A delete can take longer than one reconcile should. Then `Delete` works in passes: each call deletes a bounded part, and returns `pluginkit.Deleting{Message: ...}` while more remains. pluginkit sets `Ready` to `False` with reason `Deleting` and that message, keeps the finalizer, and calls `Delete` again after a second, without a backoff. Each pass must start from what is left, because a restart of the plugin loses everything that the pass kept in memory.
+A delete can take longer than one reconcile should. Then `Delete` works in passes: each call deletes a bounded part, and returns `pluginkit.Deleting{Message: ...}` while more remains. pluginkit sets `Ready` to `False` with reason `Deleting` and that message, keeps the finalizer, and calls `Delete` again after a second, without a backoff. Each pass must start from what is left, because a restart of the plugin loses everything that the pass kept in memory. Return `Deleting` only when the pass made progress, or found the resource still there. pluginkit has no limit on the number of passes.
 
 ### Reasons
 
