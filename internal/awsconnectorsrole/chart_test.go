@@ -49,14 +49,18 @@ func TestChartPolicyARNPatternTakesOnlyWhatIAMAccepts(t *testing.T) {
 		"arn:aws:iam::aws:policy/service-role/AmazonEKSClusterPolicy",
 		"arn:aws:iam::111122223333:policy/connectors",
 		"arn:aws:iam::111122223333:policy/team.a/b+c=d,e@f_g-h",
+		"arn:aws:iam::111122223333:policy/team!/a:b/connectors",
 		"arn:aws:iam::111122223333:policy/" + strings.Repeat("a", 128),
 		"arn:aws-us-gov:iam::111122223333:policy/connectors",
 	}
 	refused := map[string]string{
-		"two ARNs in one item": "arn:aws:iam::111122223333:policy/a,arn:aws:iam::111122223333:policy/b",
-		"a space in the name":  "arn:aws:iam::111122223333:policy/a b",
-		"a name over 128":      "arn:aws:iam::111122223333:policy/" + strings.Repeat("a", 129),
-		"no name":              "arn:aws:iam::111122223333:policy/team/",
+		"a space in the name": "arn:aws:iam::111122223333:policy/a b",
+		"a space in the path": "arn:aws:iam::111122223333:policy/team a/connectors",
+		"a ! in the name":     "arn:aws:iam::111122223333:policy/team/connectors!",
+		"a name over 128":     "arn:aws:iam::111122223333:policy/" + strings.Repeat("a", 129),
+		"a path over 512":     "arn:aws:iam::111122223333:policy/" + strings.Repeat("a", 511) + "/connectors",
+		"no name":             "arn:aws:iam::111122223333:policy/team/",
+		"an empty path":       "arn:aws:iam::111122223333:policy//connectors",
 	}
 
 	var checked int
