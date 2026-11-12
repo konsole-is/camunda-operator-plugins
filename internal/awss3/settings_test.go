@@ -56,6 +56,13 @@ func TestValidateRefusesAnEmptyPartition(t *testing.T) {
 	assert.ErrorContains(t, s.Validate(), "partition")
 }
 
+func TestValidateRefusesAnUnknownPartition(t *testing.T) {
+	s := chartDefaults()
+	s.Partition = "aws-gov"
+
+	assert.ErrorContains(t, s.Validate(), `partition: the partition "aws-gov"`)
+}
+
 func TestValidateRefusesAnUnknownMode(t *testing.T) {
 	s := chartDefaults()
 	s.Mode = "irsa2"

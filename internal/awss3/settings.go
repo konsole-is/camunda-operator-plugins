@@ -46,15 +46,16 @@ type Settings struct {
 }
 
 // Validate returns an error that names the first field that is not valid: an
-// empty region or partition, a mode that is not irsa or podIdentity, more
-// extra tags than awskit.CheckExtraTags allows next to the UID tag, or a
-// delete budget that is not positive.
+// empty region, a partition that awskit.CheckPartition refuses, a mode that
+// is not irsa or podIdentity, more extra tags than awskit.CheckExtraTags
+// allows next to the UID tag, or a delete budget that is not positive.
 func (s Settings) Validate() error {
-	switch {
-	case s.Region == "":
+	if s.Region == "" {
 		return errors.New("region: empty")
-	case s.Partition == "":
-		return errors.New("partition: empty")
+	}
+
+	if err := awskit.CheckPartition(s.Partition); err != nil {
+		return fmt.Errorf("partition: %w", err)
 	}
 
 	if _, err := awskit.ParseMode(string(s.Mode)); err != nil {

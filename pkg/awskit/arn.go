@@ -53,6 +53,14 @@ var consoles = map[string]string{
 	"aws-us-gov": "console.amazonaws-us-gov.com",
 }
 
+// CheckPartition returns an error when partition has no known console.
+func CheckPartition(partition string) error {
+	if _, ok := consoles[partition]; !ok {
+		return fmt.Errorf("the partition %q has no known console", partition)
+	}
+	return nil
+}
+
 // RoleConsoleURL returns the page of the role roleARN in the IAM console of
 // its partition. It refuses an ARN that is not an IAM role ARN, and a
 // partition without a known console.

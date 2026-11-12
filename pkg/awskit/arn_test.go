@@ -124,3 +124,14 @@ func TestBucketConsoleURLRefusesAnUnknownPartition(t *testing.T) {
 
 	assert.ErrorContains(t, err, `partition "aws-iso"`)
 }
+
+func TestCheckPartitionAcceptsEachPartitionWithAConsole(t *testing.T) {
+	for _, partition := range []string{"aws", "aws-cn", "aws-us-gov"} {
+		assert.NoError(t, CheckPartition(partition), partition)
+	}
+}
+
+func TestCheckPartitionRefusesAnUnknownPartition(t *testing.T) {
+	assert.ErrorContains(t, CheckPartition("aws-gov"), `"aws-gov"`)
+	assert.Error(t, CheckPartition(""))
+}

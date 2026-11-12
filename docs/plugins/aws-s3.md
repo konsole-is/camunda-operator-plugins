@@ -201,4 +201,4 @@ aws s3api put-bucket-tagging --bucket <bucket> --region <region> \
 
 The stored size shows `Not known yet` for about one day after the create of a bucket, because S3 sends `BucketSizeBytes` to CloudWatch once a day. When it stays, give the controller role `cloudwatch:GetMetricStatistics`, and read the controller log for the error of CloudWatch.
 
-When the controller Pod does not get ready, read its log with `kubectl logs deployment/<release> -n <namespace>`. The controller stops when it finds no region, when `partition` is empty, when `mode`, `extraTags`, or `deleteBudget` is not valid, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
+When the controller Pod does not get ready, read its log with `kubectl logs deployment/<release> -n <namespace>`. The controller stops when it finds no region, when `partition` is not `aws`, `aws-cn`, or `aws-us-gov`, when `mode`, `extraTags`, or `deleteBudget` is not valid, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
