@@ -138,7 +138,7 @@ var _ = Describe("drift of a Connectors role", func() {
 	It("records the repair of the trust policy when a later step of the pass fails", func() {
 		req, name := readyDriftRequest(managedParams(policyA))
 		// The pass repairs the trust policy before it attaches policyA again.
-		rolePodIdentity.iam.FailNext("AttachRolePolicy", errors.New("the policy cannot be attached"))
+		rolePodIdentity.iam.FailNextOnRole(name, "AttachRolePolicy", errors.New("the policy cannot be attached"))
 
 		_, err := rolePodIdentity.iam.UpdateAssumeRolePolicy(ctx, &iam.UpdateAssumeRolePolicyInput{
 			RoleName:       aws.String(name),
@@ -214,7 +214,7 @@ var _ = Describe("drift of a Connectors role", func() {
 
 	It("records no drift when a change of the parameters needs a retry", func() {
 		req, name := readyDriftRequest(managedParams(policyA))
-		rolePodIdentity.iam.FailNext("AttachRolePolicy", errors.New("the policy cannot be attached"))
+		rolePodIdentity.iam.FailNextOnRole(name, "AttachRolePolicy", errors.New("the policy cannot be attached"))
 
 		update(rolePodIdentity, req, func(r *pluginsv1alpha1.PluginRequest) {
 			r.Spec.Parameters = raw(managedParams(policyA, policyC))

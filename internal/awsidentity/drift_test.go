@@ -164,7 +164,7 @@ var _ = Describe("drift of a role", Serial, func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// The Grant sync reads the inline policies after the role is repaired.
-		s.hub.iam.FailNext("ListRolePolicies", errors.New("the policies cannot be listed"))
+		s.hub.iam.FailNextOnRole(s.role, "ListRolePolicies", errors.New("the policies cannot be listed"))
 
 		s.expectOneDriftCorrected("the trust policy of the IAM role " + s.role)
 		Expect(roleOf(Default, s.hub, s.namespace).TrustPolicy).NotTo(ContainSubstring(`"Statement":[]`))

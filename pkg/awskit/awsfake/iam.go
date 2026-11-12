@@ -54,6 +54,7 @@ type IAM struct {
 	byRole   map[string][]string
 	// roleFails maps a role name to the error of each call on it.
 	roleFails map[string]error
+	roleNext  map[roleCall][]error
 	// profiles maps a role name to the instance profiles that use it.
 	profiles map[string][]string
 }
@@ -151,6 +152,20 @@ func (f *IAM) FailRole(name string, err error) {
 	f.roleFails[name] = err
 }
 
+// FailNextOnRole makes the next call of operation on the role name return
+// err.
+func (f *IAM) FailNextOnRole(name, operation string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.roleNext == nil {
+		f.roleNext = map[roleCall][]error{}
+	}
+	key := roleCall{role: name, operation: operation}
+	f.roleNext[key] = append(f.roleNext[key], err)
+}
+
+type roleCall struct{ role, operation string }
+
 // Calls returns the names of the operations called, in call order.
 func (f *IAM) Calls() []string {
 	f.mu.Lock()
@@ -167,7 +182,7 @@ func (f *IAM) RoleCalls(name string) []string {
 }
 
 // call records a call of operation on role and returns the error that
-// FailRole or FailNext set for it.
+// FailRole, FailNextOnRole, or FailNext set for it.
 func (f *IAM) call(operation string, role *string) error {
 	if f.byRole == nil {
 		f.byRole = map[string][]string{}
@@ -177,6 +192,13 @@ func (f *IAM) call(operation string, role *string) error {
 	if err := f.roleFails[name]; err != nil {
 		f.fail.calls = append(f.fail.calls, operation)
 		return err
+	}
+
+	key := roleCall{role: name, operation: operation}
+	if errs := f.roleNext[key]; len(errs) > 0 {
+		f.roleNext[key] = errs[1:]
+		f.fail.calls = append(f.fail.calls, operation)
+		return errs[0]
 	}
 	return f.fail.call(operation)
 }
