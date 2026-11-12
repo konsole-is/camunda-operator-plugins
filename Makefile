@@ -28,9 +28,10 @@ fmt: golangci-lint ## Format the code with the formatters of .golangci.yml.
 	"$(GOLANGCI_LINT)" fmt
 
 .PHONY: vet
-vet: ## Run go vet against the code, and against the journeys behind the e2e build tag.
+vet: ## Run go vet against the code, the journeys behind the e2e build tag, and the sandbox tests of awskit.
 	go vet ./...
 	go vet -tags e2e ./test/e2e/
+	go vet -tags sandbox ./pkg/awskit/
 
 .PHONY: tidy
 tidy: ## Run go mod tidy.
@@ -43,6 +44,10 @@ test: fmt vet setup-envtest envtest-crds ## Run the unit tests, the envtest suit
 		go test $$(go list ./... | grep -v /test/e2e)
 	@# An empty JOURNEY skips the journeys, so this runs no spec against the cluster of the kubeconfig.
 	JOURNEY= go test -tags e2e -count=1 ./test/e2e/
+
+.PHONY: test-scripts
+test-scripts: ## Run the tests of the CI scripts, each *_test.sh in git.
+	@for t in $$(git ls-files '*_test.sh'); do echo "==> $$t"; bash "$$t" || exit 1; done
 
 .PHONY: test-api-ref
 test-api-ref: ## Check that a pseudo-version and a tag of the api module map to the operator ref of their CRD bases.
@@ -194,6 +199,12 @@ CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
 ENVOY_GATEWAY_VERSION ?= v1.9.3
 # renovate: datasource=docker depName=rustfs/rustfs
 RUSTFS_VERSION ?= 1.0.4
+# CERT_MANAGER_VERSION and POD_IDENTITY_WEBHOOK_VERSION are the releases that
+# give the pods of the AWS conformance runs their roles, as on EKS.
+# renovate: datasource=github-releases depName=cert-manager/cert-manager
+CERT_MANAGER_VERSION ?= v1.21.3
+# renovate: datasource=github-tags depName=aws/amazon-eks-pod-identity-webhook
+POD_IDENTITY_WEBHOOK_VERSION ?= v0.6.19
 # JOURNEY is the journey that journey-kind runs, a directory of test/e2e/.
 JOURNEY ?= bare-metal
 # JOURNEY_REPORT is the JUnit report of journey-kind.
@@ -202,7 +213,7 @@ JOURNEY_REPORT ?= $(LOCALBIN)/journeys/$(JOURNEY).xml
 # the matrix file of that minor in the operator checkout.
 CAMUNDA_MINOR ?= 8.9
 # CURL_VERSION and AWS_CLI_VERSION are the images of the helper pods of the
-# journeys.
+# journeys and of the AWS conformance runs.
 # renovate: datasource=docker depName=curlimages/curl
 CURL_VERSION ?= 8.23.0
 # renovate: datasource=docker depName=amazon/aws-cli
@@ -217,6 +228,8 @@ conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run
 	KIND_CLUSTER="$(KIND_CLUSTER)" OPERATOR_DIR="$(OPERATOR_DIR)" CHART_NAMESPACE="$(CHART_NAMESPACE)" \
 	REPORT="$(CONFORMANCE_REPORT)" GATEWAY_API_VERSION="$(GATEWAY_API_VERSION)" \
 	ENVOY_GATEWAY_VERSION="$(ENVOY_GATEWAY_VERSION)" RUSTFS_VERSION="$(RUSTFS_VERSION)" \
+	CERT_MANAGER_VERSION="$(CERT_MANAGER_VERSION)" POD_IDENTITY_WEBHOOK_VERSION="$(POD_IDENTITY_WEBHOOK_VERSION)" \
+	AWS_CLI_IMAGE="amazon/aws-cli:$(AWS_CLI_VERSION)" \
 		test/conformance/run.sh "$(PLUGIN)"
 
 .PHONY: journey-kind

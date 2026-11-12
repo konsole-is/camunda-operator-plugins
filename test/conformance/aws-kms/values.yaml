@@ -1,0 +1,12 @@
+# The chart values of the conformance run in the AWS sandbox. render.sh
+# fills in the variables of the run. Every key gets the tag cpo-ci-run and
+# an alias under alias/<run>/. The sandbox refuses a key policy, so no key
+# administrator and no CSI driver role are set. The chart serves both
+# registrations.
+region: ${AWS_REGION}
+aliasPrefix: ${RUN_ID}
+extraTags:
+  cpo-ci-run: ${RUN_ID}
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-aws-kms

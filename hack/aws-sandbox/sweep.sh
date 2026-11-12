@@ -55,6 +55,26 @@ run_tag() {
   jq -r '[(.Tags // .TagSet // [])[] | select(((.Key // .TagKey) | ascii_downcase) == "cpo-ci-run") | (.Value // .TagValue)][0] // ""'
 }
 
+# tags runs an aws call that reads the tags of one IAM resource, and prints
+# them as JSON. A resource that is gone since the listing has no tags: the
+# sweep of another run can delete it at the same time.
+tags() {
+  local err
+  err=$(mktemp)
+  if aws "$@" --output json 2> "${err}"; then
+    rm -f "${err}"
+    return 0
+  fi
+  if grep -q NoSuchEntity "${err}"; then
+    rm -f "${err}"
+    echo '{}'
+    return 0
+  fi
+  cat "${err}" >&2
+  rm -f "${err}"
+  return 1
+}
+
 # step runs a delete_* function and keeps the sweep going when it fails.
 step() {
   if ! "$@"; then
@@ -121,7 +141,7 @@ if ! roles=$(aws iam list-roles --query "Roles[?starts_with(RoleName, 'cpo-ci-')
 fi
 while read -r role created; do
   [ -n "${role}" ] || continue
-  if ! tag=$(aws iam list-role-tags --role-name "${role}" --output json | run_tag); then
+  if ! tag=$(tags iam list-role-tags --role-name "${role}" | run_tag); then
     failed=1
     continue
   fi
@@ -137,7 +157,7 @@ if ! policies=$(aws iam list-policies --scope Local --query "Policies[?starts_wi
 fi
 while read -r arn created; do
   [ -n "${arn}" ] || continue
-  if ! tag=$(aws iam list-policy-tags --policy-arn "${arn}" --output json | run_tag); then
+  if ! tag=$(tags iam list-policy-tags --policy-arn "${arn}" | run_tag); then
     failed=1
     continue
   fi

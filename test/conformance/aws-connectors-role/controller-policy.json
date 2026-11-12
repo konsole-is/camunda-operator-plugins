@@ -1,0 +1,48 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RolesWithTheBoundary",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:PutRolePermissionsBoundary", "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy", "iam:DetachRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-conn-*",
+      "Condition": {
+        "StringEquals": {"iam:PermissionsBoundary": "arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary"}
+      }
+    },
+    {
+      "Sid": "OfferedPolicies",
+      "Effect": "Allow",
+      "Action": ["iam:AttachRolePolicy"],
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-conn-*",
+      "Condition": {
+        "StringEquals": {"iam:PermissionsBoundary": "arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary"},
+        "ArnLike": {"iam:PolicyARN": ["arn:aws:iam::${AWS_ACCOUNT_ID}:policy/${RUN_ID}-conn-*"]}
+      }
+    },
+    {
+      "Sid": "Roles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole", "iam:TagRole", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole",
+        "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-conn-*"
+    },
+    {
+      "Sid": "Health",
+      "Effect": "Allow",
+      "Action": ["iam:GetPolicy"],
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary"
+    },
+    {
+      "Sid": "Caller",
+      "Effect": "Allow",
+      "Action": ["sts:GetCallerIdentity"],
+      "Resource": "*"
+    }
+  ]
+}
