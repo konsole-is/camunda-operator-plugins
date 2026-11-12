@@ -1,0 +1,14 @@
+# The chart values of the conformance run in the AWS sandbox. render.sh
+# fills in the variables of the run. Every role gets the run in its name and
+# in the tag cpo-ci-run, and the boundary of the sandbox. The chart serves
+# both registrations.
+mode: irsa
+region: ${AWS_REGION}
+roleNamePrefix: ${RUN_ID}-conn
+permissionsBoundaryArn: arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary
+oidcProviderArn: ${AWS_OIDC_PROVIDER_ARN}
+extraTags:
+  cpo-ci-run: ${RUN_ID}
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-aws-connectors-role

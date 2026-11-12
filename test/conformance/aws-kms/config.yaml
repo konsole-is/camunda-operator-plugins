@@ -1,0 +1,17 @@
+# The run of plugin-conformance against the registration aws-kms-key. The
+# sandbox allows only a deletion window of 7 days. The case runs once with
+# Delete and once with Orphan.
+registration: aws-kms-key
+namespace: conformance-aws-kms
+timeouts:
+  outputsReady: 2m
+  ready: 5m
+  deletion: 3m
+cases:
+  - name: basic
+    parameters:
+      pendingWindowDays: 7
+    target:
+      kind: CamundaCluster
+      name: orders
+      serviceAccountName: orders-camunda

@@ -1,9 +1,11 @@
 version: "2"
 run:
   allow-parallel-runners: true
-  # The journeys of test/e2e are behind this build tag.
+  # The journeys of test/e2e and the sandbox tests of pkg/awskit are behind
+  # these build tags.
   build-tags:
     - e2e
+    - sandbox
 linters:
   default: none
   enable:
