@@ -103,7 +103,7 @@ type action struct {
 
 // bucketInUseError means that the name of the bucket belongs to another
 // request, to no request, to another AWS account, or to a bucket in another
-// region.
+// region, or that S3 refuses to show the bucket.
 type bucketInUseError struct {
 	Bucket, Owner string
 }
@@ -117,8 +117,7 @@ func (e bucketInUseError) Error() string {
 }
 
 // claimable returns bucketInUseError when the bucket of ref exists and does
-// not carry the UID of ref. It reads only, and leaves a bucket that S3 refuses
-// to show to ensure.
+// not carry the UID of ref, or when headBucket refuses it. It reads only.
 func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
 	c := b.s3(ref.Region)
 
@@ -228,17 +227,23 @@ func createBucket(ctx context.Context, c awskit.S3, ref bucketRef, tags map[stri
 }
 
 // headBucket reports whether the bucket of ref exists in its region. A
-// bucket that S3 refuses to show is not known to exist. A bucket of the name
-// in another region is bucketInUseError.
+// bucket that S3 refuses to show, and a bucket of the name in another region,
+// are bucketInUseError: a create of a name that the account owns resets the
+// ACLs of the bucket in us-east-1.
 func headBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) {
 	_, err := c.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(ref.Name)})
 	switch {
 	case err == nil:
 		return true, nil
+	case awskit.IsNotFound(err):
+		return false, nil
 	case inOtherRegion(err):
 		return false, bucketInUseError{Bucket: ref.Name, Owner: "a bucket of the same name in another region"}
-	case awskit.IsNotFound(err) || awskit.IsAccessDenied(err):
-		return false, nil
+	case awskit.IsAccessDenied(err):
+		return false, bucketInUseError{
+			Bucket: ref.Name,
+			Owner:  "another AWS account, or a bucket that the controller may not read",
+		}
 	}
 	return false, fmt.Errorf("reading the bucket %s: %w", ref.Name, err)
 }

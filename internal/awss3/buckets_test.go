@@ -340,7 +340,7 @@ func TestEnsureRefusesABucketOfAnotherAccount(t *testing.T) {
 
 	var inUse bucketInUseError
 	require.ErrorAs(t, err, &inUse)
-	assert.Equal(t, "another AWS account", inUse.Owner)
+	assert.Contains(t, inUse.Owner, "another AWS account")
 }
 
 func TestEnsureRefusesABucketOfTheNameInAnotherRegion(t *testing.T) {
@@ -592,4 +592,24 @@ func TestClaimableRefusesABucketOfAnotherRequest(t *testing.T) {
 	var inUse bucketInUseError
 	require.ErrorAs(t, err, &inUse)
 	assert.Contains(t, inUse.Owner, otherUID)
+}
+
+func TestEnsureCreatesNoBucketWhenS3RefusesItsHead(t *testing.T) {
+	b, f := newBuckets()
+	ref := testRef("us-east-1")
+	other := ref
+	other.UID = otherUID
+	_, err := b.ensure(context.Background(), other, testWant(other), prior{})
+	require.NoError(t, err)
+	creates := count(f.Calls(), "CreateBucket")
+	// In us-east-1 a create of a name that the account owns answers success
+	// and resets the ACLs of the bucket.
+	f.FailNext("HeadBucket", &smithy.GenericAPIError{Code: "Forbidden"})
+
+	_, err = b.ensure(context.Background(), ref, testWant(ref), prior{})
+
+	var inUse bucketInUseError
+	require.ErrorAs(t, err, &inUse)
+	assert.Contains(t, inUse.Owner, "may not read")
+	assert.Equal(t, creates, count(f.Calls(), "CreateBucket"), "no create of a bucket that S3 refuses to show")
 }
