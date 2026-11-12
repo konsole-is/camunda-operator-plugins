@@ -216,3 +216,36 @@ func TestEmptyBucketWithinReturnsAnErrorOfS3(t *testing.T) {
 	require.ErrorIs(t, err, boom)
 	assert.Contains(t, err.Error(), `"bucket-1"`)
 }
+
+// slowS3 is an S3 whose DeleteObjects calls after the first wait until their
+// context ends, as a call that S3 throttles does.
+type slowS3 struct {
+	*awsfake.S3
+	deletes int
+}
+
+func (s *slowS3) DeleteObjects(
+	ctx context.Context,
+	in *s3.DeleteObjectsInput,
+	opts ...func(*s3.Options),
+) (*s3.DeleteObjectsOutput, error) {
+	if s.deletes++; s.deletes > 1 {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return s.S3.DeleteObjects(ctx, in, opts...)
+}
+
+func TestEmptyBucketWithinEndsASlowCallAtTheEndOfTheBudget(t *testing.T) {
+	f := newS3(t)
+	putKeys(f, 2500)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	remain, err := awskit.EmptyBucketWithin(ctx, &slowS3{S3: f}, "bucket-1", 100*time.Millisecond)
+
+	require.NoError(t, err, "a call that the budget ended is not a failure")
+	assert.True(t, remain)
+	b, _ := f.Bucket("bucket-1")
+	assert.Len(t, b.Objects, 1500, "the first batch runs whatever the budget")
+}

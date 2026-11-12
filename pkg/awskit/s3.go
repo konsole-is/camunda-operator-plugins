@@ -18,6 +18,7 @@ package awskit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -61,10 +62,11 @@ func EmptyBucket(ctx context.Context, c S3, bucket string) error {
 // EmptyBucketWithin deletes the objects of bucket until the bucket is empty
 // or budget has passed, and reports whether objects remain. It deletes at
 // least one batch of at most 1,000 keys, so each call makes progress, and a
-// later call goes on where it stopped. When the versioning of the bucket is
-// on or suspended, it deletes each object version and each delete marker too,
-// so that the bucket can be deleted. A key that S3 refuses to delete is an
-// error that names the key and its code.
+// later call goes on where it stopped. A call after the first batch that is
+// still running when the budget ends stops, and objects remain. When the
+// versioning of the bucket is on or suspended, it deletes each object version
+// and each delete marker too, so that the bucket can be deleted. A key that
+// S3 refuses to delete is an error that names the key and its code.
 func EmptyBucketWithin(ctx context.Context, c S3, bucket string, budget time.Duration) (bool, error) {
 	deadline := time.Now().Add(budget)
 
@@ -77,12 +79,30 @@ func EmptyBucketWithin(ctx context.Context, c S3, bucket string, budget time.Dur
 		deletePage = deleteVersionPage
 	}
 
-	for {
-		remain, err := deletePage(ctx, c, bucket)
-		if err != nil || !remain || !time.Now().Before(deadline) {
-			return remain, err
-		}
+	remain, err := deletePage(ctx, c, bucket)
+	for err == nil && remain && time.Now().Before(deadline) {
+		remain, err = deletePageUntil(ctx, deadline, deletePage, c, bucket)
 	}
+	return remain, err
+}
+
+// deletePageUntil is deletePage with its calls bounded by deadline. A call
+// that the deadline ends is no error, and objects remain.
+func deletePageUntil(
+	ctx context.Context,
+	deadline time.Time,
+	deletePage func(context.Context, S3, string) (bool, error),
+	c S3,
+	bucket string,
+) (bool, error) {
+	bounded, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
+	remain, err := deletePage(bounded, c, bucket)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return true, nil
+	}
+	return remain, err
 }
 
 // deleteObjectPage deletes the first page of objects of bucket, and reports
