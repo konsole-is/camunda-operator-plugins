@@ -38,6 +38,8 @@ import (
 const (
 	keyARN   = "arn:aws:kms:eu-west-1:111122223333:key/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
 	otherUID = "uid-other"
+	// otherKeyARN is a second key of the region of keyARN.
+	otherKeyARN = "arn:aws:kms:eu-west-1:111122223333:key/1c2d3e4f-5061-7283-94a5-b6c7d8e9f0a1"
 )
 
 // testRef is the bucket of the request orders-backup of the claim orders.
@@ -408,7 +410,7 @@ func (c *clock) Now() time.Time { return c.now }
 func settling() (buckets, *awsfake.S3, *clock) {
 	b, f := newBuckets()
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
-	b.writes = newWriteTimes(time.Minute, c.Now)
+	b.writes = newWriteLog(time.Minute, c.Now)
 	return b, f, c
 }
 
@@ -426,7 +428,7 @@ func TestEnsureLeavesARuleThatS3ShowsLateAfterTheCreate(t *testing.T) {
 	f.ShowLate("GetBucketLifecycleConfiguration", -1)
 	ref := testRef("eu-west-1")
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 
 	actions, err := b.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
 
@@ -442,7 +444,7 @@ func TestEnsureLeavesAnEncryptionThatS3ShowsLateAfterTheCreate(t *testing.T) {
 	w := testWant(ref)
 	w.KeyARN = keyARN
 	_, err := b.ensure(context.Background(), ref, w, prior{})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	c.now = c.now.Add(10 * time.Second)
 
 	actions, err := b.ensure(context.Background(), ref, w, prior{Served: true, KeyARN: keyARN})
@@ -456,33 +458,29 @@ func TestEnsureChangesTheKeyWithinTheSettleTime(t *testing.T) {
 	b, f, _ := settling()
 	ref := testRef("eu-west-1")
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	w := testWant(ref)
 	w.KeyARN = keyARN
 
 	actions, err := b.ensure(context.Background(), ref, w, prior{Served: true})
 
-	require.NoError(t, err)
+	assert.Equal(t, time.Minute, settlingLeft(t, err), "the plugin checks the write again")
 	assert.Equal(t, []string{eventReasonEncryptionUpdated}, reasons(actions), "a changed key input is a change")
 	assert.Empty(t, corrected(actions))
 	assert.Equal(t, 1, count(f.Calls(), "PutBucketEncryption"))
 }
 
-func TestEnsureWritesOtherDaysOfTheRuleWhenTheSettleTimeEnds(t *testing.T) {
-	b, f, c := settling()
+func TestEnsureWritesOtherDaysOfTheRuleAtOnceWithinTheSettleTime(t *testing.T) {
+	b, f, _ := settling()
 	ref := testRef("eu-west-1")
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	w := testWant(ref)
 	w.AbortDays = 3
 
-	held, err := b.ensure(context.Background(), ref, w, prior{Served: true})
-	assert.Equal(t, time.Minute, settlingLeft(t, err))
-	c.now = c.now.Add(time.Minute)
 	changed, err := b.ensure(context.Background(), ref, w, prior{Served: true})
 
-	require.NoError(t, err)
-	assert.Empty(t, held)
+	assert.Equal(t, time.Minute, settlingLeft(t, err))
 	assert.Equal(t, []string{eventReasonLifecycleUpdated}, reasons(changed))
 	assert.Empty(t, corrected(changed), "other days are a change of the request")
 	assert.Equal(t, int32(3), aws.ToInt32(
@@ -494,14 +492,14 @@ func TestEnsureWritesOtherDaysOnceWhenS3ShowsTheChangeLate(t *testing.T) {
 	b, f, c := settling()
 	ref := testRef("eu-west-1")
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	c.now = c.now.Add(2 * time.Minute)
 	w := testWant(ref)
 	w.AbortDays = 3
 	f.ShowLate("GetBucketLifecycleConfiguration", -1)
 
 	_, err = b.ensure(context.Background(), ref, w, prior{Served: true})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	c.now = c.now.Add(10 * time.Second)
 	late, err := b.ensure(context.Background(), ref, w, prior{Served: true})
 
@@ -515,12 +513,12 @@ func TestEnsureAddsARuleThatS3StillDoesNotShowAsDriftAfterTheSettleTime(t *testi
 	f.ShowLate("GetBucketLifecycleConfiguration", -1)
 	ref := testRef("eu-west-1")
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	c.now = c.now.Add(time.Minute)
 
 	actions, err := b.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
 
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	assert.Len(t, corrected(actions), 1)
 }
 
@@ -528,13 +526,13 @@ func TestEnsureReportsARuleRemovedByHandOnceWhenS3ShowsTheRepairLate(t *testing.
 	b, f, c := settling()
 	ref := testRef("eu-west-1")
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	c.now = c.now.Add(2 * time.Minute)
 	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.LifecycleRules = nil })
 	f.ShowLate("GetBucketLifecycleConfiguration", -1)
 
 	repaired, err := b.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	c.now = c.now.Add(10 * time.Second)
 	late, err := b.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
 
@@ -548,13 +546,13 @@ func TestEnsureReportsAPublicAccessBlockTurnedOffOnceWhenS3ShowsTheRepairLate(t 
 	b, f, c := settling()
 	ref := testRef("eu-west-1")
 	_, err := b.ensure(context.Background(), ref, testWant(ref), prior{})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	c.now = c.now.Add(2 * time.Minute)
 	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.PublicAccessBlock.BlockPublicPolicy = aws.Bool(false) })
 	f.ShowLate("GetPublicAccessBlock", -1)
 
 	repaired, err := b.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
-	require.NoError(t, err)
+	settlingLeft(t, err)
 	late, err := b.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
 
 	assert.Len(t, corrected(repaired), 1)
@@ -563,21 +561,136 @@ func TestEnsureReportsAPublicAccessBlockTurnedOffOnceWhenS3ShowsTheRepairLate(t 
 	assert.Equal(t, 1, count(f.Calls(), "PutPublicAccessBlock"))
 }
 
-func TestEnsureRepairsDriftOnlyAfterTheSettleTimeOfAStart(t *testing.T) {
+func TestEnsureRepairsDriftAtTheFirstLookAfterAStart(t *testing.T) {
 	_, f, ref := ensured(t)
 	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.LifecycleRules = nil })
 	// A new plugin process knows no write of the process before.
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
-	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteTimes(time.Minute, c.Now)}
+	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(time.Minute, c.Now)}
 
-	held, err := restarted.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
-	assert.Equal(t, time.Minute, settlingLeft(t, err))
-	c.now = c.now.Add(time.Minute)
 	repaired, err := restarted.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
 
-	require.NoError(t, err)
-	assert.Empty(t, held)
+	assert.Equal(t, time.Minute, settlingLeft(t, err))
 	assert.Len(t, corrected(repaired), 1)
+}
+
+func keyOfFake(t *testing.T, f *awsfake.S3, name string) string {
+	t.Helper()
+	return aws.ToString(bucketOfFake(t, f, name).Encryption.ApplyServerSideEncryptionByDefault.KMSMasterKeyID)
+}
+
+// recreated returns the buckets of settling, whose bucket of testRef with
+// the key keyARN the request had and someone deleted, and the bound ref.
+func recreated(t *testing.T) (buckets, *awsfake.S3, *clock, bucketRef, want) {
+	b, f, c := settling()
+	ref := testRef("eu-west-1")
+	ref.Bound = true
+	w := testWant(ref)
+	w.KeyARN = keyARN
+	_, err := b.ensure(context.Background(), ref, w, prior{})
+	assert.ErrorAs(t, err, new(settlingError), "the plugin checks its writes again")
+	c.now = c.now.Add(2 * time.Minute)
+	_, err = f.In(ref.Region).DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String(ref.Name)})
+	require.NoError(t, err)
+	return b, f, c, ref, w
+}
+
+func TestEnsureFinishesARecreatedBucketWhoseTagsShowLate(t *testing.T) {
+	b, f, c, ref, w := recreated(t)
+	served := prior{Served: true, KeyARN: keyARN}
+	f.ShowLate("GetBucketTagging", -1)
+	_, err := b.ensure(context.Background(), ref, w, served)
+	tagsLeft(t, err)
+	f.ShowLate("GetBucketTagging", 0)
+	c.now = c.now.Add(10 * time.Second)
+
+	actions, err := b.ensure(context.Background(), ref, w, served)
+
+	assert.Equal(t, keyARN, keyOfFake(t, f, ref.Name), "the new bucket gets the key")
+	assert.Len(t, bucketOfFake(t, f, ref.Name).LifecycleRules, 1, "the new bucket gets the abort rule")
+	assert.Equal(t, []string{eventReasonEncryptionUpdated, eventReasonLifecycleUpdated}, reasons(actions))
+	assert.Empty(t, corrected(actions), "the settings of the new bucket are a part of its create")
+	assert.Equal(t, time.Minute, settlingLeft(t, err))
+}
+
+func TestEnsureFinishesARecreatedBucketAfterAFailedWrite(t *testing.T) {
+	b, f, c, ref, w := recreated(t)
+	served := prior{Served: true, KeyARN: keyARN}
+	f.FailNext("PutBucketEncryption", errors.New("the proof refuses it"))
+	_, err := b.ensure(context.Background(), ref, w, served)
+	require.ErrorContains(t, err, "the proof refuses it")
+	c.now = c.now.Add(10 * time.Second)
+
+	_, err = b.ensure(context.Background(), ref, w, served)
+
+	assert.Equal(t, keyARN, keyOfFake(t, f, ref.Name))
+	assert.Len(t, bucketOfFake(t, f, ref.Name).LifecycleRules, 1)
+	settlingLeft(t, err)
+}
+
+func TestEnsureWritesAKeyThatChangesBackWhileS3ShowsTheOldKey(t *testing.T) {
+	b, f, c := settling()
+	ref := testRef("eu-west-1")
+	first := testWant(ref)
+	first.KeyARN = keyARN
+	_, err := b.ensure(context.Background(), ref, first, prior{})
+	assert.ErrorAs(t, err, new(settlingError))
+	c.now = c.now.Add(2 * time.Minute)
+	f.ShowLate("GetBucketEncryption", -1)
+	second := first
+	second.KeyARN = otherKeyARN
+	_, err = b.ensure(context.Background(), ref, second, prior{Served: true, KeyARN: keyARN})
+	assert.ErrorAs(t, err, new(settlingError))
+	c.now = c.now.Add(10 * time.Second)
+
+	actions, err := b.ensure(context.Background(), ref, first, prior{Served: true, KeyARN: otherKeyARN})
+
+	assert.Equal(t, keyARN, keyOfFake(t, f, ref.Name), "S3 shows the first key late, so the plugin writes it")
+	assert.Equal(t, []string{eventReasonEncryptionUpdated}, reasons(actions))
+	assert.Empty(t, corrected(actions), "a changed key input is a change")
+	assert.Equal(t, time.Minute, settlingLeft(t, err), "the plugin checks the write again")
+}
+
+func TestEnsureWritesAKeyThatDiffersFromTheServedKeyAfterAStart(t *testing.T) {
+	b, f, ref := ensured(t)
+	f.ShowLate("GetBucketEncryption", -1)
+	w := testWant(ref)
+	w.KeyARN = keyARN
+	_, err := b.ensure(context.Background(), ref, w, prior{Served: true})
+	require.NoError(t, err)
+	// A new plugin process knows no write of the process before.
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(time.Minute, c.Now)}
+	w.KeyARN = ""
+
+	_, err = restarted.ensure(context.Background(), ref, w, prior{Served: true, KeyARN: keyARN})
+
+	assert.Equal(
+		t,
+		types.ServerSideEncryptionAes256,
+		bucketOfFake(t, f, ref.Name).Encryption.ApplyServerSideEncryptionByDefault.SSEAlgorithm,
+		"S3 shows SSE-S3 late, so the plugin writes it",
+	)
+	settlingLeft(t, err)
+}
+
+func TestEnsureAcceptsASettingThatS3ShowsAsWantedAtTheFirstLookAfterAStart(t *testing.T) {
+	b, f, ref := ensured(t)
+	w := testWant(ref)
+	w.KeyARN = keyARN
+	_, err := b.ensure(context.Background(), ref, w, prior{Served: true})
+	require.NoError(t, err)
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(time.Minute, c.Now)}
+	puts := len(f.Calls())
+
+	actions, err := restarted.ensure(context.Background(), ref, w, prior{Served: true, KeyARN: keyARN})
+
+	require.NoError(t, err)
+	assert.Empty(t, actions)
+	for _, call := range f.Calls()[puts:] {
+		assert.NotContains(t, call, "Put")
+	}
 }
 
 // lateTags returns the buckets of a new fake whose writes settle for five
@@ -586,7 +699,7 @@ func TestEnsureRepairsDriftOnlyAfterTheSettleTimeOfAStart(t *testing.T) {
 func lateTags() (buckets, *awsfake.S3, *clock, bucketRef) {
 	b, f := newBuckets()
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
-	b.writes = newWriteTimes(5*time.Minute, c.Now)
+	b.writes = newWriteLog(5*time.Minute, c.Now)
 	f.ShowLate("GetBucketTagging", -1)
 	ref := testRef("eu-west-1")
 	ref.Bound = true
@@ -674,7 +787,7 @@ func TestDeleteWaitsOneSettleTimeAfterAStartForTheTagsOfARecordedBucket(t *testi
 	require.Error(t, err)
 	// A new plugin process knows no create of the process before.
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
-	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteTimes(5*time.Minute, c.Now)}
+	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(5*time.Minute, c.Now)}
 
 	_, _, err = restarted.delete(context.Background(), ref)
 	assert.Equal(t, 5*time.Minute, tagsLeft(t, err))

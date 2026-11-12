@@ -23,9 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestWriteTimesCountAnUnknownBucketAsWrittenAtItsFirstLook(t *testing.T) {
+func TestWriteLogCountsAnUnknownBucketAsWrittenAtItsFirstLook(t *testing.T) {
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
-	w := newWriteTimes(time.Minute, c.Now)
+	w := newWriteLog(time.Minute, c.Now)
 
 	first := w.left("b1")
 	c.now = c.now.Add(20 * time.Second)
@@ -34,9 +34,9 @@ func TestWriteTimesCountAnUnknownBucketAsWrittenAtItsFirstLook(t *testing.T) {
 	assert.Equal(t, 40*time.Second, w.left("b1"))
 }
 
-func TestWriteTimesStartTheSettleTimeAgainAtAWrite(t *testing.T) {
+func TestWriteLogStartsTheSettleTimeAgainAtAWrite(t *testing.T) {
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
-	w := newWriteTimes(time.Minute, c.Now)
+	w := newWriteLog(time.Minute, c.Now)
 	w.wrote("b1")
 	c.now = c.now.Add(2 * time.Minute)
 	assert.Zero(t, w.left("b1"))
@@ -47,9 +47,9 @@ func TestWriteTimesStartTheSettleTimeAgainAtAWrite(t *testing.T) {
 	assert.Equal(t, 45*time.Second, w.left("b1"))
 }
 
-func TestWriteTimesForgetABucket(t *testing.T) {
+func TestWriteLogForgetsABucket(t *testing.T) {
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
-	w := newWriteTimes(time.Minute, c.Now)
+	w := newWriteLog(time.Minute, c.Now)
 	w.wrote("b1")
 	c.now = c.now.Add(2 * time.Minute)
 
@@ -58,9 +58,55 @@ func TestWriteTimesForgetABucket(t *testing.T) {
 	assert.Equal(t, time.Minute, w.left("b1"), "a forgotten bucket is unknown again")
 }
 
-func TestNoWriteTimesSettleNothing(t *testing.T) {
-	var w *writeTimes
-	w.wrote("b1")
+func TestNoWriteLogSettlesNothing(t *testing.T) {
+	var w *writeLog
+	w.created("b1")
+	w.wroteSetting("b1", settingEncryption, "")
 
 	assert.Zero(t, w.left("b1"))
+	assert.Equal(t, written{}, w.of("b1", settingEncryption))
+}
+
+func TestWriteLogKnowsNoSettingOfABucketThatItCreated(t *testing.T) {
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	w := newWriteLog(time.Minute, c.Now)
+	w.wroteSetting("b1", settingEncryption, "key-a")
+
+	w.created("b1")
+
+	assert.Equal(t, written{Initial: true}, w.of("b1", settingEncryption), "a new bucket has no write of before")
+}
+
+func TestWriteLogKeepsTheLastValueOfASetting(t *testing.T) {
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	w := newWriteLog(time.Minute, c.Now)
+	w.created("b1")
+	w.wroteSetting("b1", settingEncryption, "key-a")
+	w.wroteSetting("b1", settingEncryption, "key-b")
+
+	settling := w.of("b1", settingEncryption)
+	c.now = c.now.Add(time.Minute)
+
+	assert.Equal(t, written{Value: "key-b", Wrote: true, Settling: true}, settling)
+	assert.Equal(t, written{Value: "key-b", Wrote: true}, w.of("b1", settingEncryption))
+	assert.Equal(t, written{Initial: true}, w.of("b1", settingAbortRule))
+}
+
+func TestWriteLogKnowsNoSettingAfterAFirstLook(t *testing.T) {
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	w := newWriteLog(time.Minute, c.Now)
+
+	w.left("b1")
+
+	assert.Equal(t, written{}, w.of("b1", settingEncryption), "a process knows no write of the process before")
+}
+
+func TestWriteLogEndsTheInitialStateOfAFinishedBucket(t *testing.T) {
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	w := newWriteLog(time.Minute, c.Now)
+	w.created("b1")
+
+	w.finished("b1")
+
+	assert.Equal(t, written{}, w.of("b1", settingPublicAccessBlock))
 }

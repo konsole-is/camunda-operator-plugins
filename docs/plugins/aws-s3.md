@@ -21,7 +21,9 @@ Before the plugin creates a bucket, it records the name and the region of the bu
 
 At each reconcile, and at the latest after `resync`, the plugin writes the tags, the public access block, the default encryption, and the abort rule again when someone changed them. A repair of the public access block, the encryption, or the abort rule records the event `DriftCorrected` on the request.
 
-S3 can show a bucket setting late after a write. So for 5 minutes after the plugin writes to a bucket, it does not write the public access block, the default encryption, or the abort rule when they differ, except for a changed `key` input. It writes the tags at once. When the 5 minutes end, the request reconciles again, and the plugin writes each setting that still differs. A change of `abortIncompleteUploadDays` in these 5 minutes also waits until they end. The plugin keeps the time of its writes in memory. After a restart, the 5 minutes start at the first reconcile of each request.
+S3 can show a bucket setting late after a write. The plugin keeps in memory the value that it last wrote for the public access block, the default encryption, and the abort rule of each bucket, and the time of its last write. For 5 minutes after a write, it does not write a setting again when S3 still shows the setting as before the write. When the 5 minutes end, the request reconciles again, and the plugin writes each setting that still differs. It writes the tags at once.
+
+The plugin writes a setting at once, whatever S3 shows, when the value of the request differs from the value that it last wrote. This is the case after a change of the `key` input or of `abortIncompleteUploadDays`. It also writes the encryption and the abort rule of a bucket that it created at once, and the request is `Ready` only after these writes. After a restart, the plugin knows no earlier write. It then writes each setting that differs at once, and the encryption also when the `key` input differs from the `keyArn` output.
 
 The plugin also writes:
 

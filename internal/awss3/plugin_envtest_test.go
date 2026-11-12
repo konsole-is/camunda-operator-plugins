@@ -178,6 +178,9 @@ func takeName(namespace, uid string) string {
 	return name
 }
 
+// otherKeyARN is a second key of the region home.
+const otherKeyARN = "arn:aws:kms:eu-west-1:111122223333:key/1c2d3e4f-5061-7283-94a5-b6c7d8e9f0a1"
+
 const bucketGrant = `{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation",` +
 	`"s3:ListBucketMultipartUploads","s3:ListBucketVersions","s3:GetObject","s3:PutObject","s3:DeleteObject",` +
 	`"s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::%[1]s","arn:aws:s3:::%[1]s/*"]}`
@@ -386,6 +389,62 @@ var _ = Describe("the AWS S3 plugin", func() {
 		Eventually(gone(request), timeout).Should(BeTrue())
 		_, kept = fake.Bucket(name)
 		Expect(kept).To(BeFalse())
+	})
+
+	It("reports a bucket that it creates again as Ready only with its key and its abort rule", func() {
+		ns := newNamespace()
+		request := bucketRequest(ns, map[string]string{"key": keyARN}, pluginsv1alpha1.DeletionPolicyDelete)
+		readyRequest(request)
+		name := bucketNameOf(ns)
+		fake.ShowLate("GetBucketTagging", -1)
+		DeferCleanup(func() { fake.ShowLate("GetBucketTagging", 0) })
+		_, err := fake.In(home).DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(name)})
+		Expect(err).NotTo(HaveOccurred())
+
+		poke(request)
+		Eventually(func(g Gomega) {
+			g.Expect(conditionOf(g, request, v1.ConditionReady).Reason).To(Equal(awss3.ReasonWaitingForBucketTags))
+		}, timeout).Should(Succeed())
+		fake.ShowLate("GetBucketTagging", 0)
+
+		Eventually(func(g Gomega) {
+			g.Expect(conditionOf(g, request, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+		}, timeout).Should(Succeed())
+		bucket := bucketOf(Default, name)
+		Expect(aws.ToString(bucket.Encryption.ApplyServerSideEncryptionByDefault.KMSMasterKeyID)).To(Equal(keyARN))
+		Expect(bucket.LifecycleRules).To(HaveLen(1))
+	})
+
+	It("encrypts with the key of the request when the key changes back while S3 shows the old key", func() {
+		ns := newNamespace()
+		request := bucketRequest(ns, map[string]string{"key": keyARN}, pluginsv1alpha1.DeletionPolicyDelete)
+		readyRequest(request)
+		name := bucketNameOf(ns)
+		fake.ShowLate("GetBucketEncryption", -1)
+		DeferCleanup(func() { fake.ShowLate("GetBucketEncryption", 0) })
+
+		for _, key := range []string{otherKeyARN, keyARN} {
+			Eventually(func(g Gomega) {
+				got := read(g, request)
+				got.Spec.Inputs = map[string]string{"key": key}
+				g.Expect(k8s.Update(ctx, got)).To(Succeed())
+			}, timeout).Should(Succeed())
+			Eventually(func(g Gomega) {
+				g.Expect(read(g, request).Status.Outputs).To(HaveKeyWithValue("keyArn", key))
+				encryption := bucketOf(g, name).Encryption.ApplyServerSideEncryptionByDefault
+				g.Expect(aws.ToString(encryption.KMSMasterKeyID)).To(Equal(key))
+			}, timeout).Should(Succeed())
+		}
+
+		Eventually(func(g Gomega) {
+			fragments := map[string]string{}
+			for _, grant := range grantsOf(g, request) {
+				fragments[grant.Spec.Template] = string(grant.Spec.Fragment.Raw)
+			}
+			g.Expect(fragments["bucket-key-use"]).To(MatchJSON(
+				`{"Effect":"Allow","Action":["kms:GenerateDataKey","kms:Decrypt"],"Resource":"` + keyARN + `"}`,
+			))
+		}, timeout).Should(Succeed())
 	})
 
 	It("keeps the contract of an orphaned bucket when a new request of the claim is deleted", func() {

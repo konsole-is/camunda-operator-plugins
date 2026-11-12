@@ -63,8 +63,8 @@ type buckets struct {
 	s3 func(region string) awskit.S3
 	// deleteBudget is the time for which one call of delete deletes objects.
 	deleteBudget time.Duration
-	// writes keeps the last write of the plugin on each bucket.
-	writes *writeTimes
+	// writes keeps the writes of the plugin on each bucket.
+	writes *writeLog
 }
 
 // bucketRef names the bucket of one request.
@@ -134,16 +134,18 @@ func (e tagsNotShownError) Error() string {
 	return fmt.Sprintf("Waiting for S3 to show the tags of the bucket %s", e.Bucket)
 }
 
-// settlingError means that a setting of the bucket differs from the desired
-// state within the settle time of the last write of the plugin, so ensure did
-// not repair it. Left is the time until the settle time ends.
+// settlingError means that S3 can still show a setting of the bucket as it
+// was before a write of the plugin: ensure wrote a setting, or held one. Left
+// is the time until the settle time ends.
 type settlingError struct {
 	Bucket string
 	Left   time.Duration
+	// Held says that ensure did not write a setting that differs.
+	Held bool
 }
 
 func (e settlingError) Error() string {
-	return fmt.Sprintf("S3 does not show a setting of the bucket %s as the plugin wrote it yet", e.Bucket)
+	return fmt.Sprintf("S3 can still show a setting of the bucket %s as it was before a write", e.Bucket)
 }
 
 // errShownLate means that a step with repairLater found a setting that
@@ -163,7 +165,20 @@ const (
 	// repairLater writes nothing, because S3 can still show the setting as it
 	// was before the last write of the plugin.
 	repairLater
+	// repairRewrite writes the setting whatever S3 shows, as a part of a
+	// create or of a change of the request.
+	repairRewrite
 )
+
+// settingStep is one setting that ensure keeps.
+type settingStep struct {
+	setting setting
+	// value is the value of the desired state, as the write log keeps it.
+	value string
+	// fresh says that S3 gives a new bucket the value.
+	fresh  bool
+	ensure func(repair) (*action, error)
+}
 
 // claimable returns bucketInUseError when the bucket of ref exists and does
 // not carry the UID of ref, or when headBucket refuses it. It reads only.
@@ -193,10 +208,10 @@ func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
 // UID of ref, also after a create that S3 answered with success. It returns
 // tagsNotShownError instead while the recorded bucket of ref has no UID tag
 // within the settle time. With p.Served, a repair of a bucket that the
-// request had is drift. A changed key is not drift: p.KeyARN is the key that
-// the plugin wrote last. Within the settle time of the last write of the
-// plugin, it writes no public access block, encryption, or abort rule that
-// differs, except a changed key, and returns settlingError.
+// request had is drift. p.KeyARN is the key that the plugin wrote last. A
+// setting that it last wrote with another value, or that a bucket it created
+// lacks, it writes whatever S3 shows, not as drift. After it wrote a setting,
+// or held one that S3 shows as before its write, it returns settlingError.
 func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]action, error) {
 	c := b.s3(ref.Region)
 
@@ -216,7 +231,7 @@ func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]
 			a.Corrected = "created the bucket " + ref.Name + ", which was gone"
 		}
 		actions = append(actions, a)
-		b.writes.wrote(ref.Name)
+		b.writes.created(ref.Name)
 	}
 
 	tags, err := bucketTagsOf(ctx, c, ref.Name)
@@ -230,35 +245,35 @@ func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]
 		return nil, bucketInUseError{Bucket: ref.Name, Owner: awskit.OwnerOf(tags)}
 	}
 
-	left := b.writes.left(ref.Name)
-	// The settings of a bucket that the reconcile created are part of the
-	// create, also of a create that repairs drift.
-	fix := repairDrift
-	switch {
-	case !p.Served || created:
-		fix = repairChange
-	case left > 0:
-		fix = repairLater
+	a, err := ensureTags(ctx, c, ref.Name, tags, w.Tags)
+	if a != nil {
+		actions = append(actions, *a)
+		b.writes.wrote(ref.Name)
 	}
-	keyFix := fix
-	if p.KeyARN != w.KeyARN {
-		keyFix = repairChange
+	if err != nil {
+		return actions, err
 	}
 
-	late := false
-	for _, step := range []func() (*action, error){
-		func() (*action, error) { return ensureTags(ctx, c, ref.Name, tags, w.Tags) },
-		func() (*action, error) { return ensurePublicAccessBlock(ctx, c, ref.Name, fix) },
-		func() (*action, error) { return ensureEncryption(ctx, c, ref.Name, w.KeyARN, keyFix) },
-		func() (*action, error) { return ensureAbortRule(ctx, c, ref.Name, w.AbortDays, fix) },
+	held, wrote := false, false
+	for _, s := range []settingStep{
+		{settingPublicAccessBlock, "blocked", true, func(fix repair) (*action, error) {
+			return ensurePublicAccessBlock(ctx, c, ref.Name, fix)
+		}},
+		{settingEncryption, w.KeyARN, w.KeyARN == "", func(fix repair) (*action, error) {
+			return ensureEncryption(ctx, c, ref.Name, w.KeyARN, fix)
+		}},
+		{settingAbortRule, fmt.Sprint(w.AbortDays), false, func(fix repair) (*action, error) {
+			return ensureAbortRule(ctx, c, ref.Name, w.AbortDays, fix)
+		}},
 	} {
-		a, err := step()
+		a, err := s.ensure(b.repairOf(ref.Name, s, p, created))
 		if a != nil {
 			actions = append(actions, *a)
-			b.writes.wrote(ref.Name)
+			b.writes.wroteSetting(ref.Name, s.setting, s.value)
+			wrote = true
 		}
 		if errors.Is(err, errShownLate) {
-			late = true
+			held = true
 			continue
 		}
 		if err != nil {
@@ -266,10 +281,35 @@ func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]
 		}
 	}
 
-	if late {
-		return actions, settlingError{Bucket: ref.Name, Left: left}
+	b.writes.finished(ref.Name)
+	if !held && !wrote {
+		return actions, nil
+	}
+	if left := b.writes.left(ref.Name); left > 0 {
+		return actions, settlingError{Bucket: ref.Name, Left: left, Held: held}
 	}
 	return actions, nil
+}
+
+// repairOf returns how ensure treats the setting of s on the bucket name. A
+// served keyArn output stands for the last write of the encryption that the
+// log does not know.
+func (b buckets) repairOf(name string, s settingStep, p prior, created bool) repair {
+	known := b.writes.of(name, s.setting)
+	known.Initial = known.Initial || created
+	if s.setting == settingEncryption && p.Served && !known.Wrote && !known.Initial {
+		known.Value, known.Wrote = p.KeyARN, true
+	}
+
+	switch {
+	case known.Wrote && known.Value != s.value, known.Initial && !s.fresh:
+		return repairRewrite
+	case known.Settling:
+		return repairLater
+	case known.Initial || !p.Served:
+		return repairChange
+	}
+	return repairDrift
 }
 
 // createBucket creates the bucket of ref with tags when HeadBucket does not
@@ -403,8 +443,9 @@ func ensurePublicAccessBlock(ctx context.Context, c awskit.S3, name string, fix 
 	}
 	if err == nil {
 		block := out.PublicAccessBlockConfiguration
-		if block != nil && aws.ToBool(block.BlockPublicAcls) && aws.ToBool(block.IgnorePublicAcls) &&
-			aws.ToBool(block.BlockPublicPolicy) && aws.ToBool(block.RestrictPublicBuckets) {
+		if fix != repairRewrite && block != nil && aws.ToBool(block.BlockPublicAcls) &&
+			aws.ToBool(block.IgnorePublicAcls) && aws.ToBool(block.BlockPublicPolicy) &&
+			aws.ToBool(block.RestrictPublicBuckets) {
 			return nil, nil
 		}
 	}
@@ -452,7 +493,7 @@ func ensureEncryption(ctx context.Context, c awskit.S3, name, keyARN string, fix
 		return nil, fmt.Errorf("reading the default encryption of the bucket %s: %w", name, err)
 	}
 	switch {
-	case err == nil && hasEncryption(out.ServerSideEncryptionConfiguration, wanted):
+	case err == nil && fix != repairRewrite && hasEncryption(out.ServerSideEncryptionConfiguration, wanted):
 		return nil, nil
 	case fix == repairLater:
 		return nil, errShownLate
@@ -529,7 +570,7 @@ func ensureAbortRule(ctx context.Context, c awskit.S3, name string, days int32, 
 	i := slices.IndexFunc(rules, func(r types.LifecycleRule) bool { return aws.ToString(r.ID) == abortRuleID })
 	missing := i < 0
 	switch {
-	case !missing && sameAbortRule(rules[i], days):
+	case !missing && fix != repairRewrite && sameAbortRule(rules[i], days):
 		return nil, nil
 	case fix == repairLater:
 		return nil, errShownLate

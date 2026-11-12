@@ -115,7 +115,7 @@ func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 		buckets: buckets{
 			s3:           opts.S3,
 			deleteBudget: opts.Settings.DeleteBudget,
-			writes:       newWriteTimes(cmp.Or(opts.SettleTime, settleTime), time.Now),
+			writes:       newWriteLog(cmp.Or(opts.SettleTime, settleTime), time.Now),
 		},
 		cloudWatch: opts.CloudWatch,
 		reader:     mgr.GetAPIReader(),

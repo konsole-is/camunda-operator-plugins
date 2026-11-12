@@ -117,9 +117,9 @@ type Plugin struct {
 // reconcile that records a new bucket before it creates the bucket, and with
 // WaitingForBucketTags while S3 shows no UID tag on the bucket, for at most
 // the settle time. A failed AWS call is an error. A failed read of the stored
-// size only shows the size as not known. Within the settle time of a write of
-// the plugin, S3 can show a setting late, so a setting that differs is not
-// repaired: the request reconciles again when the settle time ends.
+// size only shows the size as not known. A setting that S3 shows as before
+// a write of the plugin is not repaired within the settle time. After such a
+// setting or a write, the request reconciles again when the settle time ends.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -188,15 +188,15 @@ func (p *Plugin) Reconcile(
 			Corrected:    corrected,
 		}, nil
 	}
-	settling, late := errors.AsType[settlingError](err)
-	if late {
+	settling, settles := errors.AsType[settlingError](err)
+	if settling.Held {
 		req.Log.Info(
 			"Did not repair a setting of the S3 bucket within the settle time of the last write",
 			"bucket", ref.Name,
 			"recheckAfter", settling.Left,
 		)
 	}
-	if err != nil && !late {
+	if err != nil && !settles {
 		return pluginkit.Result{Corrected: corrected}, err
 	}
 
