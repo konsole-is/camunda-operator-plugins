@@ -286,4 +286,53 @@ var _ = Describe("drift after a change of the role name prefix", Serial, func() 
 		}, timeout).Should(Succeed())
 		expectNoDriftCorrected(s.namespace)
 	})
+
+	It("records no DriftCorrected when a new Grant reaches the old role first", func() {
+		var other *pluginsv1alpha1.PluginRequest
+		s := newRenameSetup(awskit.ModeIRSA, "aws-irsa-", func(s renameSetup) {
+			Expect(k8s.Create(ctx, otherRegistrationWith(s.namespace, "read", readTemplate))).To(Succeed())
+			other = newOtherRequest(s.namespace, "orders-backup", "orders")
+			grant := grantFor(other, "orders-backup-read", readFragment)
+			Expect(k8s.Create(ctx, grant)).To(Succeed())
+			expectGrant(grant, pluginsv1alpha1.ConditionApplied, metav1.ConditionTrue, v1.ReasonHealthy)
+		})
+		// The old role stays in the status while the new hub cannot delete it.
+		s.iam.AddRoleToInstanceProfile(s.oldRole.Name, "nodes")
+		h, stop := startHub(s.mode, s.registration, "team-b", s.iam, s.eks)
+		var current awsfake.Role
+		Eventually(func(g Gomega) {
+			current = roleOf(g, h, s.namespace)
+			g.Expect(current.Tags).To(HaveKey(awskit.TagDesired))
+			got := read(g, s.request.DeepCopy())
+			g.Expect(got.Status.Outputs).To(HaveKeyWithValue(awskit.OutputPrincipal, current.ARN))
+			g.Expect(got.Status.Resources).To(ContainElement(HaveField("Name", s.oldRole.Name)))
+		}, timeout).Should(Succeed())
+		stop()
+		s.iam.RemoveRoleFromInstanceProfile(s.oldRole.Name, "nodes")
+
+		// The outputs name the old role again, as after a status write that
+		// did not land, and the first put of the new Grant on the new role
+		// fails.
+		Eventually(func(g Gomega) {
+			got := read(g, s.request.DeepCopy())
+			got.Status.Outputs[awskit.OutputPrincipal] = s.oldRole.ARN
+			g.Expect(k8s.Status().Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		grant := grantFor(other, "orders-backup-read-2", readFragment)
+		Expect(k8s.Create(ctx, grant)).To(Succeed())
+		s.iam.FailNextOnRole(current.Name, "PutRolePolicy", errors.New("the policy cannot be put"))
+		oldCalls := len(s.iam.RoleCalls(s.oldRole.Name))
+		// Controller names are unique in the process.
+		s.startNewHub(func(o *awsidentity.Options) { o.Name += "-again" })
+
+		Eventually(func(g Gomega) {
+			g.Expect(roleOf(g, h, s.namespace).InlinePolicies).To(HaveKey("grant-orders-backup-read-2"))
+			got := read(g, s.request.DeepCopy())
+			g.Expect(got.Status.Outputs).To(HaveKeyWithValue(awskit.OutputPrincipal, current.ARN))
+		}, timeout).Should(Succeed())
+		calls := s.iam.RoleCalls(s.oldRole.Name)[oldCalls:]
+		Expect(calls).To(ContainElement("PutRolePolicy"), "the old role got the Grant")
+		expectGrant(grant, pluginsv1alpha1.ConditionApplied, metav1.ConditionTrue, v1.ReasonHealthy)
+		expectNoDriftCorrected(s.namespace)
+	})
 })

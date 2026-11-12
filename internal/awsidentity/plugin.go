@@ -254,7 +254,8 @@ func roleNameInUse(err error, status []pluginsv1alpha1.ResourceRef) (pluginkit.R
 }
 
 // syncOldRoleGrants keeps the Grants of the old role that the outputs of req
-// name in sync, when it is not role.
+// name in sync, when it is not role. It writes no Grant status, because
+// Applied tells what role holds.
 func (p *Plugin) syncOldRoleGrants(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -266,7 +267,7 @@ func (p *Plugin) syncOldRoleGrants(
 		return err
 	}
 
-	_, err = p.syncGrants(ctx, req, old)
+	_, _, _, err = p.putGrants(ctx, req, old)
 	return err
 }
 
