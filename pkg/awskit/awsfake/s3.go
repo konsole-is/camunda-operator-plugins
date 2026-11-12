@@ -79,6 +79,22 @@ type S3 struct {
 	// versions counts the delete markers, for their version IDs.
 	versions int
 	fail     failures
+	// late holds the reads of ShowLate, by read operation.
+	late map[string]*lateReads
+}
+
+// lateReads are the reads of one read operation that show a setting as it
+// was before a Put. old maps a bucket name to its copy before the Put.
+type lateReads struct {
+	reads int
+	old   map[string]*oldBucket
+}
+
+// oldBucket is a bucket as it was before a Put, and the reads that still
+// show it. A negative left shows it until ShowLate releases it.
+type oldBucket struct {
+	bucket Bucket
+	left   int
 }
 
 // Bucket is a bucket of the fake. A nil configuration is one that the bucket
@@ -110,7 +126,12 @@ type ObjectVersion struct {
 
 // NewS3 returns an S3 without buckets.
 func NewS3() *S3 {
-	f := &S3{buckets: map[string]*Bucket{}, refused: map[string]string{}, createErrors: map[string]error{}}
+	f := &S3{
+		buckets:      map[string]*Bucket{},
+		refused:      map[string]string{},
+		createErrors: map[string]error{},
+		late:         map[string]*lateReads{},
+	}
 	f.s3Region = s3Region{f: f}
 	return f
 }
@@ -195,6 +216,58 @@ func (f *S3) FailNext(operation string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fail.next(operation, err)
+}
+
+// ShowLate makes the read operation get show a setting late, as S3 does for a
+// while after a write of a bucket configuration. After each Put of the
+// setting, the next reads calls of get on the bucket answer the setting as it
+// was before the Put. get is GetBucketTagging, GetPublicAccessBlock,
+// GetBucketEncryption, or GetBucketLifecycleConfiguration. A negative reads
+// shows the old setting until a call with zero reads, which shows each
+// setting as it is.
+func (f *S3) ShowLate(get string, reads int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if reads == 0 {
+		delete(f.late, get)
+		return
+	}
+	f.late[get] = &lateReads{reads: reads, old: map[string]*oldBucket{}}
+}
+
+// beforePut keeps a copy of b for the reads of get, when ShowLate made get
+// late. A copy that waits from an earlier Put stays. The caller holds the
+// lock.
+func (f *S3) beforePut(get string, b *Bucket) {
+	late, ok := f.late[get]
+	if !ok {
+		return
+	}
+	if old, ok := late.old[b.Name]; ok {
+		old.left = late.reads
+		return
+	}
+	late.old[b.Name] = &oldBucket{bucket: deepCopy(*b), left: late.reads}
+}
+
+// shown returns the bucket that a read of get shows for b: its copy before
+// a Put while reads of ShowLate are left, else b. The caller holds the lock.
+func (f *S3) shown(get string, b *Bucket) *Bucket {
+	late, ok := f.late[get]
+	if !ok {
+		return b
+	}
+	old, ok := late.old[b.Name]
+	if !ok {
+		return b
+	}
+	if old.left > 0 {
+		old.left--
+		if old.left == 0 {
+			delete(late.old, b.Name)
+		}
+	}
+	return &old.bucket
 }
 
 // Calls returns the names of the operations called in every region, in call
@@ -474,6 +547,7 @@ func (r s3Region) GetBucketTagging(
 	if err != nil {
 		return nil, err
 	}
+	b = r.f.shown("GetBucketTagging", b)
 
 	if len(b.Tags) == 0 {
 		return nil, apiError("NoSuchTagSet", "The TagSet does not exist")
@@ -510,6 +584,7 @@ func (r s3Region) PutBucketTagging(
 	if err != nil {
 		return nil, err
 	}
+	r.f.beforePut("GetBucketTagging", b)
 	b.Tags = tags
 	return &s3.PutBucketTaggingOutput{}, nil
 }
@@ -570,6 +645,7 @@ func (r s3Region) GetPublicAccessBlock(
 	if err != nil {
 		return nil, err
 	}
+	b = r.f.shown("GetPublicAccessBlock", b)
 
 	if b.PublicAccessBlock == nil {
 		return nil, apiError(
@@ -600,6 +676,7 @@ func (r s3Region) PutPublicAccessBlock(
 	if in.PublicAccessBlockConfiguration == nil {
 		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
 	}
+	r.f.beforePut("GetPublicAccessBlock", b)
 	b.PublicAccessBlock = deepCopy(in.PublicAccessBlockConfiguration)
 	return &s3.PutPublicAccessBlockOutput{}, nil
 }
@@ -621,6 +698,7 @@ func (r s3Region) GetBucketEncryption(
 	if err != nil {
 		return nil, err
 	}
+	b = r.f.shown("GetBucketEncryption", b)
 
 	if b.Encryption == nil {
 		return nil, apiError(
@@ -656,6 +734,7 @@ func (r s3Region) PutBucketEncryption(
 	if in.ServerSideEncryptionConfiguration == nil || len(in.ServerSideEncryptionConfiguration.Rules) != 1 {
 		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
 	}
+	r.f.beforePut("GetBucketEncryption", b)
 	b.Encryption = deepCopy(&in.ServerSideEncryptionConfiguration.Rules[0])
 	return &s3.PutBucketEncryptionOutput{}, nil
 }
@@ -677,6 +756,7 @@ func (r s3Region) GetBucketLifecycleConfiguration(
 	if err != nil {
 		return nil, err
 	}
+	b = r.f.shown("GetBucketLifecycleConfiguration", b)
 
 	if len(b.LifecycleRules) == 0 {
 		return nil, apiError("NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist")
@@ -707,6 +787,7 @@ func (r s3Region) PutBucketLifecycleConfiguration(
 	if err := checkRules(in.LifecycleConfiguration.Rules); err != nil {
 		return nil, err
 	}
+	r.f.beforePut("GetBucketLifecycleConfiguration", b)
 	b.LifecycleRules = deepCopy(in.LifecycleConfiguration.Rules)
 	return &s3.PutBucketLifecycleConfigurationOutput{}, nil
 }

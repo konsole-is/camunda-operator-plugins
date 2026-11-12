@@ -795,3 +795,77 @@ func TestS3FailCreateFailsEachCreateOfTheNameUntilCleared(t *testing.T) {
 	f.FailCreate("bucket-1", nil)
 	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
 }
+
+func TestS3ShowLateShowsTheSettingBeforeAPutForTheGivenReads(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.ShowLate("GetBucketLifecycleConfiguration", 2)
+	_, _, lifecycle := configure(t, f)
+	get := func() (*s3.GetBucketLifecycleConfigurationOutput, error) {
+		return f.GetBucketLifecycleConfiguration(
+			context.Background(),
+			&s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String("bucket-1")},
+		)
+	}
+
+	for range 2 {
+		_, err := get()
+		assert.Equal(t, "NoSuchLifecycleConfiguration", awskit.ErrorCode(err))
+	}
+	out, err := get()
+	require.NoError(t, err)
+	assert.Equal(t, lifecycle.Rules, out.Rules)
+	assertConfigured(t, f)
+}
+
+func TestS3ShowLateShowsTheOldSettingUntilReleased(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.ShowLate("GetBucketEncryption", -1)
+	_, encryption, _ := configure(t, f)
+	get := func() types.ServerSideEncryptionByDefault {
+		t.Helper()
+		out, err := f.GetBucketEncryption(
+			context.Background(),
+			&s3.GetBucketEncryptionInput{Bucket: aws.String("bucket-1")},
+		)
+		require.NoError(t, err)
+		return *out.ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault
+	}
+
+	for range 3 {
+		assert.Equal(t, types.ServerSideEncryptionAes256, get().SSEAlgorithm, "the SSE-S3 of a new bucket")
+	}
+	f.ShowLate("GetBucketEncryption", 0)
+	assert.Equal(t, *encryption.Rules[0].ApplyServerSideEncryptionByDefault, get())
+	_, err := f.GetPublicAccessBlock(
+		context.Background(),
+		&s3.GetPublicAccessBlockInput{Bucket: aws.String("bucket-1")},
+	)
+	require.NoError(t, err)
+}
+
+func TestS3ShowLateShowsTheOldTagsAfterAPut(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	ctx := context.Background()
+	put := func(value string) {
+		t.Helper()
+		_, err := f.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+			Bucket:  aws.String("bucket-1"),
+			Tagging: &types.Tagging{TagSet: []types.Tag{{Key: aws.String("team"), Value: aws.String(value)}}},
+		})
+		require.NoError(t, err)
+	}
+	put("a")
+	f.ShowLate("GetBucketTagging", 1)
+
+	put("b")
+
+	out, err := f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
+	require.NoError(t, err)
+	assert.Equal(t, "a", aws.ToString(out.TagSet[0].Value))
+	out, err = f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
+	require.NoError(t, err)
+	assert.Equal(t, "b", aws.ToString(out.TagSet[0].Value))
+}
