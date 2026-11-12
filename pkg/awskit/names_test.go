@@ -66,6 +66,42 @@ func TestFitNameKeepsAShortNameAndCutsALongOne(t *testing.T) {
 	assert.NotEqual(t, cut, FitName(strings.Repeat("x", 299)+"y", 256))
 }
 
+func TestBucketNameIsAValidBucketNameOfTheParts(t *testing.T) {
+	valid := `^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`
+
+	assert.Regexp(t, `^team-a-orders-backup-storage-[0-9a-f]{16}$`, BucketName("team-a", "orders-backup-storage"))
+	assert.Equal(t, BucketName("team-a", "orders"), BucketName("team-a", "orders"), "the name is stable")
+
+	long := BucketName(strings.Repeat("n", 63), strings.Repeat("r", 63))
+	assert.Len(t, long, 63)
+	assert.Regexp(t, valid, long)
+
+	dotted := BucketName("team-a", "orders.v2")
+	assert.Regexp(t, valid, dotted)
+	assert.NotContains(t, dotted, ".")
+
+	// A cut that ends on a hyphen must not leave two hyphens before the hash.
+	assert.Regexp(t, valid, BucketName(strings.Repeat("n", 45), "r-request"))
+	assert.NotContains(t, BucketName(strings.Repeat("n", 45), "r-request"), "--")
+}
+
+func TestBucketNameKeepsTwoListsOfPartsApart(t *testing.T) {
+	assert.NotEqual(t, BucketName("a-b", "c"), BucketName("a", "b-c"))
+	assert.NotEqual(t, BucketName("p", "a-b", "c"), BucketName("p-a", "b", "c"))
+	assert.NotEqual(
+		t,
+		BucketName(strings.Repeat("n", 63), strings.Repeat("r", 62)+"a"),
+		BucketName(strings.Repeat("n", 63), strings.Repeat("r", 62)+"b"),
+		"two names that differ after the cut",
+	)
+	assert.NotEqual(
+		t,
+		BucketName(strings.Repeat("n", 56)+"a", "orders-119-backup-storage"),
+		BucketName(strings.Repeat("n", 56)+"b", "orders-295-backup-storage"),
+		"two names whose hashes share their first 6 hex characters",
+	)
+}
+
 func TestCheckRolePrefix(t *testing.T) {
 	tests := []struct {
 		name   string
