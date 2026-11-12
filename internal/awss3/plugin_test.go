@@ -56,7 +56,7 @@ func TestBucketOfComputesTheBucketOfTheParameters(t *testing.T) {
 	assert.Equal(t, bucketName("team", "team-a", "orders"), ref.Name)
 	assert.Equal(t, "eu-central-1", ref.Region)
 	assert.Equal(t, "uid-1", ref.UID)
-	assert.False(t, ref.Recorded)
+	assert.False(t, ref.Bound)
 }
 
 func TestBucketOfTakesTheDefaultsOfAnEmptyParameter(t *testing.T) {
@@ -74,15 +74,15 @@ func TestBucketOfPrefersTheRecordedRow(t *testing.T) {
 
 	assert.Equal(t, "kept-bucket", ref.Name)
 	assert.Equal(t, "eu-north-1", ref.Region)
-	assert.True(t, ref.Recorded)
+	assert.True(t, ref.Bound)
 }
 
-func TestBucketOfTakesTheNameOfARowWithoutARNAndNotItsRecord(t *testing.T) {
+func TestBucketOfBindsTheBucketOfARowWithoutARN(t *testing.T) {
 	ref := bucketOf(request(bucketRow("bound-bucket", "eu-north-1")), Params{}, chartDefaults())
 
 	assert.Equal(t, "bound-bucket", ref.Name)
 	assert.Equal(t, "eu-north-1", ref.Region)
-	assert.False(t, ref.Recorded, "a row without the ARN binds the name before the bucket was the request's")
+	assert.True(t, ref.Bound, "the plugin records a row before it creates the bucket")
 }
 
 func TestInUseRowsDropABindingThatNeverHadTheBucket(t *testing.T) {
@@ -92,8 +92,19 @@ func TestInUseRowsDropABindingThatNeverHadTheBucket(t *testing.T) {
 	contract := pluginsv1alpha1.ResourceRef{Kind: kindObjectStorageConfig, Name: "orders-backup"}
 	grant := pluginsv1alpha1.ResourceRef{Kind: "Grant", Name: "g"}
 
-	assert.Equal(t, []pluginsv1alpha1.ResourceRef{contract}, inUseRows(request(bound, contract, grant)))
-	assert.Equal(t, []pluginsv1alpha1.ResourceRef{confirmed, contract}, inUseRows(request(confirmed, contract, grant)))
+	owned := bucketInUseError{Bucket: "b1", Owner: "the request team-a/other"}
+
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{contract}, inUseRows(request(bound, contract, grant), owned))
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{confirmed, contract},
+		inUseRows(request(confirmed, contract, grant), owned))
+}
+
+func TestInUseRowsKeepABindingWhenS3RefusesToShowTheBucket(t *testing.T) {
+	bound := bucketRow("b1", "eu-west-1")
+	unread := bucketInUseError{Bucket: "b1", Owner: "another AWS account", Unread: true}
+
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{bound}, inUseRows(request(bound), unread),
+		"the plugin can have created the bucket before S3 refused to show it")
 }
 
 func TestKeyOfAnotherRegionIsRefused(t *testing.T) {

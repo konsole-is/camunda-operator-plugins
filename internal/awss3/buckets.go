@@ -70,9 +70,8 @@ type bucketRef struct {
 	Namespace, Claim, Request, UID string
 	// Name and Region are the name and the region of the bucket.
 	Name, Region string
-	// Recorded says that the status of the request records the bucket with
-	// its ARN, so the request had it.
-	Recorded bool
+	// Bound says that status.resources of the request records the bucket.
+	Bound bool
 }
 
 // want is the desired state of a bucket.
@@ -106,6 +105,9 @@ type action struct {
 // region, or that S3 refuses to show the bucket.
 type bucketInUseError struct {
 	Bucket, Owner string
+	// Unread says that S3 refused to show the bucket, so it can still be the
+	// bucket of the request.
+	Unread bool
 }
 
 func (e bucketInUseError) Error() string {
@@ -243,6 +245,7 @@ func headBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) {
 		return false, bucketInUseError{
 			Bucket: ref.Name,
 			Owner:  "another AWS account, or a bucket that the controller may not read",
+			Unread: true,
 		}
 	}
 	return false, fmt.Errorf("reading the bucket %s: %w", ref.Name, err)
@@ -531,14 +534,15 @@ func (b buckets) delete(ctx context.Context, ref bucketRef) ([]action, bool, err
 }
 
 // ownedBucket reports whether the bucket of ref exists and carries the UID of
-// ref. A bucket that S3 refuses to read, or that is in another region, is not
-// owned when the request never had it.
+// ref. A bucket in another region than ref is not owned. A bucket that S3
+// refuses to show is not owned only when ref is not Bound.
 func ownedBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) {
 	_, err := c.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(ref.Name)})
 	switch {
-	case awskit.IsNotFound(err):
+	case awskit.IsNotFound(err) || inOtherRegion(err):
 		return false, nil
-	case !ref.Recorded && (awskit.IsAccessDenied(err) || inOtherRegion(err)):
+	// The plugin records the bucket before it creates it.
+	case !ref.Bound && awskit.IsAccessDenied(err):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("reading the bucket %s: %w", ref.Name, err)

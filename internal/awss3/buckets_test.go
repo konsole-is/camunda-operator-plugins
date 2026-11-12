@@ -515,17 +515,32 @@ func TestDeleteKeepsABucketOfAnotherRequest(t *testing.T) {
 	assert.Len(t, bucketOfFake(t, f, ref.Name).Objects, 3)
 }
 
-func TestDeleteOfABucketOfAnotherAccountIsDoneOnlyWithoutARecord(t *testing.T) {
+func TestDeleteOfABucketThatS3RefusesToShowIsDoneOnlyWithoutARecord(t *testing.T) {
 	b, f := newBuckets()
 	ref := testRef("eu-west-1")
 	f.AddForeignBucket(ref.Name, "eu-west-1")
 
 	_, _, err := b.delete(context.Background(), ref)
-	require.NoError(t, err, "the request never had the bucket")
+	require.NoError(t, err, "without a record, the plugin never sent a create of the name")
 
-	ref.Recorded = true
+	ref.Bound = true
 	_, _, err = b.delete(context.Background(), ref)
-	assert.Error(t, err, "the request had the bucket, so a refused read is a fault")
+	assert.Error(t, err, "the plugin can have created the bucket, so a refused read is a fault")
+}
+
+func TestDeleteOfABucketInAnotherRegionIsDone(t *testing.T) {
+	b, f := newBuckets()
+	ref := testRef("eu-west-1")
+	ref.Bound = true
+	_, err := f.In("eu-central-1").CreateBucket(context.Background(), createInput(ref.Name, "eu-central-1"))
+	require.NoError(t, err)
+
+	_, remain, err := b.delete(context.Background(), ref)
+
+	require.NoError(t, err, "the plugin creates a bucket only in the region of its record")
+	assert.False(t, remain)
+	_, ok := f.Bucket(ref.Name)
+	assert.True(t, ok)
 }
 
 func TestReleaseRemovesOnlyTheTagsOfTheRequest(t *testing.T) {

@@ -118,7 +118,7 @@ func (p *Plugin) Reconcile(
 		if waiting := changedBucket(recorded, ref); waiting != nil {
 			return pluginkit.Result{Pending: waiting, Resources: ownRows(req.Object)}, nil
 		}
-		ref.Recorded = recorded.ID != ""
+		ref.Bound = true
 	}
 
 	keyARN := req.Inputs[inputKey]
@@ -197,7 +197,7 @@ func (p *Plugin) Reconcile(
 func bucketOf(request *pluginsv1alpha1.PluginRequest, params Params, s Settings) bucketRef {
 	ref := paramsRef(request, params, s)
 	if recorded := recordedBucket(request); recorded != nil {
-		ref.Name, ref.Region, ref.Recorded = recorded.Name, recorded.Location, recorded.ID != ""
+		ref.Name, ref.Region, ref.Bound = recorded.Name, recorded.Location, true
 	}
 	return ref
 }
@@ -279,16 +279,19 @@ func inUseResult(
 ) pluginkit.Result {
 	return pluginkit.Result{
 		Pending:      &pluginkit.Waiting{Reason: ReasonBucketNameInUse, Message: inUse.Error()},
-		Resources:    inUseRows(request),
+		Resources:    inUseRows(request, inUse),
 		RequeueAfter: inUseRequeue,
 		Corrected:    corrected,
 	}
 }
 
-// inUseRows returns the rows of ownRows without an S3Bucket row that has no
-// ARN: the request never had that bucket, so a changed bucketPrefix may free
-// it from the name.
-func inUseRows(request *pluginsv1alpha1.PluginRequest) []pluginsv1alpha1.ResourceRef {
+// inUseRows returns the rows of ownRows, without an S3Bucket row that has no
+// ARN when inUse names the owner: the request never had that bucket, so a
+// changed bucketPrefix may free it from the name.
+func inUseRows(request *pluginsv1alpha1.PluginRequest, inUse bucketInUseError) []pluginsv1alpha1.ResourceRef {
+	if inUse.Unread {
+		return ownRows(request)
+	}
 	return slices.DeleteFunc(ownRows(request), func(r pluginsv1alpha1.ResourceRef) bool {
 		return r.Kind == kindS3Bucket && r.ID == ""
 	})
