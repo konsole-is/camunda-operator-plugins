@@ -83,7 +83,7 @@ registrations:
           maxItems: 10
           items:
             type: string
-            pattern: '^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/.+$'
+            pattern: '^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/([A-Za-z0-9.,+@=_-]+/)*[A-Za-z0-9.,+@=_-]{1,128}$'
           description: Managed policies that every cluster of the environment gets.
         extraPolicyArns:
           type: array
@@ -91,7 +91,7 @@ registrations:
           maxItems: 10
           items:
             type: string
-            pattern: '^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/.+$'
+            pattern: '^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/([A-Za-z0-9.,+@=_-]+/)*[A-Za-z0-9.,+@=_-]{1,128}$'
           description: Managed policies that a claim can add from the allowed values of its environment.
         inlinePolicy:
           type: object
