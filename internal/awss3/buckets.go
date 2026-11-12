@@ -597,8 +597,8 @@ func sameAbortRule(r types.LifecycleRule, days int32) bool {
 func (b buckets) delete(ctx context.Context, ref bucketRef) ([]action, bool, error) {
 	c := b.s3(ref.Region)
 
-	owned, err := b.ownedBucket(ctx, c, ref)
-	if !owned || err != nil {
+	tags, err := b.ownedTags(ctx, c, ref)
+	if tags == nil || err != nil {
 		return nil, false, err
 	}
 
@@ -626,45 +626,40 @@ func (b buckets) delete(ctx context.Context, ref bucketRef) ([]action, bool, err
 	}}, false, nil
 }
 
-// ownedBucket reports whether the bucket of ref exists and carries the UID of
-// ref. A bucket in another region than ref is not owned. A bucket that S3
-// refuses to show is not owned only when ref is not Bound. It returns
-// tagsNotShownError for a bucket that ensure would wait for.
-func (b buckets) ownedBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) {
+// ownedTags returns the tags of the bucket of ref when it carries the UID of
+// ref, and nil otherwise. A bucket in another region than ref is not owned. A
+// bucket that S3 refuses to show is not owned only when ref is not Bound. It
+// returns tagsNotShownError for a bucket that ensure would wait for.
+func (b buckets) ownedTags(ctx context.Context, c awskit.S3, ref bucketRef) (map[string]string, error) {
 	_, err := c.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(ref.Name)})
 	switch {
 	case awskit.IsNotFound(err) || inOtherRegion(err):
-		return false, nil
+		return nil, nil
 	// The plugin records the bucket before it creates it.
 	case !ref.Bound && awskit.IsAccessDenied(err):
-		return false, nil
+		return nil, nil
 	case err != nil:
-		return false, fmt.Errorf("reading the bucket %s: %w", ref.Name, err)
+		return nil, fmt.Errorf("reading the bucket %s: %w", ref.Name, err)
 	}
 
 	tags, err := bucketTagsOf(ctx, c, ref.Name)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if awskit.OwnedBy(tags, ref.UID) {
-		return true, nil
+		return tags, nil
 	}
-	return false, b.tagsLate(ref, tags)
+	return nil, b.tagsLate(ref, tags)
 }
 
 // release removes the request tags and the UID tag from the bucket of ref.
 // The bucket keeps its objects, its settings, and its other tags. It does
-// nothing when ownedBucket finds that the bucket is not the request's.
+// nothing when ownedTags finds that the bucket is not the request's.
 func (b buckets) release(ctx context.Context, ref bucketRef) ([]action, error) {
 	c := b.s3(ref.Region)
 
-	owned, err := b.ownedBucket(ctx, c, ref)
-	if !owned || err != nil {
-		return nil, err
-	}
-
-	tags, err := bucketTagsOf(ctx, c, ref.Name)
-	if err != nil {
+	tags, err := b.ownedTags(ctx, c, ref)
+	if tags == nil || err != nil {
 		return nil, err
 	}
 	for _, key := range []string{awskit.TagNamespace, awskit.TagClaim, awskit.TagRequest, awskit.TagRequestUID} {

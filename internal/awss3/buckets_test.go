@@ -886,6 +886,62 @@ func TestReleaseKeepsABucketOfAnotherRequest(t *testing.T) {
 	assert.Equal(t, otherUID, bucketOfFake(t, f, ref.Name).Tags[awskit.TagRequestUID])
 }
 
+// handOver is an S3 that gives the bucket to the request otherUID before
+// each read of its tags after the first, as an admin can between two reads.
+type handOver struct {
+	awskit.S3
+	fake   *awsfake.S3
+	bucket string
+	reads  int
+	// shown says that a read showed otherUID, and wroteOver that the tags
+	// were written after such a read.
+	shown, wroteOver bool
+}
+
+func (h *handOver) GetBucketTagging(
+	ctx context.Context,
+	in *s3.GetBucketTaggingInput,
+	opts ...func(*s3.Options),
+) (*s3.GetBucketTaggingOutput, error) {
+	h.reads++
+	if h.reads > 1 {
+		h.fake.Edit(h.bucket, func(bucket *awsfake.Bucket) { bucket.Tags[awskit.TagRequestUID] = otherUID })
+		h.shown = true
+	}
+	return h.S3.GetBucketTagging(ctx, in, opts...)
+}
+
+func (h *handOver) PutBucketTagging(
+	ctx context.Context,
+	in *s3.PutBucketTaggingInput,
+	opts ...func(*s3.Options),
+) (*s3.PutBucketTaggingOutput, error) {
+	h.wroteOver = h.wroteOver || h.shown
+	return h.S3.PutBucketTagging(ctx, in, opts...)
+}
+
+func (h *handOver) DeleteBucketTagging(
+	ctx context.Context,
+	in *s3.DeleteBucketTaggingInput,
+	opts ...func(*s3.Options),
+) (*s3.DeleteBucketTaggingOutput, error) {
+	h.wroteOver = h.wroteOver || h.shown
+	return h.S3.DeleteBucketTagging(ctx, in, opts...)
+}
+
+func TestReleaseWritesTheTagsOfTheReadThatShowedTheUID(t *testing.T) {
+	b, f, ref := ensured(t)
+	h := &handOver{S3: f.In(ref.Region), fake: f, bucket: ref.Name}
+	b.s3 = func(string) awskit.S3 { return h }
+
+	actions, err := b.release(context.Background(), ref)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{eventReasonBucketReleased}, reasons(actions))
+	assert.False(t, h.wroteOver, "the plugin writes no tags after a read that shows another request")
+	assert.Equal(t, map[string]string{"team": "platform"}, bucketOfFake(t, f, ref.Name).Tags)
+}
+
 func TestClaimableAcceptsAMissingBucket(t *testing.T) {
 	b, f := newBuckets()
 
