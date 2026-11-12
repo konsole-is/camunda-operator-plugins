@@ -20,8 +20,10 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -98,10 +100,11 @@ func prepareOwned(
 }
 
 // DeleteOwned deletes the object name of the kind of obj in the namespace of
-// request when it carries the labels registration and request of request. An
-// object of the name that the plugin did not write stays, and a missing
-// object is not an error. It reads with reader, so that it sees the object as
-// it is now, and deletes with a UID precondition.
+// request when it carries the labels registration and request of request and
+// an owner reference to its UID. An object of the name that the plugin did not
+// write for this request stays, also one that an Orphan released, and a
+// missing object is not an error. It reads with reader, so that it sees the
+// object as it is now, and deletes with a UID precondition.
 func DeleteOwned(
 	ctx context.Context,
 	reader client.Reader,
@@ -120,7 +123,10 @@ func DeleteOwned(
 
 	labels := obj.GetLabels()
 	if labels[pluginsv1alpha1.LabelRequest] != request.Name ||
-		labels[pluginsv1alpha1.LabelRegistration] != request.Spec.Registration {
+		labels[pluginsv1alpha1.LabelRegistration] != request.Spec.Registration ||
+		!slices.ContainsFunc(obj.GetOwnerReferences(), func(ref metav1.OwnerReference) bool {
+			return ref.UID == request.UID
+		}) {
 		return nil
 	}
 
