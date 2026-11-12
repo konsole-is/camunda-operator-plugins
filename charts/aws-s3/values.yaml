@@ -113,7 +113,8 @@ registrations:
           maxLength: 40
           pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
           x-kubernetes-validations:
-            - rule: "!self.startsWith('xn--') && !self.startsWith('sthree-') && !self.startsWith('amzn-s3-demo-')"
+            # The bucket name is the prefix and a hyphen, then more.
+            - rule: "!(self + '-').startsWith('xn--') && !(self + '-').startsWith('sthree-') && !(self + '-').startsWith('amzn-s3-demo-')"
               message: S3 reserves the bucket name prefixes xn--, sthree-, and amzn-s3-demo-.
           description: The start of each bucket name. It cannot change after the bucket exists.
         region:
