@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -38,10 +39,17 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
 )
 
-// ReasonBucketNameInUse means that the bucket name of the request belongs to
-// another request, to no request, to another AWS account, or to a bucket in
-// another region. The outputs are not ready.
-const ReasonBucketNameInUse = "BucketNameInUse"
+// The reasons that the plugin sets on a request, beside InvalidParameters.
+const (
+	// ReasonBucketNameInUse means that the bucket name of the request belongs
+	// to another request, to no request, to another AWS account, or to a
+	// bucket in another region. The outputs are not ready.
+	ReasonBucketNameInUse = "BucketNameInUse"
+	// ReasonRecordingBucket means that the plugin records the name and the
+	// region of the bucket in status.resources, and creates the bucket at the
+	// next reconcile.
+	ReasonRecordingBucket = "RecordingBucket"
+)
 
 // The inputs and the outputs of a request, and the kinds of its rows of
 // status.resources.
@@ -63,6 +71,9 @@ const (
 	// inUseRequeue is the wait before a request whose bucket name is in use
 	// reconciles again. S3 can show the tags of a new bucket a moment late.
 	inUseRequeue = time.Minute
+	// recordRequeue is the wait between the record of a bucket and its
+	// create.
+	recordRequeue = time.Second
 )
 
 // Params are the parameters of a request.
@@ -91,23 +102,57 @@ type Plugin struct {
 
 // Reconcile keeps the bucket of the request and publishes it with its
 // ObjectStorageConfig. It is Pending with the reason BucketNameInUse when the
-// bucket name belongs to another owner, and with InvalidParameters when
+// bucket name belongs to another owner, with InvalidParameters when
 // bucketPrefix or region names another bucket than the one that the request
-// has. A failed AWS call is an error. A failed read of the stored size only
-// shows the size as not known.
+// has or the key is in another region, and with RecordingBucket for the one
+// reconcile that records a new bucket before it creates the bucket. A failed
+// AWS call is an error. A failed read of the stored size only shows the size
+// as not known.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 ) (pluginkit.Result, error) {
 	ref := paramsRef(req.Object, req.Parameters, p.settings)
-	if recorded := recordedBucket(req.Object); recorded != nil {
+	recorded := recordedBucket(req.Object)
+	if recorded != nil {
 		if waiting := changedBucket(recorded, ref); waiting != nil {
 			return pluginkit.Result{Pending: waiting, Resources: ownRows(req.Object)}, nil
 		}
-		ref.Recorded = true
+		ref.Recorded = recorded.ID != ""
 	}
 
 	keyARN := req.Inputs[inputKey]
+	if waiting := keyInOtherRegion(keyARN, ref.Region); waiting != nil {
+		return pluginkit.Result{Pending: waiting, Resources: ownRows(req.Object)}, nil
+	}
+
+	// A create whose answer is lost leaves a bucket, so the name is recorded
+	// first, and a later change of bucketPrefix or region is refused.
+	if recorded == nil {
+		err := p.buckets.claimable(ctx, ref)
+		if inUse, ok := errors.AsType[bucketInUseError](err); ok {
+			return inUseResult(inUse, req.Object, nil), nil
+		}
+		if err != nil {
+			return pluginkit.Result{}, err
+		}
+
+		row := resources(p.settings, ref, req.Object)[0]
+		row.ID = ""
+		return pluginkit.Result{
+			Pending: &pluginkit.Waiting{
+				Reason: ReasonRecordingBucket,
+				Message: fmt.Sprintf(
+					"Recording the bucket %s in %s before the plugin creates it",
+					ref.Name,
+					ref.Region,
+				),
+			},
+			Resources:    []pluginsv1alpha1.ResourceRef{row},
+			RequeueAfter: recordRequeue,
+		}, nil
+	}
+
 	w := want{Tags: bucketTags(p.settings, ref), KeyARN: keyARN, AbortDays: defaultAbortDays}
 	if days := req.Parameters.AbortIncompleteUploadDays; days != nil {
 		w.AbortDays = *days
@@ -120,16 +165,10 @@ func (p *Plugin) Reconcile(
 	actions, err := p.buckets.ensure(ctx, ref, w, served)
 	corrected := record(req, actions)
 
-	var inUse bucketInUseError
-	switch {
-	case errors.As(err, &inUse):
-		return pluginkit.Result{
-			Pending:      &pluginkit.Waiting{Reason: ReasonBucketNameInUse, Message: err.Error()},
-			Resources:    ownRows(req.Object),
-			RequeueAfter: inUseRequeue,
-			Corrected:    corrected,
-		}, nil
-	case err != nil:
+	if inUse, ok := errors.AsType[bucketInUseError](err); ok {
+		return inUseResult(inUse, req.Object, corrected), nil
+	}
+	if err != nil {
 		return pluginkit.Result{Corrected: corrected}, err
 	}
 
@@ -158,7 +197,7 @@ func (p *Plugin) Reconcile(
 func bucketOf(request *pluginsv1alpha1.PluginRequest, params Params, s Settings) bucketRef {
 	ref := paramsRef(request, params, s)
 	if recorded := recordedBucket(request); recorded != nil {
-		ref.Name, ref.Region, ref.Recorded = recorded.Name, recorded.Location, true
+		ref.Name, ref.Region, ref.Recorded = recorded.Name, recorded.Location, recorded.ID != ""
 	}
 	return ref
 }
@@ -201,6 +240,58 @@ func changedBucket(recorded *pluginsv1alpha1.ResourceRef, ref bucketRef) *plugin
 			recorded.Location,
 		),
 	}
+}
+
+// keyInOtherRegion returns a Waiting with InvalidParameters when keyARN is
+// not the ARN of a KMS key, or names a key outside region, and nil otherwise.
+// An empty keyARN is no key.
+func keyInOtherRegion(keyARN, region string) *pluginkit.Waiting {
+	if keyARN == "" {
+		return nil
+	}
+
+	parsed, err := arn.Parse(keyARN)
+	switch {
+	case err != nil || parsed.Service != "kms":
+		return &pluginkit.Waiting{
+			Reason:  pluginsv1alpha1.ReasonInvalidParameters,
+			Message: fmt.Sprintf("The key input %s is not the ARN of a KMS key", keyARN),
+		}
+	case parsed.Region != region:
+		return &pluginkit.Waiting{
+			Reason: pluginsv1alpha1.ReasonInvalidParameters,
+			Message: fmt.Sprintf(
+				"The KMS key %s is in %s, and the bucket is in %s. S3 encrypts a bucket only with a key of its region",
+				keyARN,
+				parsed.Region,
+				region,
+			),
+		}
+	}
+	return nil
+}
+
+// inUseResult is the result of a request whose bucket name is in use.
+func inUseResult(
+	inUse bucketInUseError,
+	request *pluginsv1alpha1.PluginRequest,
+	corrected []string,
+) pluginkit.Result {
+	return pluginkit.Result{
+		Pending:      &pluginkit.Waiting{Reason: ReasonBucketNameInUse, Message: inUse.Error()},
+		Resources:    inUseRows(request),
+		RequeueAfter: inUseRequeue,
+		Corrected:    corrected,
+	}
+}
+
+// inUseRows returns the rows of ownRows without an S3Bucket row that has no
+// ARN: the request never had that bucket, so a changed bucketPrefix may free
+// it from the name.
+func inUseRows(request *pluginsv1alpha1.PluginRequest) []pluginsv1alpha1.ResourceRef {
+	return slices.DeleteFunc(ownRows(request), func(r pluginsv1alpha1.ResourceRef) bool {
+		return r.Kind == kindS3Bucket && r.ID == ""
+	})
 }
 
 // ownRows returns the rows of status.resources that the plugin wrote, so
@@ -260,17 +351,21 @@ func contract(s Settings, request string, ref bucketRef, principal string) *v1.O
 	}
 }
 
+// labelStoredSize is the summary item of the size of the objects in the
+// storage class S3 Standard, which the CloudWatch metric of bucketSize counts.
+const labelStoredSize = "Stored size (S3 Standard)"
+
 // summary returns the summary of the bucket of ref with the key keyARN. A
 // size that is not known shows as "Not known yet".
 func summary(ref bucketRef, keyARN string, size int64, sizeKnown bool) []pluginsv1alpha1.SummaryItem {
 	stored := pluginsv1alpha1.SummaryItem{
-		Label:    "Stored size",
+		Label:    labelStoredSize,
 		Value:    "Not known yet",
 		Severity: pluginsv1alpha1.SeverityInfo,
 	}
 	if sizeKnown {
 		stored = pluginsv1alpha1.SummaryItem{
-			Label: "Stored size",
+			Label: labelStoredSize,
 			Value: resource.NewQuantity(size, resource.BinarySI).String(),
 		}
 	}

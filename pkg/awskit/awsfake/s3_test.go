@@ -782,3 +782,16 @@ func TestS3RefusesToDeleteABucketWithVersions(t *testing.T) {
 
 	assert.Equal(t, "BucketNotEmpty", awskit.ErrorCode(err))
 }
+
+func TestS3FailCreateFailsEachCreateOfTheNameUntilCleared(t *testing.T) {
+	f := NewS3()
+	denied := &smithy.GenericAPIError{Code: "AccessDenied"}
+	f.FailCreate("bucket-1", denied)
+
+	require.ErrorIs(t, createBucket(f, "bucket-1", "eu-west-1"), denied)
+	require.ErrorIs(t, createBucket(f, "bucket-1", "eu-west-1"), denied)
+	require.NoError(t, createBucket(f, "bucket-2", "eu-west-1"))
+
+	f.FailCreate("bucket-1", nil)
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+}

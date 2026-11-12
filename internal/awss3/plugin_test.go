@@ -67,11 +67,48 @@ func TestBucketOfTakesTheDefaultsOfAnEmptyParameter(t *testing.T) {
 }
 
 func TestBucketOfPrefersTheRecordedRow(t *testing.T) {
-	ref := bucketOf(request(bucketRow("kept-bucket", "eu-north-1")), Params{Region: "eu-central-1"}, chartDefaults())
+	row := bucketRow("kept-bucket", "eu-north-1")
+	row.ID = "arn:aws:s3:::kept-bucket"
+
+	ref := bucketOf(request(row), Params{Region: "eu-central-1"}, chartDefaults())
 
 	assert.Equal(t, "kept-bucket", ref.Name)
 	assert.Equal(t, "eu-north-1", ref.Region)
 	assert.True(t, ref.Recorded)
+}
+
+func TestBucketOfTakesTheNameOfARowWithoutARNAndNotItsRecord(t *testing.T) {
+	ref := bucketOf(request(bucketRow("bound-bucket", "eu-north-1")), Params{}, chartDefaults())
+
+	assert.Equal(t, "bound-bucket", ref.Name)
+	assert.Equal(t, "eu-north-1", ref.Region)
+	assert.False(t, ref.Recorded, "a row without the ARN binds the name before the bucket was the request's")
+}
+
+func TestInUseRowsDropABindingThatNeverHadTheBucket(t *testing.T) {
+	bound := bucketRow("b1", "eu-west-1")
+	confirmed := bucketRow("b1", "eu-west-1")
+	confirmed.ID = "arn:aws:s3:::b1"
+	contract := pluginsv1alpha1.ResourceRef{Kind: kindObjectStorageConfig, Name: "orders-backup"}
+	grant := pluginsv1alpha1.ResourceRef{Kind: "Grant", Name: "g"}
+
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{contract}, inUseRows(request(bound, contract, grant)))
+	assert.Equal(t, []pluginsv1alpha1.ResourceRef{confirmed, contract}, inUseRows(request(confirmed, contract, grant)))
+}
+
+func TestKeyOfAnotherRegionIsRefused(t *testing.T) {
+	assert.Nil(t, keyInOtherRegion("", "eu-central-1"))
+	assert.Nil(t, keyInOtherRegion(keyARN, "eu-west-1"))
+
+	waiting := keyInOtherRegion(keyARN, "eu-central-1")
+	require.NotNil(t, waiting)
+	assert.Equal(t, pluginsv1alpha1.ReasonInvalidParameters, waiting.Reason)
+	assert.Contains(t, waiting.Message, keyARN+" is in eu-west-1")
+	assert.Contains(t, waiting.Message, "eu-central-1")
+
+	notAKey := keyInOtherRegion("arn:aws:iam::111122223333:role/r", "eu-west-1")
+	require.NotNil(t, notAKey)
+	assert.Contains(t, notAKey.Message, "not the ARN of a KMS key")
 }
 
 func TestChangedBucketRefusesAnotherRegion(t *testing.T) {
@@ -144,7 +181,7 @@ func TestSummaryShowsTheSizeAsNotKnownYet(t *testing.T) {
 
 	require.Len(t, unknown, 4)
 	assert.Equal(t, pluginsv1alpha1.SummaryItem{
-		Label:    "Stored size",
+		Label:    "Stored size (S3 Standard)",
 		Value:    "Not known yet",
 		Severity: pluginsv1alpha1.SeverityInfo,
 	}, unknown[1])

@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -207,7 +208,7 @@ var _ = Describe("the AWS S3 plugin", func() {
 			}))
 			g.Expect(got.Status.Summary).To(ContainElements(
 				HaveField("Value", name),
-				SatisfyAll(HaveField("Label", "Stored size"), HaveField("Value", "Not known yet")),
+				SatisfyAll(HaveField("Label", "Stored size (S3 Standard)"), HaveField("Value", "Not known yet")),
 				HaveField("Value", "SSE-KMS with an S3 Bucket Key, key "+keyARN),
 				SatisfyAll(HaveField("Label", "Region"), HaveField("Value", home)),
 			))
@@ -299,6 +300,72 @@ var _ = Describe("the AWS S3 plugin", func() {
 				HaveField("Kind", "S3Bucket"), HaveField("Name", name), HaveField("Location", home),
 			)))
 		}, timeout).Should(Succeed())
+	})
+
+	It("binds the bucket name before it creates the bucket", func() {
+		ns := newNamespace()
+		name := bucketNameOf(ns)
+		fake.FailCreate(name, &smithy.GenericAPIError{Code: "AccessDenied", Message: "The proof refuses it"})
+		DeferCleanup(func() { fake.FailCreate(name, nil) })
+		request := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(conditionOf(g, request, v1.ConditionReady).Reason).To(Equal(pluginkit.ReasonReconcileError))
+			g.Expect(read(g, request).Status.Resources).To(ContainElement(SatisfyAll(
+				HaveField("Kind", "S3Bucket"), HaveField("Name", name),
+			)))
+		}, timeout).Should(Succeed())
+		_, created := fake.Bucket(name)
+		Expect(created).To(BeFalse())
+
+		// A create that failed can still have made the bucket, so the name
+		// stays bound.
+		Eventually(func(g Gomega) {
+			got := read(g, request)
+			got.Spec.Parameters = raw(`{"bucketPrefix":"other"}`)
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		Eventually(func(g Gomega) {
+			c := conditionOf(g, request, pluginsv1alpha1.ConditionOutputsReady)
+			g.Expect(c.Reason).To(Equal(pluginsv1alpha1.ReasonInvalidParameters))
+			g.Expect(c.Message).To(ContainSubstring(name))
+		}, timeout).Should(Succeed())
+
+		fake.FailCreate(name, nil)
+		Eventually(func(g Gomega) {
+			got := read(g, request)
+			got.Spec.Parameters = nil
+			g.Expect(k8s.Update(ctx, got)).To(Succeed())
+		}, timeout).Should(Succeed())
+		Eventually(func(g Gomega) {
+			readyGrants(g, request)
+			g.Expect(conditionOf(g, request, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(read(g, request).Status.Resources).To(ContainElement(SatisfyAll(
+				HaveField("Kind", "S3Bucket"), HaveField("ID", "arn:aws:s3:::"+name),
+			)))
+		}, timeout).Should(Succeed())
+	})
+
+	It("keeps the contract of an orphaned bucket when a new request of the claim is deleted", func() {
+		ns := newNamespace()
+		orphaned := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyOrphan)
+		readyRequest(orphaned)
+		Expect(k8s.Delete(ctx, orphaned)).To(Succeed())
+		Eventually(gone(orphaned), timeout).Should(BeTrue())
+
+		again := bucketRequest(ns, nil, pluginsv1alpha1.DeletionPolicyDelete)
+		Expect(k8s.Create(ctx, again)).To(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(conditionOf(g, again, pluginsv1alpha1.ConditionOutputsReady).Reason).
+				To(Equal(awss3.ReasonBucketNameInUse))
+		}, timeout).Should(Succeed())
+		Expect(k8s.Delete(ctx, again)).To(Succeed())
+		Eventually(gone(again), timeout).Should(BeTrue())
+
+		Expect(contractOf(Default, orphaned).Spec.S3.BucketName).To(Equal(bucketNameOf(ns)))
+		_, kept := fake.Bucket(bucketNameOf(ns))
+		Expect(kept).To(BeTrue())
 	})
 
 	It("keeps the bucket when the region parameter changes", func() {

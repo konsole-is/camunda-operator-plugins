@@ -11,13 +11,13 @@ For each request, the plugin creates one general purpose bucket in the region of
 - The name is `<bucketPrefix>-<namespace>-<claim>-<hash>`, at most 63 characters. Each `.` of the namespace or the claim becomes `-`. A name that is too long is cut before the hash. The hash is 16 hex digits of `<namespace>/<claim>`, so two claims whose names read the same after the cut, or such as `a-b/c` and `a/b-c`, get two names.
 - The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the PluginRequest. The tags of the chart value `extraTags` go on the bucket too. The plugin creates the bucket with its tags in one call, so a stop of the controller leaves no bucket without its tags.
 - The public access block has all four flags on. AWS turns them on for a new bucket. The plugin reads the block at each reconcile, and writes it only when a flag is off or the block is missing.
-- The default encryption is SSE-KMS with the key of the `key` input and an S3 Bucket Key. Without a key, it is SSE-S3.
+- The default encryption is SSE-KMS with the key of the `key` input and an S3 Bucket Key. Without a key, it is SSE-S3. The key must be in the region of the bucket.
 - The lifecycle rule `abort-incomplete-uploads` aborts an incomplete multipart upload after `abortIncompleteUploadDays` days. The plugin keeps each other lifecycle rule of the bucket.
 - Versioning stays off. The plugin never writes a bucket policy: pods get access to the bucket through the grants (see [Grants](#grants)).
 
 The plugin also writes one `ObjectStorageConfig` named after the request, in the namespace of the request. It has the type `S3`, the bucket, the region, and `auth.type: workloadIdentity`. With the chart value `mode: irsa`, `auth.workloadIdentity.roleArn` is the role of the `principal` input. With `mode: podIdentity`, it names no role, because a role annotation on the ServiceAccount makes the IRSA token win over Pod Identity.
 
-A bucket is bound to the PluginRequest that created it, by its tag `camunda.io/request-uid`. The plugin never uses, changes, or deletes a bucket with another UID or with no UID: the request reports `BucketNameInUse`. Bucket names are global across all AWS accounts. Two Kubernetes clusters with the same namespace and claim get the same name when they use the same `bucketPrefix`, also in two accounts. Give each Kubernetes cluster its own `bucketPrefix` (see [Parameters](#parameters)).
+Before the plugin creates a bucket, it records the name and the region of the bucket in `status.resources` of the request: a create whose answer is lost can still make the bucket. Then the request reports `RecordingBucket` for about one second. A bucket is bound to the PluginRequest that created it, by its tag `camunda.io/request-uid`. The plugin never uses, changes, or deletes a bucket with another UID or with no UID: the request reports `BucketNameInUse`. Bucket names are global across all AWS accounts. Two Kubernetes clusters with the same namespace and claim get the same name when they use the same `bucketPrefix`, also in two accounts. Give each Kubernetes cluster its own `bucketPrefix` (see [Parameters](#parameters)).
 
 At each reconcile, and at the latest after `resync`, the plugin writes the tags, the public access block, the default encryption, and the abort rule again when someone changed them. The request then records the event `DriftCorrected`.
 
@@ -26,7 +26,7 @@ The plugin also writes:
 - One PluginRegistration for each item of the chart value `registrations`.
 - One Lease `<release>` in the release namespace. Only the replica that holds it writes.
 
-The summary of a request shows the bucket, the stored size, the encryption, and the region. The stored size is the latest daily `BucketSizeBytes` metric of the bucket in CloudWatch. It is `Not known yet` when CloudWatch has no data point of the last three days, or when the controller role cannot read CloudWatch. The request links to the bucket in the S3 console.
+The summary of a request shows the bucket, the stored size, the encryption, and the region. The stored size is the latest daily `BucketSizeBytes` metric of the bucket in CloudWatch, for the storage class S3 Standard only. An object that a lifecycle rule moved to another storage class does not count. It is `Not known yet` when CloudWatch has no data point of the last three days, or when the controller role cannot read CloudWatch. The request links to the bucket in the S3 console.
 
 ## Prerequisites
 
@@ -127,11 +127,11 @@ registrations:
 
 | Parameter | Meaning |
 | --- | --- |
-| `bucketPrefix` | The start of each bucket name. The default is `camunda`. 1 to 40 characters of `a-z`, `0-9`, and `-`, which start and end with a letter or a digit. S3 reserves the prefixes `xn--`, `sthree-`, and `amzn-s3-demo-`. |
+| `bucketPrefix` | The start of each bucket name. The default is `camunda`. 1 to 40 characters of `a-z`, `0-9`, and `-`, which start and end with a letter or a digit. S3 reserves the name prefixes `xn--`, `sthree-`, and `amzn-s3-demo-`, and the name continues with `-` after `bucketPrefix`, so `sthree` and `amzn-s3-demo` are refused too. |
 | `region` | The region of the bucket. Empty is the chart value `region`. |
 | `abortIncompleteUploadDays` | The days after which S3 aborts an incomplete multipart upload, at least 1. The default is 7. |
 
-`bucketPrefix` and `region` cannot change after the bucket exists. The status of the request records the name and the region of its bucket. When a later value names another bucket, the request reports `InvalidParameters`, the backups stay in their bucket, and the plugin creates no second bucket. A bucket in another region needs a new claim. The plugin copies no backups into the bucket of the new claim.
+`bucketPrefix` and `region` cannot change after the plugin recorded the bucket, which it does before it creates the bucket. The status of the request records the name and the region of its bucket. When a later value names another bucket, the request reports `InvalidParameters`, the backups stay in their bucket, and the plugin creates no second bucket. A bucket in another region needs a new claim. The plugin copies no backups into the bucket of the new claim.
 
 Give each Kubernetes cluster its own `bucketPrefix` when two clusters can have a claim of the same name in the same namespace. Else the second cluster finds the bucket of the first, and its request reports `BucketNameInUse`.
 
@@ -166,7 +166,7 @@ The registration offers the deletion policies `Delete` and `Orphan`.
 
 The delete of a large bucket takes several passes. S3 deletes at most 1,000 keys with one call, and about 3,500 objects per second for each prefix. So one million objects take at least about five minutes. One pass deletes objects for `deleteBudget`, and then the request reconciles again after one second. Meanwhile `Ready` of the request is `False` with reason `Deleting` and the message `Deleting the objects of the bucket <name>`. The message gives no count of the objects that are left. A restart of the controller does not lose progress: the next pass goes on with the objects that are left.
 
-`Delete` deletes nothing when the bucket does not carry the UID of the request, for example a bucket of another Kubernetes cluster. The request then goes away, and the bucket stays.
+`Delete` deletes nothing when the bucket does not carry the UID of the request, for example a bucket of another Kubernetes cluster. The request then goes away, and the bucket stays. It also keeps an `ObjectStorageConfig` without an owner reference to the request, such as the contract that an `Orphan` kept.
 
 A new request has a new UID, also a request of the same claim after an `Orphan` deletion or after a restore of the namespace from a backup. While the old bucket has the name, the new request reports `BucketNameInUse`. To give the old bucket to the new request, tag the bucket with `camunda.io/request-uid` set to the UID of the new PluginRequest:
 
@@ -187,7 +187,8 @@ aws s3api put-bucket-tagging --bucket <bucket> --region <region> \
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `BucketNameInUse` | `OutputsReady` and `Ready` of the request | The bucket name belongs to another owner. The message names the bucket and the owner: a request with its UID, `no request` for a bucket without the tag `camunda.io/request-uid` such as an orphaned bucket, `another AWS account`, or a bucket of the same name in another region. Set another `bucketPrefix` in the `parameterValues` of the registration (see [Chart values](#chart-values)), give the bucket to the request (see [Deletion](#deletion)), or delete the bucket with its backups. The plugin checks again each minute. |
-| `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not match the schema, or `bucketPrefix` or `region` changed after the bucket exists. The message says which, and names the bucket and its region. Set the parameters back. |
+| `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not match the schema, `bucketPrefix` or `region` changed after the plugin recorded the bucket, or the key of the `key` input is in another region than the bucket. The message says which, and names the bucket and its region, or the key and its region. Set the parameters back, or give the claim a key of the region of the bucket. |
+| `RecordingBucket` | `OutputsReady` and `Ready` of the request | The plugin recorded the bucket in the status, and creates it at the next reconcile, after about one second. Nothing to do. |
 | `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, usually `AccessDenied` when the controller role lacks a permission above. pluginkit tries again. |
 | `Deleting` | `Ready` of a deleted request | The plugin is deleting the objects of the bucket in passes. Nothing to do. |
 | `DeleteFailed` | `Ready` of a deleted request | The plugin could not empty or delete the bucket. The message gives the error. For an object that S3 refused to delete, it names the key and the code, for example `AccessDenied` when the role lacks `s3:DeleteObjectVersion`, or a code of S3 Object Lock. For an object under S3 Object Lock, wait until its retention ends, or remove its legal hold. The finalizer stays, and pluginkit tries again. |

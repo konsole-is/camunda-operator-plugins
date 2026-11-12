@@ -70,8 +70,8 @@ type bucketRef struct {
 	Namespace, Claim, Request, UID string
 	// Name and Region are the name and the region of the bucket.
 	Name, Region string
-	// Recorded says that the status of the request records the bucket, so
-	// the request had it.
+	// Recorded says that the status of the request records the bucket with
+	// its ARN, so the request had it.
 	Recorded bool
 }
 
@@ -114,6 +114,27 @@ func (e bucketInUseError) Error() string {
 		e.Bucket,
 		e.Owner,
 	)
+}
+
+// claimable returns bucketInUseError when the bucket of ref exists and does
+// not carry the UID of ref. It reads only, and leaves a bucket that S3 refuses
+// to show to ensure.
+func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
+	c := b.s3(ref.Region)
+
+	exists, err := headBucket(ctx, c, ref)
+	if !exists || err != nil {
+		return err
+	}
+
+	tags, err := bucketTagsOf(ctx, c, ref.Name)
+	if err != nil {
+		return err
+	}
+	if !awskit.OwnedBy(tags, ref.UID) {
+		return bucketInUseError{Bucket: ref.Name, Owner: awskit.OwnerOf(tags)}
+	}
+	return nil
 }
 
 // ensure keeps the bucket of ref in the desired state w: it creates the
@@ -181,14 +202,9 @@ func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]
 // returns bucketInUseError for a bucket of another account or of another
 // region.
 func createBucket(ctx context.Context, c awskit.S3, ref bucketRef, tags map[string]string) (bool, error) {
-	_, err := c.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(ref.Name)})
-	switch {
-	case err == nil:
-		return false, nil
-	case inOtherRegion(err):
-		return false, bucketInUseError{Bucket: ref.Name, Owner: "a bucket of the same name in another region"}
-	case !awskit.IsNotFound(err) && !awskit.IsAccessDenied(err):
-		return false, fmt.Errorf("reading the bucket %s: %w", ref.Name, err)
+	exists, err := headBucket(ctx, c, ref)
+	if exists || err != nil {
+		return false, err
 	}
 
 	config := &types.CreateBucketConfiguration{Tags: s3Tags(tags)}
@@ -209,6 +225,22 @@ func createBucket(ctx context.Context, c awskit.S3, ref bucketRef, tags map[stri
 		return false, fmt.Errorf("creating the bucket %s: %w", ref.Name, err)
 	}
 	return true, nil
+}
+
+// headBucket reports whether the bucket of ref exists in its region. A
+// bucket that S3 refuses to show is not known to exist. A bucket of the name
+// in another region is bucketInUseError.
+func headBucket(ctx context.Context, c awskit.S3, ref bucketRef) (bool, error) {
+	_, err := c.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(ref.Name)})
+	switch {
+	case err == nil:
+		return true, nil
+	case inOtherRegion(err):
+		return false, bucketInUseError{Bucket: ref.Name, Owner: "a bucket of the same name in another region"}
+	case awskit.IsNotFound(err) || awskit.IsAccessDenied(err):
+		return false, nil
+	}
+	return false, fmt.Errorf("reading the bucket %s: %w", ref.Name, err)
 }
 
 func inOtherRegion(err error) bool {

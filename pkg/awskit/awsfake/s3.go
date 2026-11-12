@@ -74,6 +74,8 @@ type S3 struct {
 	// refused holds bucket/key for each key that DeleteObjects refuses, with
 	// the code of the refusal.
 	refused map[string]string
+	// createErrors holds the error of each create of a bucket name.
+	createErrors map[string]error
 	// versions counts the delete markers, for their version IDs.
 	versions int
 	fail     failures
@@ -108,7 +110,7 @@ type ObjectVersion struct {
 
 // NewS3 returns an S3 without buckets.
 func NewS3() *S3 {
-	f := &S3{buckets: map[string]*Bucket{}, refused: map[string]string{}}
+	f := &S3{buckets: map[string]*Bucket{}, refused: map[string]string{}, createErrors: map[string]error{}}
 	f.s3Region = s3Region{f: f}
 	return f
 }
@@ -173,6 +175,18 @@ func (f *S3) RefuseDelete(bucket, key, code string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.refused[bucket+"/"+key] = code
+}
+
+// FailCreate makes each CreateBucket call of the bucket name return err,
+// until a call of FailCreate with a nil err.
+func (f *S3) FailCreate(name string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err == nil {
+		delete(f.createErrors, name)
+		return
+	}
+	f.createErrors[name] = err
 }
 
 // FailNext makes the next call of operation, such as "CreateBucket", in any
@@ -319,6 +333,9 @@ func (r s3Region) CreateBucket(
 	}
 
 	name := aws.ToString(in.Bucket)
+	if err := r.f.createErrors[name]; err != nil {
+		return nil, err
+	}
 	if !bucketName.MatchString(name) {
 		return nil, apiError("InvalidBucketName", "The specified bucket is not valid.")
 	}

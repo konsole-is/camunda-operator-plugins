@@ -569,3 +569,27 @@ func TestReleaseKeepsABucketOfAnotherRequest(t *testing.T) {
 	assert.Empty(t, actions)
 	assert.Equal(t, otherUID, bucketOfFake(t, f, ref.Name).Tags[awskit.TagRequestUID])
 }
+
+func TestClaimableAcceptsAMissingBucket(t *testing.T) {
+	b, f := newBuckets()
+
+	require.NoError(t, b.claimable(context.Background(), testRef("eu-west-1")))
+	assert.Empty(t, f.Buckets(), "it creates nothing")
+}
+
+func TestClaimableAcceptsTheBucketOfTheRequest(t *testing.T) {
+	b, _, ref := ensured(t)
+
+	assert.NoError(t, b.claimable(context.Background(), ref))
+}
+
+func TestClaimableRefusesABucketOfAnotherRequest(t *testing.T) {
+	b, f, ref := ensured(t)
+	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.Tags[awskit.TagRequestUID] = otherUID })
+
+	err := b.claimable(context.Background(), ref)
+
+	var inUse bucketInUseError
+	require.ErrorAs(t, err, &inUse)
+	assert.Contains(t, inUse.Owner, otherUID)
+}
