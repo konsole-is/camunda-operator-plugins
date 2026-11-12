@@ -362,9 +362,9 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 }
 
 // trustNobody makes the role name of req trust nobody, deletes the
-// associations of req, keeps the Grants of the role in sync, and then tags the role with the
-// hash of that state. It returns the drift that it repaired, also with an
-// error, and whether a Grant changed after it was read.
+// associations of req, keeps the Grants of the role in sync, and then tags
+// the role with its desired hash. It returns the drift that it repaired, also
+// with an error, and whether a Grant changed after it was read.
 func (p *Plugin) trustNobody(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -450,8 +450,8 @@ func (p *Plugin) desiredRole(
 }
 
 // ensureRole calls awskit.EnsureRole with spec and hash, records an event
-// when it created or updated the role, and returns the role and the change,
-// also with an error.
+// when it created or updated the role, and returns the role and the change.
+// With an error, it still returns the change.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],

@@ -316,8 +316,8 @@ func (p *Plugin) roleSpec(request *pluginsv1alpha1.PluginRequest, name string, s
 }
 
 // ensureRole calls awskit.EnsureRole with spec and hash, records an event
-// when it created or updated the role, and returns the role and the change,
-// also with an error.
+// when it created or updated the role, and returns the role and the change.
+// With an error, it still returns the change.
 func (p *Plugin) ensureRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
