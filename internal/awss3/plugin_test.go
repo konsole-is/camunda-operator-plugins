@@ -122,6 +122,14 @@ func TestKeyOfAnotherRegionIsRefused(t *testing.T) {
 	assert.Contains(t, notAKey.Message, "not the ARN of a KMS key")
 }
 
+func TestAnAliasARNIsNotAKey(t *testing.T) {
+	alias := keyInOtherRegion("arn:aws:kms:eu-west-1:111122223333:alias/backups", "eu-west-1")
+
+	require.NotNil(t, alias, "an IAM grant on an alias does not let the role use the key")
+	assert.Equal(t, pluginsv1alpha1.ReasonInvalidParameters, alias.Reason)
+	assert.Contains(t, alias.Message, "not the ARN of a KMS key")
+}
+
 func TestChangedBucketRefusesAnotherRegion(t *testing.T) {
 	row := bucketRow("camunda-team-a-orders-0123456789abcdef", "eu-west-1")
 	ref := bucketRef{Name: row.Name, Region: "eu-central-1"}

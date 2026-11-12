@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -279,8 +280,9 @@ func keyInOtherRegion(keyARN, region string) *pluginkit.Waiting {
 	}
 
 	parsed, err := arn.Parse(keyARN)
+	id, isKey := strings.CutPrefix(parsed.Resource, "key/")
 	switch {
-	case err != nil || parsed.Service != "kms":
+	case err != nil || parsed.Service != "kms" || !isKey || id == "":
 		return &pluginkit.Waiting{
 			Reason:  pluginsv1alpha1.ReasonInvalidParameters,
 			Message: fmt.Sprintf("The key input %s is not the ARN of a KMS key", keyARN),
