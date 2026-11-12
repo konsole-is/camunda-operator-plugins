@@ -102,16 +102,17 @@ func FitName(name string, maxLen int) string {
 	return name[:maxLen-9] + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// BucketName returns a valid S3 bucket name of at most 63 characters for
-// parts, which hold only a-z, 0-9, "-", and ".": the parts joined by "-",
-// each "." as "-", cut after 46 characters, and a dash and 16 hex digits of
-// a hash of the parts. Two lists of parts get two names, also when they read
-// the same after the join or after the cut, such as a-b/c and a/b-c. A name
-// must never change for the same parts, because a live bucket has it.
+// BucketName returns a bucket name of at most 63 characters for parts that
+// hold only a-z, 0-9, "-", and ".". The name starts with the first part and a
+// "-" when that part has at most 45 characters, no ".", and ends with a letter
+// or a digit. Two lists of parts, also a-b/c and a/b-c, get one name only
+// when the 16 hex digits of their hashes are the same. The same parts give
+// the same name in each release.
 func BucketName(parts ...string) string {
+	// Live buckets have the names of this formula.
 	sum := sha256.Sum256([]byte(strings.Join(parts, "/")))
-	// Two requests whose names share the hash share one bucket, so the hash
-	// keeps 16 hex digits.
+	// Two requests with one name share the bucket in rustfs, and aws-s3
+	// refuses the second.
 	suffix := "-" + hex.EncodeToString(sum[:])[:16]
 
 	readable := strings.ReplaceAll(strings.Join(parts, "-"), ".", "-")

@@ -105,9 +105,7 @@ type action struct {
 // region, or that S3 refuses to show the bucket.
 type bucketInUseError struct {
 	Bucket, Owner string
-	// MaybeOwn says that the bucket can still be the bucket of the request:
-	// S3 refused to show it, or the call created it and S3 shows no UID tag
-	// on it yet.
+	// MaybeOwn says that the bucket can still be the bucket of the request.
 	MaybeOwn bool
 }
 
