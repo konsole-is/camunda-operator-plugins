@@ -1,0 +1,36 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RolesWithTheBoundary",
+      "Effect": "Allow",
+      "Action": ["iam:CreateRole", "iam:PutRolePermissionsBoundary", "iam:PutRolePolicy"],
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-hub-*",
+      "Condition": {
+        "StringEquals": {"iam:PermissionsBoundary": "arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary"}
+      }
+    },
+    {
+      "Sid": "Roles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole", "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:DeleteRole",
+        "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:DeleteRolePolicy",
+        "iam:ListAttachedRolePolicies", "iam:DetachRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-hub-*"
+    },
+    {
+      "Sid": "Health",
+      "Effect": "Allow",
+      "Action": ["iam:GetPolicy"],
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary"
+    },
+    {
+      "Sid": "Caller",
+      "Effect": "Allow",
+      "Action": ["sts:GetCallerIdentity"],
+      "Resource": "*"
+    }
+  ]
+}

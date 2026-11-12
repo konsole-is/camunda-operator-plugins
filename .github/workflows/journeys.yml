@@ -18,6 +18,7 @@ on:
       - go.mod
       - go.sum
       - .github/workflows/journeys.yml
+      - .github/actions/kind-tools/**
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -49,32 +50,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The operator on kind is built from the commit that the api module of
-      # go.mod names, so its CRDs are those that the plugins are built against.
-      - name: Check out the operator at the api ref
-        run: |
-          echo "OPERATOR_DIR=${RUNNER_TEMP}/camunda-operator" >> "${GITHUB_ENV}"
-          OPERATOR_DIR="${RUNNER_TEMP}/camunda-operator" hack/ci-retry.sh make operator-source
-
-      # kind and kubebuilder install the versions of .tool-versions of the
-      # operator, as its own kind jobs do.
-      - name: Install kind and kubebuilder
-        run: |
-          KIND_VERSION=$(awk '$1 == "kind" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
-          curl -fsSLo ./kind --retry 5 --retry-delay 10 --retry-all-errors \
-            "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-$(go env GOARCH)"
-          chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
-          KUBEBUILDER_VERSION=$(awk '$1 == "kubebuilder" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
-          curl -fsSL -o kubebuilder --retry 5 --retry-delay 10 --retry-all-errors \
-            "https://github.com/kubernetes-sigs/kubebuilder/releases/download/v${KUBEBUILDER_VERSION}/kubebuilder_$(go env GOOS)_$(go env GOARCH)"
-          chmod +x kubebuilder && sudo mv kubebuilder /usr/local/bin/
-          kind version
-          kubebuilder version
-
-      - name: Install Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          version: v4.3.1
+      - name: Install the kind tools
+        uses: ./.github/actions/kind-tools
 
       # The Elasticsearch node that ECK runs needs this kernel limit on the
       # kind host.

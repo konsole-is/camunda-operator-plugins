@@ -1,0 +1,37 @@
+name: Kind tools
+description: >-
+  Checks out the operator at the api ref of go.mod into
+  $RUNNER_TEMP/camunda-operator, sets OPERATOR_DIR, and installs kind,
+  kubebuilder, and Helm. Set up Go before it.
+
+runs:
+  using: composite
+  steps:
+    # The operator on kind is built from the commit that the api module of
+    # go.mod names, so its CRDs are those that the plugins are built against.
+    - name: Check out the operator at the api ref
+      shell: bash
+      run: |
+        echo "OPERATOR_DIR=${RUNNER_TEMP}/camunda-operator" >> "${GITHUB_ENV}"
+        OPERATOR_DIR="${RUNNER_TEMP}/camunda-operator" hack/ci-retry.sh make operator-source
+
+    # kind and kubebuilder install the versions of .tool-versions of the
+    # operator, as its own kind jobs do.
+    - name: Install kind and kubebuilder
+      shell: bash
+      run: |
+        KIND_VERSION=$(awk '$1 == "kind" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
+        curl -fsSLo ./kind --retry 5 --retry-delay 10 --retry-all-errors \
+          "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-$(go env GOARCH)"
+        chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+        KUBEBUILDER_VERSION=$(awk '$1 == "kubebuilder" { print $2 }' "${OPERATOR_DIR}/.tool-versions")
+        curl -fsSL -o kubebuilder --retry 5 --retry-delay 10 --retry-all-errors \
+          "https://github.com/kubernetes-sigs/kubebuilder/releases/download/v${KUBEBUILDER_VERSION}/kubebuilder_$(go env GOOS)_$(go env GOARCH)"
+        chmod +x kubebuilder && sudo mv kubebuilder /usr/local/bin/
+        kind version
+        kubebuilder version
+
+    - name: Install Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      with:
+        version: v4.3.1

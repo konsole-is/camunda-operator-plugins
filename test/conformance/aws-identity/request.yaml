@@ -1,0 +1,17 @@
+# The request of the STS check of check.sh, as a claim controller writes it.
+# The role trusts the ServiceAccount trusted only.
+apiVersion: plugins.camunda.io/v1alpha1
+kind: PluginRequest
+metadata:
+  name: sts-check
+  namespace: conformance-aws-identity-sts
+  labels:
+    plugins.camunda.io/section: cloud-identity
+    plugins.camunda.io/registration: aws-irsa
+    fleet.camunda.io/claim: sts-check
+spec:
+  section: cloud-identity
+  registration: aws-irsa
+  claimRef: {kind: CamundaClusterClaim, name: sts-check}
+  target: {kind: CamundaCluster, name: sts-check, serviceAccountName: trusted}
+  deletionPolicy: Delete

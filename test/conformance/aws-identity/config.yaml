@@ -1,0 +1,15 @@
+# The run of plugin-conformance against the registration aws-irsa. The
+# target needs no object: the role trusts its ServiceAccount by name. The
+# case runs once with Delete and once with Orphan.
+registration: aws-irsa
+namespace: conformance-aws-identity
+timeouts:
+  outputsReady: 2m
+  ready: 5m
+  deletion: 3m
+cases:
+  - name: basic
+    target:
+      kind: CamundaCluster
+      name: orders
+      serviceAccountName: orders-camunda
