@@ -34,7 +34,7 @@ func chartDefaults() Settings {
 		Partition:    "aws",
 		Mode:         awskit.ModeIRSA,
 		ExtraTags:    awskit.ExtraTags{},
-		DeleteBudget: 30 * time.Second,
+		DeleteBudget: 15 * time.Second,
 	}
 }
 

@@ -29,7 +29,7 @@ extraTags: {}
 # deleteBudget is the time for which one pass of a delete deletes objects.
 # A bucket with more objects than one pass deletes takes more passes, and the
 # request requeues between them.
-deleteBudget: 30s
+deleteBudget: 15s
 
 # resync is the time after which the controller reconciles each request
 # again, and repairs a bucket setting that was changed outside the cluster.

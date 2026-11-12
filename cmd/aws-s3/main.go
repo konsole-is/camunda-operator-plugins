@@ -86,7 +86,7 @@ func main() {
 	flag.DurationVar(
 		&opts.Settings.DeleteBudget,
 		"delete-budget",
-		30*time.Second,
+		15*time.Second,
 		"The time for which one pass of a delete deletes objects. A larger bucket takes more passes.",
 	)
 	flag.DurationVar(
