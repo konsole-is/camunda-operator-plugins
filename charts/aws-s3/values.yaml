@@ -124,6 +124,8 @@ registrations:
         abortIncompleteUploadDays:
           type: integer
           minimum: 1
+          # The plugin reads the days as a 32-bit integer.
+          maximum: 2147483647
           default: 7
           description: Days after which S3 aborts an incomplete multipart upload.
 

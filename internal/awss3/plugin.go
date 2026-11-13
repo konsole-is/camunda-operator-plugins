@@ -169,10 +169,7 @@ func (p *Plugin) Reconcile(
 	if days := req.Parameters.AbortIncompleteUploadDays; days != nil {
 		w.AbortDays = *days
 	}
-	served := prior{
-		Served: req.Object.Status.Outputs[outputBucket] != "",
-		KeyARN: req.Object.Status.Outputs[outputKeyARN],
-	}
+	served := prior{Served: req.Object.Status.Outputs[outputBucket] != ""}
 
 	actions, err := p.buckets.ensure(ctx, ref, w, served)
 	corrected := record(req, actions)

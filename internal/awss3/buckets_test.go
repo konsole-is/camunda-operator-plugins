@@ -59,10 +59,10 @@ func testWant(ref bucketRef) want {
 }
 
 // newBuckets returns the buckets of a new fake, with a delete budget of one
-// minute.
+// minute and writes that do not settle.
 func newBuckets() (buckets, *awsfake.S3) {
 	f := awsfake.NewS3()
-	return buckets{s3: f.In, deleteBudget: time.Minute}, f
+	return buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(0, time.Now)}, f
 }
 
 // ensured returns buckets whose bucket of testRef exists, as the plugin
@@ -195,7 +195,7 @@ func TestEnsureRepairsTheEncryptionAsDrift(t *testing.T) {
 		}
 	})
 
-	actions, err := b.ensure(context.Background(), ref, w, prior{Served: true, KeyARN: keyARN})
+	actions, err := b.ensure(context.Background(), ref, w, prior{Served: true})
 
 	require.NoError(t, err)
 	assert.Len(t, corrected(actions), 1)
@@ -447,7 +447,7 @@ func TestEnsureLeavesAnEncryptionThatS3ShowsLateAfterTheCreate(t *testing.T) {
 	settlingLeft(t, err)
 	c.now = c.now.Add(10 * time.Second)
 
-	actions, err := b.ensure(context.Background(), ref, w, prior{Served: true, KeyARN: keyARN})
+	actions, err := b.ensure(context.Background(), ref, w, prior{Served: true})
 
 	assert.Equal(t, 50*time.Second, settlingLeft(t, err))
 	assert.Empty(t, actions)
@@ -561,9 +561,9 @@ func TestEnsureReportsAPublicAccessBlockTurnedOffOnceWhenS3ShowsTheRepairLate(t 
 	assert.Equal(t, 1, count(f.Calls(), "PutPublicAccessBlock"))
 }
 
-func TestEnsureRepairsDriftAtTheFirstLookAfterAStart(t *testing.T) {
+func TestEnsureRepairsAPublicAccessBlockAsDriftAtTheFirstLookAfterAStart(t *testing.T) {
 	_, f, ref := ensured(t)
-	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.LifecycleRules = nil })
+	f.Edit(ref.Name, func(bucket *awsfake.Bucket) { bucket.PublicAccessBlock.BlockPublicPolicy = aws.Bool(false) })
 	// A new plugin process knows no write of the process before.
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
 	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(time.Minute, c.Now)}
@@ -571,7 +571,8 @@ func TestEnsureRepairsDriftAtTheFirstLookAfterAStart(t *testing.T) {
 	repaired, err := restarted.ensure(context.Background(), ref, testWant(ref), prior{Served: true})
 
 	assert.Equal(t, time.Minute, settlingLeft(t, err))
-	assert.Len(t, corrected(repaired), 1)
+	assert.Equal(t, []string{"blocked the public access of the bucket " + ref.Name + " again"}, corrected(repaired),
+		"the plugin writes no other public access block, so a read that differs is drift")
 }
 
 func keyOfFake(t *testing.T, f *awsfake.S3, name string) string {
@@ -597,7 +598,7 @@ func recreated(t *testing.T) (buckets, *awsfake.S3, *clock, bucketRef, want) {
 
 func TestEnsureFinishesARecreatedBucketWhoseTagsShowLate(t *testing.T) {
 	b, f, c, ref, w := recreated(t)
-	served := prior{Served: true, KeyARN: keyARN}
+	served := prior{Served: true}
 	f.ShowLate("GetBucketTagging", -1)
 	_, err := b.ensure(context.Background(), ref, w, served)
 	tagsLeft(t, err)
@@ -615,7 +616,7 @@ func TestEnsureFinishesARecreatedBucketWhoseTagsShowLate(t *testing.T) {
 
 func TestEnsureFinishesARecreatedBucketAfterAFailedWrite(t *testing.T) {
 	b, f, c, ref, w := recreated(t)
-	served := prior{Served: true, KeyARN: keyARN}
+	served := prior{Served: true}
 	f.FailNext("PutBucketEncryption", errors.New("the proof refuses it"))
 	_, err := b.ensure(context.Background(), ref, w, served)
 	require.ErrorContains(t, err, "the proof refuses it")
@@ -639,11 +640,11 @@ func TestEnsureWritesAKeyThatChangesBackWhileS3ShowsTheOldKey(t *testing.T) {
 	f.ShowLate("GetBucketEncryption", -1)
 	second := first
 	second.KeyARN = otherKeyARN
-	_, err = b.ensure(context.Background(), ref, second, prior{Served: true, KeyARN: keyARN})
+	_, err = b.ensure(context.Background(), ref, second, prior{Served: true})
 	assert.ErrorAs(t, err, new(settlingError))
 	c.now = c.now.Add(10 * time.Second)
 
-	actions, err := b.ensure(context.Background(), ref, first, prior{Served: true, KeyARN: otherKeyARN})
+	actions, err := b.ensure(context.Background(), ref, first, prior{Served: true})
 
 	assert.Equal(t, keyARN, keyOfFake(t, f, ref.Name), "S3 shows the first key late, so the plugin writes it")
 	assert.Equal(t, []string{eventReasonEncryptionUpdated}, reasons(actions))
@@ -663,7 +664,7 @@ func TestEnsureWritesAKeyThatDiffersFromTheServedKeyAfterAStart(t *testing.T) {
 	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(time.Minute, c.Now)}
 	w.KeyARN = ""
 
-	_, err = restarted.ensure(context.Background(), ref, w, prior{Served: true, KeyARN: keyARN})
+	_, err = restarted.ensure(context.Background(), ref, w, prior{Served: true})
 
 	assert.Equal(
 		t,
@@ -674,7 +675,7 @@ func TestEnsureWritesAKeyThatDiffersFromTheServedKeyAfterAStart(t *testing.T) {
 	settlingLeft(t, err)
 }
 
-func TestEnsureAcceptsASettingThatS3ShowsAsWantedAtTheFirstLookAfterAStart(t *testing.T) {
+func TestEnsureWritesTheKeyAndTheRuleOnceAfterAStart(t *testing.T) {
 	b, f, ref := ensured(t)
 	w := testWant(ref)
 	w.KeyARN = keyARN
@@ -682,15 +683,103 @@ func TestEnsureAcceptsASettingThatS3ShowsAsWantedAtTheFirstLookAfterAStart(t *te
 	require.NoError(t, err)
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
 	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(time.Minute, c.Now)}
-	puts := len(f.Calls())
 
-	actions, err := restarted.ensure(context.Background(), ref, w, prior{Served: true, KeyARN: keyARN})
+	first, err := restarted.ensure(context.Background(), ref, w, prior{Served: true})
+	settlingLeft(t, err)
+	c.now = c.now.Add(time.Minute)
+	second, err := restarted.ensure(context.Background(), ref, w, prior{Served: true})
 
 	require.NoError(t, err)
-	assert.Empty(t, actions)
-	for _, call := range f.Calls()[puts:] {
-		assert.NotContains(t, call, "Put")
+	assert.Equal(t, []string{eventReasonEncryptionUpdated, eventReasonLifecycleUpdated}, reasons(first),
+		"S3 can still show a value that the process before wrote")
+	assert.Empty(t, corrected(first))
+	assert.Empty(t, second)
+	assert.Zero(t, count(f.Calls(), "PutPublicAccessBlock"))
+}
+
+func TestEnsureWritesTheKeyAtTheFirstLookAfterAStartWhileS3ShowsAnOldKey(t *testing.T) {
+	b, f, c := settling()
+	ref := testRef("eu-west-1")
+	w := testWant(ref)
+	w.KeyARN = keyARN
+	_, err := b.ensure(context.Background(), ref, w, prior{})
+	settlingLeft(t, err)
+	c.now = c.now.Add(2 * time.Minute)
+	f.ShowLate("GetBucketEncryption", -1)
+	unpublished := w
+	unpublished.KeyARN = otherKeyARN
+	_, err = b.ensure(context.Background(), ref, unpublished, prior{Served: true})
+	settlingLeft(t, err)
+	// A new plugin process knows no write of the process before.
+	restarted := buckets{s3: f.In, deleteBudget: time.Minute, writes: newWriteLog(time.Minute, c.Now)}
+
+	_, err = restarted.ensure(context.Background(), ref, w, prior{Served: true})
+
+	assert.Equal(t, keyARN, keyOfFake(t, f, ref.Name), "S3 shows the first key late, so the plugin writes it")
+	settlingLeft(t, err)
+}
+
+// lostAnswer applies each PutBucketEncryption and answers it with an error,
+// as S3 does for a write whose answer the network lost.
+type lostAnswer struct{ awskit.S3 }
+
+func (l lostAnswer) PutBucketEncryption(
+	ctx context.Context,
+	in *s3.PutBucketEncryptionInput,
+	opts ...func(*s3.Options),
+) (*s3.PutBucketEncryptionOutput, error) {
+	if _, err := l.S3.PutBucketEncryption(ctx, in, opts...); err != nil {
+		return nil, err
 	}
+	return nil, errors.New("the answer was lost")
+}
+
+func TestEnsureWritesTheKeyAgainAfterAWriteWhoseAnswerWasLost(t *testing.T) {
+	b, f, c := settling()
+	ref := testRef("eu-west-1")
+	w := testWant(ref)
+	w.KeyARN = keyARN
+	_, err := b.ensure(context.Background(), ref, w, prior{})
+	settlingLeft(t, err)
+	c.now = c.now.Add(2 * time.Minute)
+	f.ShowLate("GetBucketEncryption", -1)
+	lost := b
+	lost.s3 = func(region string) awskit.S3 { return lostAnswer{f.In(region)} }
+	changed := w
+	changed.KeyARN = otherKeyARN
+	_, err = lost.ensure(context.Background(), ref, changed, prior{Served: true})
+	require.ErrorContains(t, err, "the answer was lost")
+	c.now = c.now.Add(10 * time.Second)
+
+	_, err = b.ensure(context.Background(), ref, w, prior{Served: true})
+
+	assert.Equal(t, keyARN, keyOfFake(t, f, ref.Name), "S3 shows the first key late, so the plugin writes it")
+	settlingLeft(t, err)
+}
+
+func TestEnsureRepairsTwoSettingsThatDriftInOnePass(t *testing.T) {
+	b, f, c := settling()
+	ref := testRef("eu-west-1")
+	w := testWant(ref)
+	w.KeyARN = keyARN
+	_, err := b.ensure(context.Background(), ref, w, prior{})
+	settlingLeft(t, err)
+	c.now = c.now.Add(2 * time.Minute)
+	f.Edit(ref.Name, func(bucket *awsfake.Bucket) {
+		bucket.PublicAccessBlock.BlockPublicPolicy = aws.Bool(false)
+		bucket.Encryption = &types.ServerSideEncryptionRule{
+			ApplyServerSideEncryptionByDefault: &types.ServerSideEncryptionByDefault{
+				SSEAlgorithm: types.ServerSideEncryptionAes256,
+			},
+		}
+	})
+
+	actions, err := b.ensure(context.Background(), ref, w, prior{Served: true})
+
+	assert.Equal(t, []string{eventReasonPublicAccessBlocked, eventReasonEncryptionUpdated}, reasons(actions))
+	assert.Len(t, corrected(actions), 2)
+	assert.Equal(t, keyARN, keyOfFake(t, f, ref.Name))
+	settlingLeft(t, err)
 }
 
 // lateTags returns the buckets of a new fake whose writes settle for five

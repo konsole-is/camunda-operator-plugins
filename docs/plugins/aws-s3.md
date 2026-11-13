@@ -21,9 +21,9 @@ Before the plugin creates a bucket, it records the name and the region of the bu
 
 At each reconcile, and at the latest after `resync`, the plugin writes the tags, the public access block, the default encryption, and the abort rule again when someone changed them. A repair of the public access block, the encryption, or the abort rule records the event `DriftCorrected` on the request.
 
-S3 can show a bucket setting late after a write. The plugin keeps in memory the value that it last wrote for the public access block, the default encryption, and the abort rule of each bucket, and the time of its last write. For 5 minutes after a write, it does not write a setting again when S3 still shows the setting as before the write. When the 5 minutes end, the request reconciles again, and the plugin writes each setting that still differs. It writes the tags at once.
+S3 can show a bucket setting late after a write. The plugin keeps in memory the value that it last wrote for the public access block, the default encryption, and the abort rule of each bucket, and the time of each write. For 5 minutes after the write of a setting, it does not write the setting again when S3 still shows it as before the write. When the 5 minutes end, the request reconciles again, and the plugin writes each setting that still differs. It writes the tags at once.
 
-The plugin writes a setting at once, whatever S3 shows, when the value of the request differs from the value that it last wrote. This is the case after a change of the `key` input or of `abortIncompleteUploadDays`. It also writes the encryption and the abort rule of a bucket that it created at once, and the request is `Ready` only after these writes. After a restart, the plugin knows no earlier write. It then writes each setting that differs at once, and the encryption also when the `key` input differs from the `keyArn` output.
+The plugin writes a setting at once, whatever S3 shows, when the value of the request differs from the value that it last wrote. This is the case after a change of the `key` input or of `abortIncompleteUploadDays`. It also writes the encryption and the abort rule of a bucket that it created at once, and the request is `Ready` only after these writes. After a restart or a failed write, the plugin does not know which value S3 can still show late. It then writes the encryption and the abort rule once, whatever S3 shows, and records no `DriftCorrected` for them. The public access block has only one value, so the plugin trusts its read and repairs it as drift.
 
 The plugin also writes:
 
@@ -133,7 +133,7 @@ registrations:
 | --- | --- |
 | `bucketPrefix` | The start of each bucket name. The default is `camunda`. 1 to 40 characters of `a-z`, `0-9`, and `-`, which start and end with a letter or a digit. S3 reserves the name prefixes `xn--`, `sthree-`, and `amzn-s3-demo-`, and the name continues with `-` after `bucketPrefix`, so `sthree` and `amzn-s3-demo` are refused too. |
 | `region` | The region of the bucket. Empty is the chart value `region`. |
-| `abortIncompleteUploadDays` | The days after which S3 aborts an incomplete multipart upload, at least 1. The default is 7. |
+| `abortIncompleteUploadDays` | The days after which S3 aborts an incomplete multipart upload, from 1 to 2147483647. The default is 7. |
 
 `bucketPrefix` and `region` cannot change after the plugin recorded the bucket, which it does before it creates the bucket. The status of the request records the name and the region of its bucket. When a later value names another bucket, the request reports `InvalidParameters`, the backups stay in their bucket, and the plugin creates no second bucket. A bucket in another region needs a new claim. The plugin copies no backups into the bucket of the new claim.
 

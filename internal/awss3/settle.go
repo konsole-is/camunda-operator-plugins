@@ -35,22 +35,21 @@ const (
 	settingAbortRule
 )
 
-// written is what the plugin knows of one setting of a bucket from its own
-// writes.
+// written is what the plugin knows of one setting of a bucket.
 type written struct {
-	// Value is the value of the last write of the setting, when Wrote.
+	// Value is the value that the plugin last wrote or trusted, when Known.
 	Value string
-	Wrote bool
-	// Initial says that the plugin created the bucket, did not write the
-	// setting since, and did not finish the bucket yet.
+	Known bool
+	// Initial says that the plugin created the bucket and knows no value of
+	// the setting yet.
 	Initial bool
-	// Settling says that S3 can still show the setting as it was before the
+	// Left is how long S3 can still show the setting as it was before the
 	// last write of the plugin.
-	Settling bool
+	Left time.Duration
 }
 
-// writeLog keeps in memory the time of the last write and the written values
-// of each bucket. A nil writeLog keeps nothing, and no write settles.
+// writeLog keeps in memory the times of the writes of the plugin and the
+// values of the settings. A nil writeLog keeps nothing, and nothing settles.
 type writeLog struct {
 	settle time.Duration
 	now    func() time.Time
@@ -60,10 +59,16 @@ type writeLog struct {
 }
 
 type bucketWrites struct {
-	at time.Time
-	// initial says that the plugin created the bucket and did not finish it.
-	initial bool
-	values  map[setting]string
+	at       time.Time
+	created  bool
+	settings map[setting]settingWrite
+}
+
+// settingWrite is a value of a setting and the time of its write. A zero time
+// is a value that the plugin trusted from a read.
+type settingWrite struct {
+	value string
+	at    time.Time
 }
 
 func newWriteLog(settle time.Duration, now func() time.Time) *writeLog {
@@ -81,7 +86,7 @@ func (w *writeLog) left(name string) time.Duration {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.leftOf(w.bucket(name))
+	return w.leftAfter(w.bucket(name).at)
 }
 
 // of returns what the plugin knows of the setting s of the bucket name.
@@ -96,17 +101,16 @@ func (w *writeLog) of(name string, s setting) written {
 	if !ok {
 		return written{}
 	}
-	value, wrote := b.values[s]
-	return written{
-		Value:    value,
-		Wrote:    wrote,
-		Initial:  b.initial && !wrote,
-		Settling: wrote && w.leftOf(b) > 0,
+	sw, known := b.settings[s]
+	out := written{Value: sw.value, Known: known, Initial: b.created && !known}
+	if known && !sw.at.IsZero() {
+		out.Left = w.leftAfter(sw.at)
 	}
+	return out
 }
 
 // created records that the plugin created the bucket name now, so that it
-// wrote no setting of it yet.
+// knows no value of its settings yet.
 func (w *writeLog) created(name string) {
 	if w == nil {
 		return
@@ -114,21 +118,7 @@ func (w *writeLog) created(name string) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.buckets[name] = &bucketWrites{at: w.now(), initial: true, values: map[setting]string{}}
-}
-
-// finished records that each setting of the bucket name has its desired
-// value, as written or as S3 showed it.
-func (w *writeLog) finished(name string) {
-	if w == nil {
-		return
-	}
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if b, ok := w.buckets[name]; ok {
-		b.initial = false
-	}
+	w.buckets[name] = &bucketWrites{at: w.now(), created: true, settings: map[setting]settingWrite{}}
 }
 
 // wrote records a write of the tags of the bucket name now.
@@ -153,7 +143,37 @@ func (w *writeLog) wroteSetting(name string, s setting, value string) {
 	defer w.mu.Unlock()
 	b := w.bucket(name)
 	b.at = w.now()
-	b.values[s] = value
+	b.settings[s] = settingWrite{value: value, at: b.at}
+}
+
+// trusted records value as the value of the setting s of the bucket name,
+// from a read that no write of the plugin can make late. It keeps a value
+// that the log knows.
+func (w *writeLog) trusted(name string, s setting, value string) {
+	if w == nil {
+		return
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	b := w.bucket(name)
+	if _, ok := b.settings[s]; !ok {
+		b.settings[s] = settingWrite{value: value}
+	}
+}
+
+// unsure drops the value of the setting s of the bucket name, after a write
+// of it that can have changed the setting and answered with an error.
+func (w *writeLog) unsure(name string, s setting) {
+	if w == nil {
+		return
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if b, ok := w.buckets[name]; ok {
+		delete(b.settings, s)
+	}
 }
 
 // forget drops the bucket name.
@@ -172,12 +192,12 @@ func (w *writeLog) forget(name string) {
 func (w *writeLog) bucket(name string) *bucketWrites {
 	b, ok := w.buckets[name]
 	if !ok {
-		b = &bucketWrites{at: w.now(), values: map[setting]string{}}
+		b = &bucketWrites{at: w.now(), settings: map[setting]settingWrite{}}
 		w.buckets[name] = b
 	}
 	return b
 }
 
-func (w *writeLog) leftOf(b *bucketWrites) time.Duration {
-	return max(0, w.settle-w.now().Sub(b.at))
+func (w *writeLog) leftAfter(at time.Time) time.Duration {
+	return max(0, w.settle-w.now().Sub(at))
 }

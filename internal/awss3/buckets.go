@@ -89,8 +89,6 @@ type want struct {
 type prior struct {
 	// Served says that it published the bucket.
 	Served bool
-	// KeyARN is its keyArn output.
-	KeyARN string
 }
 
 // action is one external action on a bucket, for one event on the request.
@@ -165,8 +163,7 @@ const (
 	// repairLater writes nothing, because S3 can still show the setting as it
 	// was before the last write of the plugin.
 	repairLater
-	// repairRewrite writes the setting whatever S3 shows, as a part of a
-	// create or of a change of the request.
+	// repairRewrite writes the setting whatever S3 shows, and not as drift.
 	repairRewrite
 )
 
@@ -176,7 +173,10 @@ type settingStep struct {
 	// value is the value of the desired state, as the write log keeps it.
 	value string
 	// fresh says that S3 gives a new bucket the value.
-	fresh  bool
+	fresh bool
+	// fixed says that the plugin writes no other value, so that a late read
+	// cannot show one.
+	fixed  bool
 	ensure func(repair) (*action, error)
 }
 
@@ -208,10 +208,9 @@ func (b buckets) claimable(ctx context.Context, ref bucketRef) error {
 // UID of ref, also after a create that S3 answered with success. It returns
 // tagsNotShownError instead while the recorded bucket of ref has no UID tag
 // within the settle time. With p.Served, a repair of a bucket that the
-// request had is drift. p.KeyARN is the key that the plugin wrote last. A
-// setting that it last wrote with another value, or that a bucket it created
-// lacks, it writes whatever S3 shows, not as drift. After it wrote a setting,
-// or held one that S3 shows as before its write, it returns settlingError.
+// request had is drift. It writes a setting whatever S3 shows, not as drift,
+// when a read can be late: after a create, a change, a failed write, or a
+// restart. After it wrote or held a setting, it returns settlingError.
 func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]action, error) {
 	c := b.s3(ref.Region)
 
@@ -254,59 +253,56 @@ func (b buckets) ensure(ctx context.Context, ref bucketRef, w want, p prior) ([]
 		return actions, err
 	}
 
-	held, wrote := false, false
+	var left time.Duration
+	held := false
 	for _, s := range []settingStep{
-		{settingPublicAccessBlock, "blocked", true, func(fix repair) (*action, error) {
+		{settingPublicAccessBlock, "blocked", true, true, func(fix repair) (*action, error) {
 			return ensurePublicAccessBlock(ctx, c, ref.Name, fix)
 		}},
-		{settingEncryption, w.KeyARN, w.KeyARN == "", func(fix repair) (*action, error) {
+		{settingEncryption, w.KeyARN, w.KeyARN == "", false, func(fix repair) (*action, error) {
 			return ensureEncryption(ctx, c, ref.Name, w.KeyARN, fix)
 		}},
-		{settingAbortRule, fmt.Sprint(w.AbortDays), false, func(fix repair) (*action, error) {
+		{settingAbortRule, fmt.Sprint(w.AbortDays), false, false, func(fix repair) (*action, error) {
 			return ensureAbortRule(ctx, c, ref.Name, w.AbortDays, fix)
 		}},
 	} {
 		a, err := s.ensure(b.repairOf(ref.Name, s, p, created))
-		if a != nil {
+		switch {
+		case errors.Is(err, errShownLate):
+			held = true
+			left = max(left, b.writes.of(ref.Name, s.setting).Left)
+		case err != nil:
+			b.writes.unsure(ref.Name, s.setting)
+			return actions, err
+		case a != nil:
 			actions = append(actions, *a)
 			b.writes.wroteSetting(ref.Name, s.setting, s.value)
-			wrote = true
-		}
-		if errors.Is(err, errShownLate) {
-			held = true
-			continue
-		}
-		if err != nil {
-			return actions, err
+			left = max(left, b.writes.of(ref.Name, s.setting).Left)
+		default:
+			b.writes.trusted(ref.Name, s.setting, s.value)
 		}
 	}
 
-	b.writes.finished(ref.Name)
-	if !held && !wrote {
-		return actions, nil
-	}
-	if left := b.writes.left(ref.Name); left > 0 {
+	if left > 0 {
 		return actions, settlingError{Bucket: ref.Name, Left: left, Held: held}
 	}
 	return actions, nil
 }
 
 // repairOf returns how ensure treats the setting of s on the bucket name. A
-// served keyArn output stands for the last write of the encryption that the
-// log does not know.
+// value that the log does not know can be one that S3 shows late, except a
+// fixed value and the value of a new bucket.
 func (b buckets) repairOf(name string, s settingStep, p prior, created bool) repair {
 	known := b.writes.of(name, s.setting)
-	known.Initial = known.Initial || created
-	if s.setting == settingEncryption && p.Served && !known.Wrote && !known.Initial {
-		known.Value, known.Wrote = p.KeyARN, true
-	}
+	initial := known.Initial || created
+	trusted := s.fixed || initial && s.fresh
 
 	switch {
-	case known.Wrote && known.Value != s.value, known.Initial && !s.fresh:
+	case known.Known && known.Value != s.value, !known.Known && !trusted:
 		return repairRewrite
-	case known.Settling:
+	case known.Left > 0:
 		return repairLater
-	case known.Initial || !p.Served:
+	case initial || !p.Served:
 		return repairChange
 	}
 	return repairDrift

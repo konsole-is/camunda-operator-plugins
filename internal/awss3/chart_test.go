@@ -69,3 +69,23 @@ func TestChartBucketPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestChartAbortIncompleteUploadDays(t *testing.T) {
+	registrations, err := chartRegistrations(t.TempDir())
+	require.NoError(t, err)
+	schema := registrations[0].Spec.Parameters
+
+	for _, days := range []string{"1", "2147483647"} {
+		assert.NoError(t, pluginkit.ValidateParameters(context.Background(), schema,
+			raw(`{"abortIncompleteUploadDays":`+days+`}`)), "days %s", days)
+	}
+	for _, days := range []string{"0", "2147483648"} {
+		assert.ErrorContains(t, pluginkit.ValidateParameters(
+			context.Background(),
+			schema,
+			raw(
+				`{"abortIncompleteUploadDays":`+days+`}`,
+			),
+		), "spec.parameters.abortIncompleteUploadDays", "days %s", days)
+	}
+}

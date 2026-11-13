@@ -77,19 +77,19 @@ func TestWriteLogKnowsNoSettingOfABucketThatItCreated(t *testing.T) {
 	assert.Equal(t, written{Initial: true}, w.of("b1", settingEncryption), "a new bucket has no write of before")
 }
 
-func TestWriteLogKeepsTheLastValueOfASetting(t *testing.T) {
+func TestWriteLogKeepsTheLastValueAndTimeOfEachSetting(t *testing.T) {
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
 	w := newWriteLog(time.Minute, c.Now)
-	w.created("b1")
 	w.wroteSetting("b1", settingEncryption, "key-a")
 	w.wroteSetting("b1", settingEncryption, "key-b")
+	c.now = c.now.Add(40 * time.Second)
 
-	settling := w.of("b1", settingEncryption)
-	c.now = c.now.Add(time.Minute)
+	w.wroteSetting("b1", settingPublicAccessBlock, "blocked")
 
-	assert.Equal(t, written{Value: "key-b", Wrote: true, Settling: true}, settling)
-	assert.Equal(t, written{Value: "key-b", Wrote: true}, w.of("b1", settingEncryption))
-	assert.Equal(t, written{Initial: true}, w.of("b1", settingAbortRule))
+	assert.Equal(t, written{Value: "key-b", Known: true, Left: 20 * time.Second}, w.of("b1", settingEncryption),
+		"a write of another setting does not start the settle time of this one again")
+	assert.Equal(t, written{Value: "blocked", Known: true, Left: time.Minute}, w.of("b1", settingPublicAccessBlock))
+	assert.Equal(t, written{}, w.of("b1", settingAbortRule))
 }
 
 func TestWriteLogKnowsNoSettingAfterAFirstLook(t *testing.T) {
@@ -101,12 +101,25 @@ func TestWriteLogKnowsNoSettingAfterAFirstLook(t *testing.T) {
 	assert.Equal(t, written{}, w.of("b1", settingEncryption), "a process knows no write of the process before")
 }
 
-func TestWriteLogEndsTheInitialStateOfAFinishedBucket(t *testing.T) {
+func TestWriteLogTrustsAReadThatSettlesNothing(t *testing.T) {
 	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
 	w := newWriteLog(time.Minute, c.Now)
 	w.created("b1")
+	w.wroteSetting("b1", settingEncryption, "key-a")
 
-	w.finished("b1")
+	w.trusted("b1", settingPublicAccessBlock, "blocked")
+	w.trusted("b1", settingEncryption, "")
 
-	assert.Equal(t, written{}, w.of("b1", settingPublicAccessBlock))
+	assert.Equal(t, written{Value: "blocked", Known: true}, w.of("b1", settingPublicAccessBlock))
+	assert.Equal(t, "key-a", w.of("b1", settingEncryption).Value, "a read does not replace a write")
+}
+
+func TestWriteLogForgetsTheValueOfAnUnsureWrite(t *testing.T) {
+	c := &clock{now: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)}
+	w := newWriteLog(time.Minute, c.Now)
+	w.wroteSetting("b1", settingEncryption, "key-a")
+
+	w.unsure("b1", settingEncryption)
+
+	assert.Equal(t, written{}, w.of("b1", settingEncryption))
 }
