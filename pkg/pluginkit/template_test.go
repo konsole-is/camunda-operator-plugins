@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 func TestParseTemplate(t *testing.T) {
@@ -117,6 +118,51 @@ func TestRenderNamesAMissingOutput(t *testing.T) {
 	_, err = tmpl.Render(TemplateData{Outputs: map[string]string{"other": "x"}})
 
 	assert.EqualError(t, err, `output "bucket" has no value`)
+}
+
+// The conformance module and the template preview of the fleet manager, in
+// the operator repository, hold the same cases in the same order.
+func TestRenderPrintsOnlyAStringANumberOrABoolean(t *testing.T) {
+	cases := []struct {
+		name       string
+		parameters string // spec.parameters as the API server serves it
+		want       string
+		wantErr    string // empty: no error
+	}{
+		{
+			"a list",
+			`{"v":["a","b"]}`,
+			"",
+			`parameter "v" is a list: a template prints only a string, a number, or a boolean`,
+		},
+		{
+			"an object",
+			`{"v":{"a":1,"k":"v"}}`,
+			"",
+			`parameter "v" is an object: a template prints only a string, a number, or a boolean`,
+		},
+		{"null", `{"v":null}`, "", `parameter "v" is null: a template prints only a string, a number, or a boolean`},
+		// The API server stores the number 1.0 as 1, and 1e3 as 1000.
+		{"the number 1.0", `{"v":1}`, "1", ""},
+		{"the number 1e3", `{"v":1000}`, "1000", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpl, err := ParseTemplate("{{ .parameters.v }}", TemplateGrant)
+			require.NoError(t, err)
+			var data TemplateData
+			require.NoError(t, setTemplateParameters(&data, &apiextensionsv1.JSON{Raw: []byte(tc.parameters)}))
+
+			got, err := tmpl.Render(data)
+
+			if tc.wantErr != "" {
+				assert.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestRenderJSONKeepsAQuoteInsideItsString(t *testing.T) {

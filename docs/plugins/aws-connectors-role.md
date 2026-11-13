@@ -219,7 +219,7 @@ pluginkit fills in the placeholders of `inlinePolicy` before the plugin sees it:
 | `{{ .serviceAccount }}` | `<claim>-connectors`. |
 | `{{ .parameters.<name> }}` | The value of another parameter. |
 
-`{{ .outputs }}` is not available. A placeholder works only in a string value, never in a JSON key such as a condition key. An unknown placeholder refuses the request with `InvalidParameters`.
+`{{ .outputs }}` is not available. A placeholder works only in a string value, never in a JSON key such as a condition key. An unknown placeholder refuses the request with `InvalidParameters`. So does a placeholder of a list parameter, such as `{{ .parameters.extraPolicyArns }}`.
 
 ```json
 {

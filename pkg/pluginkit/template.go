@@ -44,8 +44,9 @@ type TemplateData struct {
 	Claim          string
 	Request        string
 	ServiceAccount string
-	Parameters     map[string]any
-	Outputs        map[string]string
+	// Parameters holds spec.parameters as encoding/json decodes them.
+	Parameters map[string]any
+	Outputs    map[string]string
 	// Pods is the pod regular expression of a metric query.
 	Pods string
 }
@@ -172,11 +173,20 @@ func (t *Template) checkField(idents []string, kind TemplateKind) error {
 
 // Render fills the placeholders of t from data. A parameter or an output
 // that the template references and that data does not hold is an error that
-// names it.
+// names it. So is a referenced parameter that is a list, an object, or null.
 func (t *Template) Render(data TemplateData) (string, error) {
 	for _, name := range t.parameters {
-		if _, ok := data.Parameters[name]; !ok {
+		value, ok := data.Parameters[name]
+		if !ok {
 			return "", fmt.Errorf("parameter %q has no value", name)
+		}
+
+		if form := unprintableForm(value); form != "" {
+			return "", fmt.Errorf(
+				"parameter %q is %s: a template prints only a string, a number, or a boolean",
+				name,
+				form,
+			)
 		}
 	}
 
@@ -201,6 +211,22 @@ func (t *Template) Render(data TemplateData) (string, error) {
 	}
 
 	return out.String(), nil
+}
+
+// unprintableForm names the JSON form of value when text/template would print
+// it in a Go form, such as [a b], map[k:v], or <no value>, and returns ""
+// otherwise.
+func unprintableForm(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case []any:
+		return "a list"
+	case map[string]any:
+		return "an object"
+	}
+
+	return ""
 }
 
 // RenderJSON renders each string value of the JSON document raw as a

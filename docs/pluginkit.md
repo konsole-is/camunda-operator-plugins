@@ -131,7 +131,7 @@ A grant template, and a parameter marked with `"x-fleet-template": true`, can ho
 | `{{ .parameters.<name> }}` | One parameter of the request. |
 | `{{ .outputs.<key> }}` | One output that `Reconcile` returned. A template parameter cannot read the outputs, because pluginkit renders it before `Reconcile`. |
 
-A metric query can hold the same placeholders and also `{{ .pods }}`, the pods of the request as a regular expression. A grant template and a parameter cannot hold `{{ .pods }}`. Every other construct is an error that names it, for example `{{ if }}`, `{{ define }}`, a comment, a pipeline, a function, a variable, or an unknown placeholder. A placeholder whose parameter or output has no value is an error too. `pluginkit.ParseTemplate` checks a template, so a plugin can test the templates and the metric queries of its chart.
+A metric query can hold the same placeholders and also `{{ .pods }}`, the pods of the request as a regular expression. A grant template and a parameter cannot hold `{{ .pods }}`. Every other construct is an error that names it, for example `{{ if }}`, `{{ define }}`, a comment, a pipeline, a function, a variable, or an unknown placeholder. A placeholder whose parameter or output has no value is an error too. So is a placeholder whose parameter is a list, an object, or null, because a template prints only a string, a number, or a boolean. `pluginkit.ParseTemplate` checks a template, so a plugin can test the templates and the metric queries of its chart.
 
 pluginkit renders each string of the JSON of a template on its own. A value with a quote stays inside its string.
 
