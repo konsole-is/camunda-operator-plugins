@@ -94,14 +94,17 @@ type Plugin struct {
 }
 
 // Reconcile keeps the role of the request, its trust, and with Pod Identity
-// its associations, then puts the allowed Grants of the cluster on the role
-// and writes their conditions. It is Pending with the reason
+// its associations, puts the allowed Grants of the cluster on the role, and
+// writes their conditions. It is Pending with the reason
 // MissingServiceAccount when spec.target names no ServiceAccount, and with
 // the reason RoleNameInUse when the role of its name belongs to another
 // request. After a change of the role name, it deletes the old role once the
 // outputs name the new one, and until then keeps the old role in
 // status.resources. A failed AWS call is an error, except a policy document
 // that IAM refuses, which sets Applied=False on its Grant.
+//
+// The result names in Corrected the drift that it repaired, also with an
+// error.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -113,7 +116,12 @@ func (p *Plugin) Reconcile(
 	}
 
 	current := p.roleName(request)
-	role, err := p.ensureRole(ctx, req, current, sas)
+	spec, hash, err := p.desiredRole(request, current, sas)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+
+	role, change, err := p.ensureRole(ctx, req, spec, hash)
 	pending, inUse := roleNameInUse(err, request.Status.Resources)
 	if inUse {
 		// The outputs still name the old role, so it serves the request until
@@ -122,33 +130,58 @@ func (p *Plugin) Reconcile(
 		if oldErr != nil || old.ARN == "" {
 			return pending, oldErr
 		}
-		role, err = p.ensureRole(ctx, req, old.Name, sas)
+		spec.Name = old.Name
+		role, change, err = p.ensureRole(ctx, req, spec, hash)
+	}
+	drift := role.Desired == hash
+	var corrected []string
+	if drift {
+		corrected = change.Corrections(role.Name)
 	}
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: corrected}, err
+	}
+
+	// The pass moves the request off the old role that the outputs name. A
+	// later pass that serves that role again must not count the move as drift.
+	if err := p.markOldRoleChanging(ctx, req, current, role.Name); err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
 	// A ServiceAccount that left the request loses its association before a
 	// Grant step can fail.
 	var leftErr error
 	if p.mode == awskit.ModePodIdentity {
-		leftErr = p.deleteLeftAssociations(ctx, req, sas)
+		var left []string
+		left, leftErr = p.deleteLeftAssociations(ctx, req, sas)
+		if drift {
+			corrected = append(corrected, awskit.AssociationChange{Deleted: left}.Corrections()...)
+		}
 	}
 
 	// The Grants reach the role before an association moves to it, so a pod
 	// never holds the role without its policies.
-	counts, conflicted, err := p.syncGrants(ctx, req, role)
+	sync, err := p.syncGrants(ctx, req, role, true)
+	if drift {
+		corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
+	}
 	if err := errors.Join(leftErr, err); err != nil {
 		// The ServiceAccounts that the old role trusts keep their sessions, so
 		// a Grant that is gone loses its policy there also when a step fails.
-		return pluginkit.Result{}, errors.Join(err, p.syncOldRoleGrants(ctx, req, role, current))
+		return pluginkit.Result{Corrected: corrected}, errors.Join(err, p.syncOldRoleGrants(ctx, req, role, current))
 	}
 
 	resources := []pluginsv1alpha1.ResourceRef{roleResource(role, request)}
 	if p.mode == awskit.ModePodIdentity {
-		associations, err := p.ensureAssociations(ctx, req, sas, role)
+		associations, moved, err := p.ensureAssociations(ctx, req, sas, role)
+		if drift {
+			corrected = append(corrected, moved.Corrections()...)
+		}
 		if err != nil {
-			return pluginkit.Result{}, errors.Join(err, p.syncOldRoleGrants(ctx, req, role, current))
+			return pluginkit.Result{Corrected: corrected}, errors.Join(
+				err,
+				p.syncOldRoleGrants(ctx, req, role, current),
+			)
 		}
 
 		for _, a := range associations {
@@ -163,9 +196,14 @@ func (p *Plugin) Reconcile(
 		}
 	}
 
+	if _, err := awskit.MarkDesired(ctx, p.clients.IAM, role, spec.Tags, hash); err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
+	}
+
 	if inUse {
 		pending.Resources = append(resources, oldRoleRows(request.Status.Resources, role.Name)...)
-		if conflicted {
+		pending.Corrected = corrected
+		if sync.conflicted {
 			pending.RequeueAfter = conflictRequeue
 		}
 		return pending, nil
@@ -173,25 +211,26 @@ func (p *Plugin) Reconcile(
 
 	old, _, err := p.retireOldRoles(ctx, req, role)
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 	resources = append(resources, old...)
 
 	consoleURL, err := awskit.RoleConsoleURL(role.ARN)
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
 	res := pluginkit.Result{
 		Outputs:   awskit.IdentityOutputs(p.mode, role.ARN),
-		Summary:   summary(role, p.boundary, counts.applied, counts.total, counts.size),
+		Summary:   summary(role, p.boundary, sync.counts.applied, sync.counts.total, sync.counts.size),
 		Links:     []pluginsv1alpha1.Link{{Name: "IAM role", URL: consoleURL}},
 		Resources: resources,
+		Corrected: corrected,
 	}
 	if len(old) > 0 {
 		res.RequeueAfter = oldRoleRequeue
 	}
-	if conflicted {
+	if sync.conflicted {
 		res.RequeueAfter = conflictRequeue
 	}
 
@@ -227,7 +266,7 @@ func (p *Plugin) syncOldRoleGrants(
 		return err
 	}
 
-	_, _, err = p.syncGrants(ctx, req, old)
+	_, err = p.syncGrants(ctx, req, old, false)
 	return err
 }
 
@@ -245,7 +284,8 @@ func roleResource(role awskit.Role, request *pluginsv1alpha1.PluginRequest) plug
 // and the old role that the outputs name trust nobody, and keeps their Grants
 // in sync, because credentials that STS gave before stay valid. It deletes the
 // other old roles of the status only once the outputs name the role of its
-// current name.
+// current name. The result names the drift that it repaired, also with an
+// error.
 func (p *Plugin) reconcileWithoutServiceAccounts(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -260,42 +300,63 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 		Resources: oldRoleRows(status, current),
 	}
 
-	old, err := p.activeOldRole(ctx, req, current)
-	if err != nil {
-		return res, err
-	}
-	if old.ARN != "" {
-		if _, conflicted, err := p.trustNobody(ctx, req, old.Name); err != nil {
-			return pluginkit.Result{}, err
-		} else if conflicted {
-			res.RequeueAfter = conflictRequeue
-		}
-	}
-
 	arn, err := p.liveRoleARN(ctx, current)
 	if err != nil {
 		return res, err
 	}
-	if arn == "" {
-		if old.ARN != "" {
-			return res, nil
+
+	// trustNobody of the current role deletes the associations of the old
+	// role too.
+	if err := p.markOldRoleChanging(ctx, req, current, current); err != nil {
+		return res, err
+	}
+
+	// The pass of the old role deletes the associations of the request, also
+	// those of the role of the current name, so that role gets its desired
+	// tag first.
+	var role awskit.Role
+	var conflicted, inUse bool
+	var pending pluginkit.Result
+	if arn != "" {
+		role, conflicted, res.Corrected, err = p.trustNobody(ctx, req, current, true)
+		pending, inUse = roleNameInUse(err, status)
+		if err != nil && !inUse {
+			return pluginkit.Result{Corrected: res.Corrected}, err
 		}
+	}
+
+	old, err := p.activeOldRole(ctx, req, current)
+	if err != nil {
+		return pluginkit.Result{Corrected: res.Corrected}, err
+	}
+	if old.ARN != "" {
+		// The old role serves the request when no role of the current name
+		// took the Grants.
+		_, oldConflicted, corrected, err := p.trustNobody(ctx, req, old.Name, arn == "" || inUse)
+		res.Corrected = append(res.Corrected, corrected...)
+		if err != nil {
+			return pluginkit.Result{Corrected: res.Corrected}, err
+		}
+		if oldConflicted {
+			res.RequeueAfter = conflictRequeue
+		}
+	}
+
+	switch {
+	case inUse:
+		pending.Corrected = res.Corrected
+		return pending, nil
+	case arn == "" && old.ARN == "":
 		// The associations of a role that someone deleted by hand still hold
 		// the ServiceAccounts.
 		return res, p.deleteAssociations(ctx, req, current)
-	}
-
-	role, conflicted, err := p.trustNobody(ctx, req, current)
-	if inUse, ok := roleNameInUse(err, status); ok {
-		return inUse, nil
-	}
-	if err != nil {
-		return pluginkit.Result{}, err
+	case arn == "":
+		return res, nil
 	}
 
 	left, again, err := p.retireOldRoles(ctx, req, role)
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: res.Corrected}, err
 	}
 
 	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, left...)
@@ -308,27 +369,58 @@ func (p *Plugin) reconcileWithoutServiceAccounts(
 	return res, nil
 }
 
-// trustNobody makes the role name of req trust nobody, deletes its
-// associations, and keeps its Grants in sync.
+// trustNobody makes the role name of req trust nobody, deletes the
+// associations of req, keeps the Grants of the role in sync, and then tags
+// the role with its desired hash. It writes the status of the Grants only
+// when served. It returns the drift that it repaired, also with an error,
+// and whether a Grant changed after it was read.
 func (p *Plugin) trustNobody(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	name string,
-) (awskit.Role, bool, error) {
-	role, err := p.ensureRole(ctx, req, name, nil)
+	served bool,
+) (awskit.Role, bool, []string, error) {
+	spec, hash, err := p.desiredRole(req.Object, name, nil)
 	if err != nil {
-		return awskit.Role{}, false, err
+		return awskit.Role{}, false, nil, err
+	}
+
+	role, change, err := p.ensureRole(ctx, req, spec, hash)
+	drift := role.Desired == hash
+	var corrected []string
+	if drift {
+		corrected = change.Corrections(role.Name)
+	}
+	if err != nil {
+		return awskit.Role{}, false, corrected, err
 	}
 
 	if p.mode == awskit.ModePodIdentity {
-		if _, err := p.ensureAssociations(ctx, req, nil, role); err != nil {
-			_, _, syncErr := p.syncGrants(ctx, req, role)
-			return awskit.Role{}, false, errors.Join(err, syncErr)
+		_, deleted, err := p.ensureAssociations(ctx, req, nil, role)
+		if drift {
+			corrected = append(corrected, deleted.Corrections()...)
+		}
+		if err != nil {
+			sync, syncErr := p.syncGrants(ctx, req, role, served)
+			if drift {
+				corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
+			}
+			return awskit.Role{}, false, corrected, errors.Join(err, syncErr)
 		}
 	}
 
-	_, conflicted, err := p.syncGrants(ctx, req, role)
-	return role, conflicted, err
+	sync, err := p.syncGrants(ctx, req, role, served)
+	if drift {
+		corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, sync.repaired...)...)
+	}
+	if err != nil {
+		return awskit.Role{}, false, corrected, err
+	}
+
+	if _, err := awskit.MarkDesired(ctx, p.clients.IAM, role, spec.Tags, hash); err != nil {
+		return awskit.Role{}, false, corrected, err
+	}
+	return role, sync.conflicted, corrected, nil
 }
 
 // liveRoleARN returns the ARN of the role name, or "" when it does not exist.
@@ -343,31 +435,40 @@ func (p *Plugin) liveRoleARN(ctx context.Context, name string) (string, error) {
 	return aws.ToString(out.Role.Arn), nil
 }
 
-// ensureRole keeps the role name of the claim of req, trusted by sas, or by
-// nobody when sas is empty, and records an event when it created or updated
-// the role.
-func (p *Plugin) ensureRole(
-	ctx context.Context,
-	req pluginkit.Request[Params, map[string]string],
+// desiredRole returns the role name of the claim of request, trusted by sas,
+// or by nobody when sas is empty, and the hash of that desired state.
+func (p *Plugin) desiredRole(
+	request *pluginsv1alpha1.PluginRequest,
 	name string,
 	sas []string,
-) (awskit.Role, error) {
-	request := req.Object
+) (awskit.RoleSpec, string, error) {
 	trust, err := awskit.TrustPolicy(p.mode, p.provider, request.Namespace, sas)
 	if err != nil {
-		return awskit.Role{}, err
+		return awskit.RoleSpec{}, "", err
 	}
 
-	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, awskit.RoleSpec{
+	spec := awskit.RoleSpec{
 		Name:                name,
 		Description:         "Camunda cluster " + request.Namespace + "/" + request.Spec.ClaimRef.Name,
 		TrustPolicy:         trust,
 		PermissionsBoundary: p.boundary,
 		Tags:                p.roleTags(request),
-	})
-	if err != nil {
-		return awskit.Role{}, err
 	}
+	// With Pod Identity the trust policy does not name the ServiceAccounts,
+	// and the associations follow them.
+	return spec, spec.DesiredHash(sas), nil
+}
+
+// ensureRole calls awskit.EnsureRole with spec and hash, records an event
+// when it created or updated the role, and returns the role and the change.
+// With an error, it still returns the change.
+func (p *Plugin) ensureRole(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+	spec awskit.RoleSpec,
+	hash string,
+) (awskit.Role, awskit.RoleChange, error) {
+	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, spec, hash)
 
 	switch {
 	case change.Created:
@@ -389,7 +490,7 @@ func (p *Plugin) ensureRole(
 		)
 	}
 
-	return role, nil
+	return role, change, err
 }
 
 // roleName is the role of the claim of request. The OIDC issuer names one
@@ -414,12 +515,13 @@ func (p *Plugin) roleTags(request *pluginsv1alpha1.PluginRequest) map[string]str
 }
 
 // deleteLeftAssociations deletes the associations of req of each
-// ServiceAccount that is not in sas, and records an event for each.
+// ServiceAccount that is not in sas, records an event for each, and returns
+// their ServiceAccounts, also with an error.
 func (p *Plugin) deleteLeftAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	sas []string,
-) error {
+) ([]string, error) {
 	request := req.Object
 	deleted, err := awskit.DeleteRequestAssociations(
 		ctx,
@@ -438,17 +540,18 @@ func (p *Plugin) deleteLeftAssociations(
 			sa,
 		)
 	}
-	return err
+	return deleted, err
 }
 
 // ensureAssociations keeps one Pod Identity association of role for each of
-// sas, and records an event for each change.
+// sas, records an event for each change, and returns the changes, also with
+// an error.
 func (p *Plugin) ensureAssociations(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	sas []string,
 	role awskit.Role,
-) ([]awskit.Association, error) {
+) ([]awskit.Association, awskit.AssociationChange, error) {
 	request := req.Object
 	associations, change, err := awskit.EnsureAssociations(
 		ctx,
@@ -490,7 +593,7 @@ func (p *Plugin) ensureAssociations(
 		)
 	}
 
-	return associations, err
+	return associations, change, err
 }
 
 // Delete deletes the associations of the current role of the request and of

@@ -85,7 +85,7 @@ func newTestRole(t *testing.T) (*Plugin, *awsfake.IAM, awskit.Role) {
 	role, _, err := awskit.EnsureRole(context.Background(), fake, awskit.RoleSpec{
 		Name:        "camunda-r",
 		TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
-	})
+	}, "")
 	require.NoError(t, err)
 	return p, fake, role
 }
@@ -190,7 +190,7 @@ func TestRoleNameUsesThePrefix(t *testing.T) {
 
 func TestNewPluginAcceptsTheMostExtraTags(t *testing.T) {
 	opts := validOptions()
-	opts.ExtraTags = extraTags(46)
+	opts.ExtraTags = extraTags(45)
 
 	_, err := newPlugin(opts)
 
@@ -240,7 +240,7 @@ func TestNewPluginRefusesBadOptions(t *testing.T) {
 		{"the prefix of aws-connectors-role", func(o *Options) {
 			o.RoleNamePrefix = "Camunda-Connectors"
 		}, "aws-connectors-role"},
-		{"too many extra tags", func(o *Options) { o.ExtraTags = extraTags(47) }, "at most 46"},
+		{"too many extra tags", func(o *Options) { o.ExtraTags = extraTags(46) }, "at most 45"},
 	} {
 		opts := validOptions()
 		tc.change(&opts)

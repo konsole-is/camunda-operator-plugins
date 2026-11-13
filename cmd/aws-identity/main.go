@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -87,6 +88,12 @@ func main() {
 	)
 	flag.StringVar(&opts.OIDCProviderARN, "oidc-provider-arn", "", "The IAM OIDC provider of the EKS cluster (irsa).")
 	flag.StringVar(&opts.EKSClusterName, "eks-cluster-name", "", "The EKS cluster of the associations (podIdentity).")
+	flag.DurationVar(
+		&opts.Resync,
+		"resync",
+		time.Hour,
+		"The time after which the controller reconciles each request again. 0 turns it off.",
+	)
 	registrations := flag.String(
 		"registrations",
 		"/etc/plugin/registrations.yaml",

@@ -44,6 +44,7 @@ spec:
             - -allowed-actions={{ join "," .Values.allowedActions }}
             - -oidc-provider-arn={{ .Values.oidcProviderArn }}
             - -eks-cluster-name={{ .Values.eksClusterName }}
+            - -resync={{ .Values.resync }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

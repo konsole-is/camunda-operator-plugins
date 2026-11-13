@@ -37,6 +37,17 @@ type AssociationChange struct {
 	Created, Updated, Tagged, Deleted []string
 }
 
+// Corrections names the association of each ServiceAccount of c, for
+// pluginkit.Result.Corrected.
+func (c AssociationChange) Corrections() []string {
+	sas := slices.Concat(c.Created, c.Updated, c.Tagged, c.Deleted)
+	out := make([]string, 0, len(sas))
+	for _, sa := range sas {
+		out = append(out, "the Pod Identity association of the ServiceAccount "+sa)
+	}
+	return out
+}
+
 // EnsureAssociations makes one association of roleARN for each of
 // serviceAccounts in namespace of the EKS cluster, with tags, and returns
 // them sorted by ServiceAccount. EKS allows one association for each
@@ -170,8 +181,8 @@ func DeleteAssociations(
 // cluster that carries the TagNamespace, TagClaim, and TagRequest values of
 // tags, on any role, except the associations of the ServiceAccounts in keep.
 // It returns the ServiceAccounts of the deleted
-// associations, sorted. It finds an association that a failed or interrupted
-// change of the role left behind.
+// associations, sorted, also with an error. It finds an association that a
+// failed or interrupted change of the role left behind.
 func DeleteRequestAssociations(
 	ctx context.Context,
 	c EKS,
@@ -190,7 +201,8 @@ func DeleteRequestAssociations(
 			continue
 		}
 		if err := deleteAssociation(ctx, c, cluster, namespace, a.Association); err != nil {
-			return nil, err
+			slices.Sort(deleted)
+			return deleted, err
 		}
 		deleted = append(deleted, a.ServiceAccount)
 	}

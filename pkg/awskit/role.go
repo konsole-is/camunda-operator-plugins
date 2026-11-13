@@ -18,6 +18,9 @@ package awskit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -42,9 +45,46 @@ type RoleSpec struct {
 	Tags                map[string]string
 }
 
+// DesiredHash returns 16 hex digits of a hash of the trust policy, the
+// permissions boundary, and the tags of s without TagDesired, and then of
+// each list of extra. Two inputs that differ give two hashes, also when a
+// value holds a comma or an equals sign.
+func (s RoleSpec) DesiredHash(extra ...[]string) string {
+	tags := maps.Clone(s.Tags)
+	delete(tags, TagDesired)
+
+	pairs := make([]string, 0, 2*len(tags))
+	for _, key := range slices.Sorted(maps.Keys(tags)) {
+		pairs = append(pairs, key, tags[key])
+	}
+
+	input := appendList(nil, []string{string(s.TrustPolicy), s.PermissionsBoundary})
+	input = appendList(input, pairs)
+	for _, list := range extra {
+		input = appendList(input, list)
+	}
+	sum := sha256.Sum256(input)
+	return hex.EncodeToString(sum[:8])
+}
+
+// appendList appends list to b so that two lists that differ never append
+// the same bytes.
+func appendList(b []byte, list []string) []byte {
+	b = binary.BigEndian.AppendUint64(b, uint64(len(list)))
+	for _, item := range list {
+		b = binary.BigEndian.AppendUint64(b, uint64(len(item)))
+		b = append(b, item...)
+	}
+	return b
+}
+
 // Role is an IAM role.
 type Role struct {
 	Name, ARN string
+	// Desired is the TagDesired value of the role as EnsureRole or ClaimRole
+	// read it, before any change. It is empty for a role that EnsureRole
+	// created.
+	Desired string
 }
 
 // RoleInUseError means that an IAM role has the name that a request wants,
@@ -67,6 +107,16 @@ type RoleChange struct {
 	Updated []string
 }
 
+// Corrections names each part of the role name that c updated, such as "the
+// trust policy of the IAM role camunda-0123", for pluginkit.Result.Corrected.
+func (c RoleChange) Corrections(name string) []string {
+	out := make([]string, 0, len(c.Updated))
+	for _, part := range c.Updated {
+		out = append(out, "the "+part+" of the IAM role "+name)
+	}
+	return out
+}
+
 // EnsureRole creates the role of spec, or updates a role of that name to the
 // trust policy, the permissions boundary, and the tags of spec. It never
 // removes a tag that spec does not name. A role that another writer creates
@@ -76,7 +126,12 @@ type RoleChange struct {
 // TagRequestUID value differs from the one in spec.Tags. An absent tag is the
 // empty value. It takes a live role without a TagRequestUID value whose
 // TagNamespace and TagRequest are the ones in spec.Tags, and writes its UID.
-func EnsureRole(ctx context.Context, c IAM, spec RoleSpec) (Role, RoleChange, error) {
+//
+// hash is the DesiredHash of the pass. When the TagDesired value of the live
+// role is another hash, EnsureRole sets it to DesiredChanging, with the tags
+// of spec, before it changes anything else. So a change that fails part of
+// the way is not drift in a later pass.
+func EnsureRole(ctx context.Context, c IAM, spec RoleSpec, hash string) (Role, RoleChange, error) {
 	out, err := c.GetRole(ctx, &iam.GetRoleInput{RoleName: aws.String(spec.Name)})
 	if IsNotFound(err) {
 		created, createErr := c.CreateRole(ctx, &iam.CreateRoleInput{
@@ -104,7 +159,13 @@ func EnsureRole(ctx context.Context, c IAM, spec RoleSpec) (Role, RoleChange, er
 		return Role{}, RoleChange{}, RoleInUseError{Name: spec.Name, Owner: ownerOf(live)}
 	}
 
-	role := Role{Name: spec.Name, ARN: aws.ToString(out.Role.Arn)}
+	role := Role{Name: spec.Name, ARN: aws.ToString(out.Role.Arn), Desired: live[TagDesired]}
+	if role.Desired != "" && role.Desired != hash && role.Desired != DesiredChanging {
+		if _, err := MarkDesired(ctx, c, role, spec.Tags, DesiredChanging); err != nil {
+			return role, RoleChange{}, err
+		}
+	}
+
 	updated, err := updateRole(ctx, c, out.Role, live, spec)
 	return role, RoleChange{Updated: updated}, err
 }
@@ -213,6 +274,26 @@ func updateRole(
 	return updated, nil
 }
 
+// MarkDesired tags the role with tags and TagDesired with hash in one
+// TagRole call, when role.Desired is not hash. It reports whether it tagged.
+// A plugin calls it after every step of a pass succeeded, so that a retry of
+// a change is not drift.
+func MarkDesired(ctx context.Context, c IAM, role Role, tags map[string]string, hash string) (bool, error) {
+	if role.Desired == hash {
+		return false, nil
+	}
+
+	tags = maps.Clone(tags)
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	tags[TagDesired] = hash
+	if _, err := c.TagRole(ctx, &iam.TagRoleInput{RoleName: aws.String(role.Name), Tags: iamTags(tags)}); err != nil {
+		return false, fmt.Errorf("tagging the IAM role %s with its desired state: %w", role.Name, err)
+	}
+	return true, nil
+}
+
 // ClaimRole returns the Role of name when it belongs to the request of tags,
 // and a zero Role when the role does not exist. A role belongs to the request
 // when its TagRequestUID value is the one in tags, or when EnsureRole would
@@ -237,7 +318,7 @@ func ClaimRole(ctx context.Context, c IAM, name string, tags map[string]string) 
 			return Role{}, fmt.Errorf("tagging the IAM role %s: %w", name, err)
 		}
 	}
-	return Role{Name: name, ARN: aws.ToString(out.Role.Arn)}, nil
+	return Role{Name: name, ARN: aws.ToString(out.Role.Arn), Desired: live[TagDesired]}, nil
 }
 
 // ErrTagNotVisible means that a read of IAM did not show the TagRequestUID
@@ -347,6 +428,27 @@ func ReplacedRoles(current string, names []string) []string {
 // attached and detached, each sorted.
 type PolicyChange struct {
 	Attached, Detached []string
+}
+
+// Corrections names each managed policy of the role name that c attached or
+// detached, for pluginkit.Result.Corrected.
+func (c PolicyChange) Corrections(name string) []string {
+	arns := slices.Concat(c.Attached, c.Detached)
+	out := make([]string, 0, len(arns))
+	for _, arn := range arns {
+		out = append(out, "the managed policy "+arn+" of the IAM role "+name)
+	}
+	return out
+}
+
+// InlinePolicyCorrections names each inline policy of policies on the role
+// name, for pluginkit.Result.Corrected.
+func InlinePolicyCorrections(name string, policies ...string) []string {
+	out := make([]string, 0, len(policies))
+	for _, policy := range policies {
+		out = append(out, "the inline policy "+policy+" of the IAM role "+name)
+	}
+	return out
 }
 
 // EnsureAttachedPolicies makes the managed policies of the role exactly

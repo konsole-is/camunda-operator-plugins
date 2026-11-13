@@ -19,6 +19,7 @@ package awskms
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -60,6 +61,8 @@ type Options struct {
 	Settings Settings
 	// KMS returns the KMS client of a region.
 	KMS func(region string) awskit.KMS
+	// Resync is the pluginkit.Config.Resync of the plugin.
+	Resync time.Duration
 }
 
 // NewManager returns a manager for cfg that publishes and serves the
@@ -105,7 +108,7 @@ func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 		Registrations:  opts.Registrations,
 		ServiceAccount: opts.ServiceAccount,
 		Health:         plugin.health,
-		Resync:         resync,
+		Resync:         opts.Resync,
 	}, plugin); err != nil {
 		return nil, fmt.Errorf("setting up the plugin: %w", err)
 	}

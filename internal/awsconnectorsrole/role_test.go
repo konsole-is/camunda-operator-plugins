@@ -68,11 +68,13 @@ var _ = Describe("the aws-connectors-role registration", func() {
 		Expect(iamRole.TrustPolicy).To(ContainSubstring(`"system:serviceaccount:` + ns + `:orders-connectors"`))
 		Expect(iamRole.TrustPolicy).NotTo(ContainSubstring("orders-camunda"))
 		Expect(iamRole.PermissionsBoundary).To(Equal(boundary))
+		Expect(iamRole.Tags).To(HaveKeyWithValue(awskit.TagDesired, MatchRegexp(`^[0-9a-f]{16}$`)))
 		Expect(iamRole.Tags).To(Equal(map[string]string{
 			awskit.TagNamespace:  ns,
 			awskit.TagClaim:      "orders",
 			awskit.TagRequest:    req.Name,
 			awskit.TagRequestUID: string(req.UID),
+			awskit.TagDesired:    iamRole.Tags[awskit.TagDesired],
 			"cost-center":        "camunda",
 		}))
 		Expect(iamRole.Attached).To(ConsistOf(policyA, policyB))
@@ -319,7 +321,7 @@ var _ = Describe("the aws-connectors-role registration", func() {
 			Name:        name,
 			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
 			Tags:        owner,
-		})
+		}, "")
 		Expect(err).NotTo(HaveOccurred())
 		before := len(role.iam.RoleCalls(name))
 

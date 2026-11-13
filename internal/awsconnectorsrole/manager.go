@@ -88,7 +88,7 @@ type Options struct {
 // NewManager returns a manager for cfg that publishes and serves the
 // registrations of opts. It refuses a registration that the plugin does not
 // know, an unknown mode, more extra tags than awskit.CheckExtraTags allows
-// next to the UID tag, ModeIRSA without a valid OIDC provider ARN,
+// next to the UID tag and the desired tag, ModeIRSA without a valid OIDC provider ARN,
 // ModePodIdentity without an EKS cluster name, a region, or an EKS client,
 // and a missing IAM or STS client. When opts serves RegistrationRole, it also
 // refuses no permissions boundary, and a role name prefix that IAM refuses

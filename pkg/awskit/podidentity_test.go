@@ -339,6 +339,22 @@ func TestDeleteRequestAssociationsWithoutKeepDeletesEachOfTheRequest(t *testing.
 	assert.Equal(t, "orders-camunda", f.Associations()[0].ServiceAccount)
 }
 
+func TestDeleteRequestAssociationsReturnsTheDeletedServiceAccountsWithAnError(t *testing.T) {
+	f := awsfake.NewEKS()
+	request := awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
+	createAssociation(t, f, "old-a", roleA, request)
+	createAssociation(t, f, "old-b", roleA, request)
+	f.FailNext("DeletePodIdentityAssociation", nil)
+	f.FailNext("DeletePodIdentityAssociation", errors.New("throttled"))
+
+	deleted, err := awskit.DeleteRequestAssociations(context.Background(), f, "eks", "team-a", request, nil)
+
+	require.Error(t, err)
+	require.Len(t, deleted, 1)
+	require.Len(t, f.Associations(), 1)
+	assert.NotEqual(t, deleted[0], f.Associations()[0].ServiceAccount)
+}
+
 func connectorsTags() map[string]string {
 	return awskit.RequestTags("team-a", "orders", "orders-connectors-permissions")
 }
@@ -504,4 +520,21 @@ func TestEnsureAssociationsReadsTheAssociationsOnce(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, lists)
+}
+
+func TestAssociationChangeCorrectionsNameEachServiceAccount(t *testing.T) {
+	change := awskit.AssociationChange{
+		Created: []string{"a"},
+		Updated: []string{"b"},
+		Tagged:  []string{"c"},
+		Deleted: []string{"d"},
+	}
+
+	assert.Equal(t, []string{
+		"the Pod Identity association of the ServiceAccount a",
+		"the Pod Identity association of the ServiceAccount b",
+		"the Pod Identity association of the ServiceAccount c",
+		"the Pod Identity association of the ServiceAccount d",
+	}, change.Corrections())
+	assert.Empty(t, awskit.AssociationChange{}.Corrections())
 }

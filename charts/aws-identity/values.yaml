@@ -43,6 +43,12 @@ oidcProviderArn: ""
 # podIdentity needs it.
 eksClusterName: ""
 
+# resync is the time after which the controller reconciles each request
+# again, and repairs a role, a Grant policy, or an association that was
+# changed outside the cluster.
+# 0 turns the resync off.
+resync: 1h
+
 # endpointURL, when set, sends every AWS call to this endpoint instead of the
 # endpoints of AWS.
 endpointURL: ""

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -79,16 +80,18 @@ type Options struct {
 	// Clients are the AWS clients. NewManager needs IAM and STS, and EKS with
 	// ModePodIdentity.
 	Clients awskit.Clients
+	// Resync is the pluginkit.Config.Resync of the plugin.
+	Resync time.Duration
 }
 
 // NewManager returns a manager for cfg that publishes and serves the
 // registrations of opts. It refuses an unknown mode, no permissions
 // boundary, a role name prefix that awskit.CheckRolePrefix refuses or that
 // aws-connectors-role uses by default, more extra tags than
-// awskit.CheckExtraTags allows next to the UID tag, no allowed action or a
-// bad one, ModeIRSA without a valid OIDC provider ARN, ModePodIdentity
-// without an EKS cluster name, and a missing client. /healthz and /readyz
-// answer while it runs.
+// awskit.CheckExtraTags allows next to the UID tag and the desired tag, no
+// allowed action or a bad one, ModeIRSA without a valid OIDC provider ARN,
+// ModePodIdentity without an EKS cluster name, and a missing client.
+// /healthz and /readyz answer while it runs.
 func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 	plugin, err := newPlugin(opts)
 	if err != nil {
@@ -133,6 +136,7 @@ func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 		Registrations:  opts.Registrations,
 		ServiceAccount: opts.ServiceAccount,
 		Health:         plugin.health,
+		Resync:         opts.Resync,
 		Watches:        watches(mgr.GetClient()),
 	}, plugin); err != nil {
 		return nil, fmt.Errorf("setting up the plugin: %w", err)

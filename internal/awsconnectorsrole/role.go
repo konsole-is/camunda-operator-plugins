@@ -39,6 +39,9 @@ import (
 // ServiceAccount, Pending with no AWS call when the inline policy is over the
 // size limit, and Pending when the role of its name belongs to another
 // request. A Pending result keeps the old roles of the status.
+//
+// The result names in Corrected the drift that it repaired, also with an
+// error.
 func (p *Plugin) reconcileRole(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -63,7 +66,14 @@ func (p *Plugin) reconcileRole(
 	}
 
 	current := p.roleName(request)
-	role, err := p.ensureRole(ctx, req, current, sas)
+	wanted := wantedPolicies(req.Parameters)
+	spec, err := p.roleSpec(request, current, sas)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+	hash := spec.DesiredHash(sas, []string{string(doc)}, wanted)
+
+	role, change, err := p.ensureRole(ctx, req, spec, hash)
 	pending, inUse := roleNameInUse(err, status)
 	if inUse {
 		// The outputs still name the old role, so it serves the request until
@@ -72,43 +82,70 @@ func (p *Plugin) reconcileRole(
 		if oldErr != nil || old.ARN == "" {
 			return pending, oldErr
 		}
-		role, err = p.ensureRole(ctx, req, old.Name, sas)
+		spec.Name = old.Name
+		role, change, err = p.ensureRole(ctx, req, spec, hash)
+	}
+	drift := role.Desired == hash
+	var corrected []string
+	if drift {
+		corrected = change.Corrections(role.Name)
 	}
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: corrected}, err
+	}
+
+	// The pass moves the request off the old role that the outputs name. A
+	// later pass that serves that role again must not count the move as drift.
+	if err := p.markOldRoleChanging(ctx, req, current, role.Name); err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
 	// Like the trust policy of IRSA, so that a former ServiceAccount loses its
 	// access before a policy step can fail.
-	associations, err := p.ensureAssociations(ctx, req, sas, role.ARN)
+	associations, moved, err := p.ensureAssociations(ctx, req, sas, role.ARN)
+	if drift {
+		corrected = append(corrected, moved.Corrections()...)
+	}
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
-	if err := p.ensureInlinePolicy(ctx, req, role, doc); err != nil {
-		return pluginkit.Result{}, err
+	updated, err := p.ensureInlinePolicy(ctx, req, role, doc)
+	if drift && updated {
+		corrected = append(corrected, awskit.InlinePolicyCorrections(role.Name, inlinePolicyName)...)
+	}
+	if err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
-	wanted := wantedPolicies(req.Parameters)
-	if err := p.ensureAttachedPolicies(ctx, req, role, wanted); err != nil {
-		return pluginkit.Result{}, err
+	attached, err := p.ensureAttachedPolicies(ctx, req, role, wanted)
+	if drift {
+		corrected = append(corrected, attached.Corrections(role.Name)...)
+	}
+	if err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
+	}
+
+	if _, err := awskit.MarkDesired(ctx, p.clients.IAM, role, spec.Tags, hash); err != nil {
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
 	resources := append([]pluginsv1alpha1.ResourceRef{roleResource(role, request)}, associations...)
 	if inUse {
 		pending.Resources = append(resources, oldRoleRows(status, role.Name)...)
+		pending.Corrected = corrected
 		return pending, nil
 	}
 
 	old, _, err := p.retireOldRoles(ctx, req, role)
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 	resources = append(resources, old...)
 
 	consoleURL, err := awskit.RoleConsoleURL(role.ARN)
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: corrected}, err
 	}
 
 	res := pluginkit.Result{
@@ -116,6 +153,7 @@ func (p *Plugin) reconcileRole(
 		Summary:   summary(role, len(wanted), size, p.boundary),
 		Links:     []pluginsv1alpha1.Link{{Name: "IAM role", URL: consoleURL}},
 		Resources: resources,
+		Corrected: corrected,
 	}
 	if len(old) > 0 {
 		res.RequeueAfter = oldRoleRequeue
@@ -162,42 +200,101 @@ func (p *Plugin) reconcileRoleWithoutServiceAccount(
 	status := req.Object.Status.Resources
 	res := pluginkit.Result{Pending: missingServiceAccount(), Resources: oldRoleRows(status, current)}
 
-	old, err := p.activeOldRole(ctx, req, current)
-	if err != nil {
-		return pluginkit.Result{}, err
-	}
-	if old.ARN != "" {
-		if _, err := p.ensureRole(ctx, req, old.Name, nil); err != nil {
-			return pluginkit.Result{}, err
-		}
-	}
-
-	if err := p.deleteAssociations(ctx, req); err != nil {
-		return pluginkit.Result{}, err
-	}
-
 	arn, err := p.liveRoleARN(ctx, current)
-	if err != nil || arn == "" {
+	if err != nil {
 		return res, err
 	}
 
-	role, err := p.ensureRole(ctx, req, current, nil)
-	if inUse, ok := roleNameInUse(err, status); ok {
-		return inUse, nil
+	// trustNobody of the current role deletes the associations of the old
+	// role too.
+	if err := p.markOldRoleChanging(ctx, req, current, current); err != nil {
+		return res, err
 	}
+
+	// trustNobody deletes the associations of the request, also those of the
+	// old role, so the role of the current name gets its desired tag first.
+	var role awskit.Role
+	var inUse bool
+	var pending pluginkit.Result
+	if arn != "" {
+		role, res.Corrected, err = p.trustNobody(ctx, req, current)
+		pending, inUse = roleNameInUse(err, status)
+		if err != nil && !inUse {
+			return pluginkit.Result{Corrected: res.Corrected}, err
+		}
+	}
+
+	old, err := p.activeOldRole(ctx, req, current)
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: res.Corrected}, err
+	}
+	if old.ARN != "" {
+		_, corrected, err := p.trustNobody(ctx, req, old.Name)
+		res.Corrected = append(res.Corrected, corrected...)
+		if err != nil {
+			return pluginkit.Result{Corrected: res.Corrected}, err
+		}
+	}
+
+	if old.ARN == "" && (arn == "" || inUse) {
+		// No trustNobody of this pass deleted the associations of the request.
+		if _, err := p.deleteAssociations(ctx, req); err != nil {
+			return pluginkit.Result{Corrected: res.Corrected}, err
+		}
+	}
+	if inUse {
+		pending.Corrected = res.Corrected
+		return pending, nil
+	}
+	if arn == "" {
+		return res, nil
 	}
 
 	left, again, err := p.retireOldRoles(ctx, req, role)
 	if err != nil {
-		return pluginkit.Result{}, err
+		return pluginkit.Result{Corrected: res.Corrected}, err
 	}
 	res.Resources = append([]pluginsv1alpha1.ResourceRef{roleResource(role, req.Object)}, left...)
 	if again {
 		res.RequeueAfter = oldRoleRequeue
 	}
 	return res, nil
+}
+
+// trustNobody makes the role name of req trust nobody, deletes the
+// associations of req, and then tags the role with the hash of that state.
+// It returns the drift that it repaired, also with an error.
+func (p *Plugin) trustNobody(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+	name string,
+) (awskit.Role, []string, error) {
+	spec, err := p.roleSpec(req.Object, name, nil)
+	if err != nil {
+		return awskit.Role{}, nil, err
+	}
+
+	hash := spec.DesiredHash()
+	role, change, err := p.ensureRole(ctx, req, spec, hash)
+	drift := role.Desired == hash
+	var corrected []string
+	if drift {
+		corrected = change.Corrections(role.Name)
+	}
+	if err != nil {
+		return awskit.Role{}, corrected, err
+	}
+
+	deleted, err := p.deleteAssociations(ctx, req)
+	if drift {
+		corrected = append(corrected, awskit.AssociationChange{Deleted: deleted}.Corrections()...)
+	}
+	if err != nil {
+		return awskit.Role{}, corrected, err
+	}
+
+	_, err = awskit.MarkDesired(ctx, p.clients.IAM, role, spec.Tags, hash)
+	return role, corrected, err
 }
 
 func missingServiceAccount() *pluginkit.Waiting {
@@ -207,30 +304,33 @@ func missingServiceAccount() *pluginkit.Waiting {
 	}
 }
 
-// ensureRole keeps the role name of the claim of req, trusted by sas, and
-// records an event when it created or updated the role.
-func (p *Plugin) ensureRole(
-	ctx context.Context,
-	req pluginkit.Request[Params, map[string]string],
-	name string,
-	sas []string,
-) (awskit.Role, error) {
-	request := req.Object
+// roleSpec returns the role name of the claim of request, trusted by sas, or
+// by nobody when sas is empty.
+func (p *Plugin) roleSpec(request *pluginsv1alpha1.PluginRequest, name string, sas []string) (awskit.RoleSpec, error) {
 	trust, err := awskit.TrustPolicy(p.mode, p.provider, request.Namespace, sas)
 	if err != nil {
-		return awskit.Role{}, err
+		return awskit.RoleSpec{}, err
 	}
 
-	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, awskit.RoleSpec{
+	return awskit.RoleSpec{
 		Name:                name,
 		Description:         "Connectors of the Camunda cluster " + request.Namespace + "/" + request.Spec.ClaimRef.Name,
 		TrustPolicy:         trust,
 		PermissionsBoundary: p.boundary,
 		Tags:                p.roleTags(request),
-	})
-	if err != nil {
-		return awskit.Role{}, err
-	}
+	}, nil
+}
+
+// ensureRole calls awskit.EnsureRole with spec and hash, records an event
+// when it created or updated the role, and returns the role and the change.
+// With an error, it still returns the change.
+func (p *Plugin) ensureRole(
+	ctx context.Context,
+	req pluginkit.Request[Params, map[string]string],
+	spec awskit.RoleSpec,
+	hash string,
+) (awskit.Role, awskit.RoleChange, error) {
+	role, change, err := awskit.EnsureRole(ctx, p.clients.IAM, spec, hash)
 
 	switch {
 	case change.Created:
@@ -252,7 +352,7 @@ func (p *Plugin) ensureRole(
 		)
 	}
 
-	return role, nil
+	return role, change, err
 }
 
 // roleName is the role of the claim of request. The OIDC issuer names one
@@ -266,24 +366,25 @@ func (p *Plugin) roleName(request *pluginsv1alpha1.PluginRequest) string {
 }
 
 // ensureInlinePolicy makes the inline policy inlinePolicyName of role doc,
-// or deletes it when doc is nil, and records an event when it changed it.
+// or deletes it when doc is nil, records an event when it changed it, and
+// reports whether it did.
 func (p *Plugin) ensureInlinePolicy(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	role awskit.Role,
 	doc []byte,
-) error {
+) (bool, error) {
 	live, err := p.inlinePolicy(ctx, role.Name)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	switch {
 	case doc == nil && live == nil:
-		return nil
+		return false, nil
 	case doc == nil:
 		if err := awskit.DeleteInlinePolicy(ctx, p.clients.IAM, role.Name, inlinePolicyName); err != nil {
-			return err
+			return false, err
 		}
 		req.Event(
 			corev1.EventTypeNormal,
@@ -295,7 +396,7 @@ func (p *Plugin) ensureInlinePolicy(
 		)
 	case !awskit.SamePolicy(live, doc):
 		if err := awskit.PutInlinePolicy(ctx, p.clients.IAM, role.Name, inlinePolicyName, doc); err != nil {
-			return err
+			return false, err
 		}
 		req.Event(
 			corev1.EventTypeNormal,
@@ -305,9 +406,11 @@ func (p *Plugin) ensureInlinePolicy(
 			inlinePolicyName,
 			role.Name,
 		)
+	default:
+		return false, nil
 	}
 
-	return nil
+	return true, nil
 }
 
 // inlinePolicy returns the decoded inline policy inlinePolicyName of the
@@ -328,13 +431,14 @@ func (p *Plugin) inlinePolicy(ctx context.Context, role string) ([]byte, error) 
 }
 
 // ensureAttachedPolicies makes the managed policies of role exactly arns,
-// and records an event for each policy that it attached or detached.
+// records an event for each policy that it attached or detached, and returns
+// them, also with an error.
 func (p *Plugin) ensureAttachedPolicies(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
 	role awskit.Role,
 	arns []string,
-) error {
+) (awskit.PolicyChange, error) {
 	change, err := awskit.EnsureAttachedPolicies(ctx, p.clients.IAM, role.Name, arns)
 	for _, arn := range change.Detached {
 		req.Event(
@@ -357,13 +461,13 @@ func (p *Plugin) ensureAttachedPolicies(
 		)
 	}
 
-	return err
+	return change, err
 }
 
 // deleteRole deletes the associations of req, and each role of req with its
 // policies: the role of its current name and the roles of its status.
 func (p *Plugin) deleteRole(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
-	if err := p.deleteAssociations(ctx, req); err != nil {
+	if _, err := p.deleteAssociations(ctx, req); err != nil {
 		return err
 	}
 

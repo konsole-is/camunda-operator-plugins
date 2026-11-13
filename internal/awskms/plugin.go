@@ -70,9 +70,6 @@ const (
 	// replicaRequeue is the wait before a request reconciles again while a
 	// replica is being created.
 	replicaRequeue = 5 * time.Second
-	// resync is the time after which each request reconciles again, so that
-	// drift of a key is repaired.
-	resync = 10 * time.Minute
 )
 
 // Params are the parameters of a request.

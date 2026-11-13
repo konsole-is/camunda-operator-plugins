@@ -73,7 +73,7 @@ func TestReconcileRetriesARoleNameInUse(t *testing.T) {
 		Name:        p.roleName(request),
 		TrustPolicy: []byte(`{}`),
 		Tags:        awskit.ExtraTags(nil).OwnerTags("team-a", "orders", "orders-identity", "uid-2"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	res, err := p.Reconcile(context.Background(), pluginkit.Request[Params, map[string]string]{Object: request})
@@ -126,7 +126,7 @@ func TestRetireOldRolesKeepsARoleWhoseNewTagIsNotVisibleYet(t *testing.T) {
 		Name:        "camunda-old",
 		TrustPolicy: []byte(`{}`),
 		Tags:        awskit.RequestTags("team-a", "orders", "orders-identity"),
-	})
+	}, "")
 	require.NoError(t, err)
 	row := pluginsv1alpha1.ResourceRef{Kind: kindIAMRole, Name: old.Name, ID: old.ARN}
 	current := awskit.Role{Name: "camunda-new", ARN: "arn:aws:iam::111122223333:role/camunda-new"}

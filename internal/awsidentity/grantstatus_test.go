@@ -80,3 +80,33 @@ func TestSetGrantConditionsKeepsTheConditionsOfOtherWriters(t *testing.T) {
 
 	assert.NotNil(t, meta.FindStatusCondition(g.Status.Conditions, "Other"))
 }
+
+func TestAppliedAtNeedsTheCurrentGeneration(t *testing.T) {
+	for name, tc := range map[string]struct {
+		conditions []metav1.Condition
+		want       bool
+	}{
+		"True at the current generation": {
+			[]metav1.Condition{{Type: pluginsv1alpha1.ConditionApplied, Status: metav1.ConditionTrue, ObservedGeneration: 2}},
+			true,
+		},
+		"True at an older generation": {
+			[]metav1.Condition{{Type: pluginsv1alpha1.ConditionApplied, Status: metav1.ConditionTrue, ObservedGeneration: 1}},
+			false,
+		},
+		"False at the current generation": {
+			[]metav1.Condition{{Type: pluginsv1alpha1.ConditionApplied, Status: metav1.ConditionFalse, ObservedGeneration: 2}},
+			false,
+		},
+		"no condition": {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := &pluginsv1alpha1.Grant{
+				ObjectMeta: metav1.ObjectMeta{Generation: 2},
+				Status:     pluginsv1alpha1.GrantStatus{Conditions: tc.conditions},
+			}
+
+			assert.Equal(t, tc.want, appliedAt(g))
+		})
+	}
+}

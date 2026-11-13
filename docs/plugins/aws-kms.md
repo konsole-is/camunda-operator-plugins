@@ -111,6 +111,7 @@ When you change a policy value, the plugin writes the new key policy on each key
 | `extraTags` | `{}` | Tags for each key and each replica, such as a cost center. At most 46, because a key also carries four `camunda.io/` tags. A key must not start with `aws:` or `camunda.io/`, and must not hold a `=`. A value must not hold a comma. |
 | `keyAdministratorArns` | `[]` | The IAM principals that administer each key. See [Key policy](#key-policy). |
 | `csiDriverRoleArn` | `""` | The IAM role of the EBS CSI driver. See [Key policy](#key-policy). |
+| `resync` | `10m` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It repairs a key or a replica that someone changed in AWS (see [Drift](#drift)). A Go duration such as `1h`. `0` turns it off, and then a change in AWS stays until something else reconciles the request. |
 | `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |
 | `serviceAccount.annotations` | `{}` | The annotations of the ServiceAccount of the controller, for example `eks.amazonaws.com/role-arn` of the controller role. |
 | `registrations` | `aws-kms-key` and `aws-kms-key-multi-region` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
@@ -167,6 +168,18 @@ When you remove a region from `replicaRegions`, the plugin keeps the replica in 
 ## Grants
 
 The plugin writes no Grants. The registrations have no grant templates. Give the pods that use the key access through the IAM role of the cluster, or through the key policy.
+
+## Drift
+
+The plugin repairs a change that someone made in AWS to the key of a request or to one of its replicas: the tags, the key policy, and the rotation of the key. It repairs on each reconcile: after a change in the cluster, and at the latest after the chart value `resync`, `10m` by default.
+
+For each reconcile that repaired a key that existed before the reconcile, the plugin records the event `DriftCorrected` on the request. Its note names what it repaired, for example `Corrected drift outside the cluster: key policy`. The summary item `Last drift corrected` of the request shows the time of the last repair. Find the events with:
+
+```sh
+kubectl get events -n <namespace> --field-selector reason=DriftCorrected
+```
+
+A change of the parameters of a request, such as a new region in `replicaRegions`, is not drift. The plugin keeps no record of the chart values that it applied, though. A new or changed tag in `extraTags`, or a change of `keyAdministratorArns` or `csiDriverRoleArn` while one of them is set, therefore also records `DriftCorrected`, on each request at its next reconcile.
 
 ## Deletion
 

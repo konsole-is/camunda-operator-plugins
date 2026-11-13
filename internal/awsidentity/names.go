@@ -32,8 +32,8 @@ const (
 	// default.
 	connectorsRolePrefix = "camunda-connectors"
 	// ownTags is the number of tags that a role carries besides the request
-	// tags and the extra tags: awskit.TagRequestUID.
-	ownTags = 1
+	// tags and the extra tags: awskit.TagRequestUID and awskit.TagDesired.
+	ownTags = 2
 	// policyPrefix starts the name of each inline policy that the hub writes
 	// for a Grant. The hub removes only policies with this prefix.
 	policyPrefix = "grant-"

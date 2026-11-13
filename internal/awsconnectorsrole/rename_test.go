@@ -17,7 +17,9 @@ limitations under the License.
 package awsconnectorsrole_test
 
 import (
+	"errors"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -150,7 +152,7 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 				s.request.Name,
 				string(s.request.UID),
 			),
-		})
+		}, "")
 		Expect(err).NotTo(HaveOccurred())
 		// The finalizer holds the request until a manager runs Delete.
 		Expect(renameCluster.k8s.Delete(ctx, s.request)).To(Succeed())
@@ -257,7 +259,7 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 					s.request.Name,
 					string(s.request.UID),
 				),
-			})
+			}, "")
 			Expect(err).NotTo(HaveOccurred())
 			s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
 
@@ -279,7 +281,7 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 			Name:        awskit.RoleName(newPrefix, issuer, s.namespace, "orders"),
 			TrustPolicy: []byte(`{"Version":"2012-10-17","Statement":[]}`),
 			Tags:        awskit.ExtraTags(nil).OwnerTags(s.namespace, "orders", s.request.Name, "another-uid"),
-		})
+		}, "")
 		Expect(err).NotTo(HaveOccurred())
 		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Parameters = raw(managedParams(policyB)) })
 
@@ -292,5 +294,83 @@ var _ = Describe("a change of the role name prefix", Ordered, Serial, func() {
 			g.Expect(old.Attached).To(ConsistOf(policyB))
 			g.Expect(old.InlinePolicies).NotTo(HaveKey("connectors"))
 		}, timeout).Should(Succeed())
+	})
+
+	It("records no DriftCorrected when the prefix changes back to an old role that it could not delete", func() {
+		s := newRenameSetup(awskit.ModePodIdentity)
+		s.iam.AddRoleToInstanceProfile(s.oldRole.Name, "nodes")
+
+		c, stop := startConnectors(s.mode, newPrefix, s.iam, s.eks)
+		Eventually(func(g Gomega) {
+			role, ok := s.iam.Role(c.roleName(s.namespace))
+			g.Expect(ok).To(BeTrue(), "the new role exists")
+			g.Expect(associationsIn(c, s.namespace)).To(ConsistOf("orders-connectors=" + role.ARN))
+			old, ok := s.iam.Role(s.oldRole.Name)
+			g.Expect(ok).To(BeTrue(), "the instance profile keeps the old role")
+			g.Expect(old.Attached).To(BeEmpty(), "the delete of the old role started")
+		}, timeout).Should(Succeed())
+		stop()
+
+		back, stop := startConnectors(s.mode, rolePrefix, s.iam, s.eks)
+		DeferCleanup(stop)
+		DeferCleanup(func() {
+			// The instance profile keeps the role, so the spec releases the
+			// request itself.
+			Expect(back.k8s.Delete(ctx, s.request)).To(Succeed())
+			Eventually(func(g Gomega) {
+				got := read(g, back, s.request)
+				got.Finalizers = nil
+				g.Expect(back.k8s.Update(ctx, got)).To(Succeed())
+			}, timeout).Should(Succeed())
+		})
+		Eventually(func(g Gomega) {
+			g.Expect(associationsIn(back, s.namespace)).To(ConsistOf("orders-connectors=" + s.oldRole.ARN))
+			old, _ := s.iam.Role(s.oldRole.Name)
+			g.Expect(old.Attached).To(ConsistOf(policyA))
+		}, timeout).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(eventNotes(g, back, s.namespace, "DriftCorrected")).To(BeEmpty())
+		}, 3*time.Second).Should(Succeed())
+	})
+
+	It("records no DriftCorrected when the prefix changes back after a pass without a ServiceAccount "+
+		"could not read the old role", func() {
+		s := newRenameSetup(awskit.ModePodIdentity)
+		s.iam.FailRole(s.oldRole.Name, errors.New("the role cannot be read"))
+		DeferCleanup(func() { s.iam.FailRole(s.oldRole.Name, nil) })
+
+		c, stop := startConnectors(s.mode, newPrefix, s.iam, s.eks)
+		Eventually(func(g Gomega) {
+			_, ok := s.iam.Role(c.roleName(s.namespace))
+			g.Expect(ok).To(BeTrue(), "the new role exists")
+		}, timeout).Should(Succeed())
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "" })
+		Eventually(func(g Gomega) {
+			got := read(g, c, s.request)
+			ready := conditionOf(got.Status.Conditions, v1.ConditionReady)
+			g.Expect(ready.ObservedGeneration).To(Equal(got.Generation))
+			g.Expect(ready.Message).To(ContainSubstring(s.oldRole.Name + ": the role cannot be read"))
+		}, timeout).Should(Succeed())
+		stop()
+
+		s.iam.FailRole(s.oldRole.Name, nil)
+		s.update(func(r *pluginsv1alpha1.PluginRequest) { r.Spec.Target.ServiceAccountName = "orders-connectors" })
+		back, stop := startConnectors(s.mode, rolePrefix, s.iam, s.eks)
+		DeferCleanup(stop)
+		DeferCleanup(func() {
+			Expect(back.k8s.Delete(ctx, s.request)).To(Succeed())
+			Eventually(func(g Gomega) {
+				err := back.k8s.Get(ctx, client.ObjectKeyFromObject(s.request), &pluginsv1alpha1.PluginRequest{})
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the request is gone: %v", err)
+			}, timeout).Should(Succeed())
+		})
+		Eventually(func(g Gomega) {
+			got := read(g, back, s.request)
+			g.Expect(conditionOf(got.Status.Conditions, v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(associationsIn(back, s.namespace)).To(ConsistOf("orders-connectors=" + s.oldRole.ARN))
+		}, timeout).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(eventNotes(g, back, s.namespace, "DriftCorrected")).To(BeEmpty())
+		}, 3*time.Second).Should(Succeed())
 	})
 })
