@@ -156,7 +156,7 @@ func EnsureRole(ctx context.Context, c IAM, spec RoleSpec, hash string) (Role, R
 
 	live := roleTags(out.Role)
 	if !ownedBy(live, spec.Tags) {
-		return Role{}, RoleChange{}, RoleInUseError{Name: spec.Name, Owner: ownerOf(live)}
+		return Role{}, RoleChange{}, RoleInUseError{Name: spec.Name, Owner: OwnerOf(live)}
 	}
 
 	role := Role{Name: spec.Name, ARN: aws.ToString(out.Role.Arn), Desired: live[TagDesired]}
@@ -190,19 +190,6 @@ func ownedBy(live, want map[string]string) bool {
 	return live[TagRequestUID] == "" &&
 		live[TagNamespace] != "" && live[TagNamespace] == want[TagNamespace] &&
 		live[TagRequest] != "" && live[TagRequest] == want[TagRequest]
-}
-
-// ownerOf names the request of the tags of a role, for a RoleInUseError.
-func ownerOf(tags map[string]string) string {
-	if tags[TagRequest] == "" {
-		return "no request"
-	}
-
-	owner := "the request " + tags[TagNamespace] + "/" + tags[TagRequest]
-	if uid := tags[TagRequestUID]; uid != "" {
-		owner += " with the UID " + uid
-	}
-	return owner
 }
 
 func optional(s string) *string {
@@ -310,7 +297,7 @@ func ClaimRole(ctx context.Context, c IAM, name string, tags map[string]string) 
 
 	live := roleTags(out.Role)
 	if !ownedBy(live, tags) {
-		return Role{}, RoleInUseError{Name: name, Owner: ownerOf(live)}
+		return Role{}, RoleInUseError{Name: name, Owner: OwnerOf(live)}
 	}
 
 	if live[TagRequestUID] != tags[TagRequestUID] {
@@ -358,7 +345,7 @@ func DeleteRole(ctx context.Context, c IAM, name, uid string) (bool, error) {
 	}
 
 	if tags := roleTags(out.Role); tags[TagRequestUID] != uid {
-		return false, RoleInUseError{Name: name, Owner: ownerOf(tags)}
+		return false, RoleInUseError{Name: name, Owner: OwnerOf(tags)}
 	}
 
 	policies, err := policyNames(ctx, c, name)

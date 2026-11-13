@@ -15,7 +15,7 @@ type Plugin[P, I any] interface {
 ```
 
 - `Reconcile` brings the resources of a request to their desired state. It returns a `Result`: the outputs, the Kubernetes objects to apply, and the status fields. pluginkit calls it only for a request whose parameters pass the schema of the registration, and whose required inputs have a value.
-- `Delete` deletes what pluginkit does not delete itself: each resource outside the cluster, and each cluster-scoped object. It must succeed when the resources are already gone. Two requests in two namespaces can have the same name. A plugin deletes its cluster-scoped objects with `pluginkit.DeleteClusterScoped`, which matches all three labels: `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/request-namespace`.
+- `Delete` deletes what pluginkit does not delete itself: each resource outside the cluster, and each cluster-scoped object. It must succeed when the resources are already gone. Two requests in two namespaces can have the same name. A plugin deletes its cluster-scoped objects with `pluginkit.DeleteClusterScoped`, which matches all three labels: `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/request-namespace`. A `Delete` that cannot finish in one call, such as the delete of a large bucket, returns `pluginkit.Deleting` (see [Deletion](#deletion)).
 - `Orphan` releases the resources of a request with the deletion policy `Orphan`, for example the tags that tie a cloud resource to the request.
 
 `Request.Object` is a copy of the `PluginRequest`. `Request.Log` is a logger with the key `request`, whose value holds the `name` and the `namespace` of the request. pluginkit writes one line with this key each time the status or the reason of `Ready` of the request changes. Call `Request.Event` once for each external action, such as the create of a bucket.
@@ -161,12 +161,14 @@ When another writer changed the request after the read, the status write fails w
 
 When a request is deleted, pluginkit calls `Delete` or `Orphan`, by `spec.deletionPolicy`. It decodes the parameters without the schema check, so a changed schema does not block the delete. When the template parameters render, the plugin gets the same values as in `Reconcile`. When the parameters do not decode into `P`, the plugin cannot apply the policy: the finalizer stays, and `Ready` is `False` with reason `InvalidParameters`. Correct `spec.parameters`, and the delete continues.
 
-- `Delete`: pluginkit deletes each Grant with the label `plugins.camunda.io/request: <request>` in the namespace of the request. It does not rely on the owner reference, because a user can remove it. The garbage collector deletes the namespaced objects.
+- `Delete`: pluginkit deletes each Grant with the label `plugins.camunda.io/request: <request>` in the namespace of the request. It does not rely on the owner reference, because a user can remove it. The garbage collector deletes the namespaced objects. A plugin that must delete a namespaced object itself, for example because its tests run on envtest, which has no garbage collector, calls `pluginkit.DeleteOwned`. It deletes the object of a name only when the object carries the labels `plugins.camunda.io/registration` and `plugins.camunda.io/request` of the request and an owner reference to its UID, so it keeps an object that an `Orphan` released, also for a later request of the same name.
 - `Orphan`: pluginkit removes the owner references to the request from the Grants and from the namespaced objects of `Owns`. They keep their labels. A cluster-scoped object has no owner reference, so it stays as it is.
 
 `pluginkit.DeleteClusterScoped(ctx, reader, writer, request, list)` lists the objects of one kind from the API server by the three labels of the request, deletes them, and returns the deleted objects, so the plugin records one event for each. It returns an error while one of them still exists, for example while a finalizer holds it, so the finalizer of the request stays.
 
 The finalizer stays until the method of the plugin returns nil and each Grant is gone. When the method returns an error, `Ready` is `False` with reason `DeleteFailed`, and pluginkit calls the method again with the backoff of controller-runtime. A Grant can hold a finalizer of the identity extension, and pluginkit waits for it.
+
+A delete can take longer than one reconcile should. Then `Delete` works in passes: each call deletes a bounded part, and returns `pluginkit.Deleting{Message: ...}` while more remains. pluginkit sets `Ready` to `False` with reason `Deleting` and that message, keeps the finalizer, and calls the method again after a second, without a backoff. Each pass must start from what is left, because a restart of the plugin loses everything that the pass kept in memory. Return `Deleting` from a `Delete` or `Orphan` pass that is not done yet: more remains to delete, or the plugin waits for a resource outside the cluster. pluginkit has no limit on the number of passes.
 
 ### Reasons
 
@@ -179,6 +181,7 @@ pluginkit uses the reasons of the api module, and adds these reasons of its own:
 | `ReconcileError` | `Ready` | `Reconcile` returned an error, or an output key that the registration does not declare. |
 | `GrantTemplateInvalid` | `Ready` | A grant template does not render for the request. |
 | `DeleteFailed` | `Ready` | `Delete` or `Orphan` returned an error. The finalizer stays. |
+| `Deleting` | `Ready` | `Delete` or `Orphan` returned `pluginkit.Deleting`: the pass is not done yet, and pluginkit calls the method again. The message comes from the plugin. The finalizer stays. |
 | `Unhealthy` | `Ready` of a registration | `Health` returned an error. |
 
 ## The chart of a plugin

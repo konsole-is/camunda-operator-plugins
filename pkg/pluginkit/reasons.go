@@ -32,6 +32,10 @@ const (
 	// ReasonDeleteFailed means that the plugin failed to apply the deletion
 	// policy of a deleted request. The finalizer stays.
 	ReasonDeleteFailed = "DeleteFailed"
+	// ReasonDeleting means that the plugin is not done with the resources of a
+	// deleted request: more remains to delete, or it waits for a resource
+	// outside the cluster. The message says which. The finalizer stays.
+	ReasonDeleting = "Deleting"
 )
 
 // ReasonMissingInput is pluginsv1alpha1.ReasonMissingInput.

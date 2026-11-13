@@ -658,3 +658,236 @@ func TestS3KeepsNoReferenceToTheInputOfAPut(t *testing.T) {
 
 	assertConfigured(t, f)
 }
+
+// versionedBucket returns a fake with the bucket bucket-1 of status, with the
+// objects k1 and k2.
+func versionedBucket(t *testing.T, status types.BucketVersioningStatus) *S3 {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.PutObjects("bucket-1", "k1", "k2")
+	f.Edit("bucket-1", func(b *Bucket) { b.Versioning = status })
+	return f
+}
+
+func deleteKeys(t *testing.T, f *S3, ids ...types.ObjectIdentifier) *s3.DeleteObjectsOutput {
+	out, err := f.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+		Bucket: aws.String("bucket-1"),
+		Delete: &types.Delete{Objects: ids},
+	})
+	require.NoError(t, err)
+	return out
+}
+
+func TestS3GivesTheVersioningOfABucket(t *testing.T) {
+	f := versionedBucket(t, "")
+
+	out, err := f.GetBucketVersioning(
+		context.Background(),
+		&s3.GetBucketVersioningInput{Bucket: aws.String("bucket-1")},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, out.Status, "a bucket that never had versioning on has no status")
+
+	f.Edit("bucket-1", func(b *Bucket) { b.Versioning = types.BucketVersioningStatusSuspended })
+	out, err = f.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: aws.String("bucket-1")})
+	require.NoError(t, err)
+	assert.Equal(t, types.BucketVersioningStatusSuspended, out.Status)
+
+	_, err = f.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: aws.String("missing")})
+	assert.True(t, awskit.IsNotFound(err))
+}
+
+func TestS3KeepsTheVersionAndAddsADeleteMarkerWhenVersioningIsOn(t *testing.T) {
+	f := versionedBucket(t, types.BucketVersioningStatusEnabled)
+
+	out := deleteKeys(t, f, types.ObjectIdentifier{Key: aws.String("k1")})
+
+	require.Len(t, out.Deleted, 1)
+	assert.True(t, aws.ToBool(out.Deleted[0].DeleteMarker))
+	b, _ := f.Bucket("bucket-1")
+	assert.Equal(t, []string{"k2"}, b.Objects, "the key is gone from ListObjectsV2")
+	require.Len(t, b.Versions, 2)
+	assert.Equal(t, ObjectVersion{Key: "k1", VersionID: nullVersion}, b.Versions[0])
+	assert.True(t, b.Versions[1].DeleteMarker)
+	assert.NotEqual(t, nullVersion, b.Versions[1].VersionID)
+}
+
+func TestS3ReplacesTheNullVersionWithADeleteMarkerWhenVersioningIsSuspended(t *testing.T) {
+	f := versionedBucket(t, types.BucketVersioningStatusSuspended)
+
+	deleteKeys(t, f, types.ObjectIdentifier{Key: aws.String("k1")})
+
+	b, _ := f.Bucket("bucket-1")
+	assert.Equal(t, []string{"k2"}, b.Objects)
+	assert.Equal(t, []ObjectVersion{{Key: "k1", VersionID: nullVersion, DeleteMarker: true}}, b.Versions)
+}
+
+func TestS3DeletesAVersionForGood(t *testing.T) {
+	f := versionedBucket(t, types.BucketVersioningStatusEnabled)
+	f.Edit("bucket-1", func(b *Bucket) {
+		b.Versions = []ObjectVersion{{Key: "k1", VersionID: "v1"}, {Key: "k3", VersionID: "v2", DeleteMarker: true}}
+	})
+
+	deleteKeys(
+		t,
+		f,
+		types.ObjectIdentifier{Key: aws.String("k1"), VersionId: aws.String("v1")},
+		types.ObjectIdentifier{Key: aws.String("k3"), VersionId: aws.String("v2")},
+		types.ObjectIdentifier{Key: aws.String("k2"), VersionId: aws.String(nullVersion)},
+	)
+
+	b, _ := f.Bucket("bucket-1")
+	assert.Equal(t, []string{"k1"}, b.Objects)
+	assert.Empty(t, b.Versions, "a delete with a version ID adds no delete marker")
+}
+
+func TestS3ListsEachVersionAndDeleteMarkerInPages(t *testing.T) {
+	f := versionedBucket(t, types.BucketVersioningStatusEnabled)
+	f.Edit("bucket-1", func(b *Bucket) {
+		b.Versions = []ObjectVersion{
+			{Key: "k1", VersionID: "v1"},
+			{Key: "k3", VersionID: "v2"},
+			{Key: "k3", VersionID: "v3", DeleteMarker: true},
+		}
+	})
+
+	var versions, markers []string
+	in := &s3.ListObjectVersionsInput{Bucket: aws.String("bucket-1"), MaxKeys: aws.Int32(2)}
+	for pages := 0; ; pages++ {
+		require.Less(t, pages, 3)
+		out, err := f.ListObjectVersions(context.Background(), in)
+		require.NoError(t, err)
+		for _, v := range out.Versions {
+			versions = append(versions, aws.ToString(v.Key)+"@"+aws.ToString(v.VersionId))
+		}
+		for _, m := range out.DeleteMarkers {
+			markers = append(markers, aws.ToString(m.Key)+"@"+aws.ToString(m.VersionId))
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		in.KeyMarker, in.VersionIdMarker = out.NextKeyMarker, out.NextVersionIdMarker
+	}
+
+	// Each key lists its newest version first.
+	assert.Equal(t, []string{"k1@null", "k1@v1", "k2@null", "k3@v2"}, versions)
+	assert.Equal(t, []string{"k3@v3"}, markers)
+}
+
+func TestS3RefusesToDeleteABucketWithVersions(t *testing.T) {
+	f := versionedBucket(t, types.BucketVersioningStatusEnabled)
+	deleteKeys(t, f, types.ObjectIdentifier{Key: aws.String("k1")}, types.ObjectIdentifier{Key: aws.String("k2")})
+
+	_, err := f.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String("bucket-1")})
+
+	assert.Equal(t, "BucketNotEmpty", awskit.ErrorCode(err))
+}
+
+func TestS3FailCreateFailsEachCreateOfTheNameUntilCleared(t *testing.T) {
+	f := NewS3()
+	denied := &smithy.GenericAPIError{Code: "AccessDenied"}
+	f.FailCreate("bucket-1", denied)
+
+	require.ErrorIs(t, createBucket(f, "bucket-1", "eu-west-1"), denied)
+	require.ErrorIs(t, createBucket(f, "bucket-1", "eu-west-1"), denied)
+	require.NoError(t, createBucket(f, "bucket-2", "eu-west-1"))
+
+	f.FailCreate("bucket-1", nil)
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+}
+
+func TestS3ShowLateShowsTheSettingBeforeAPutForTheGivenReads(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.ShowLate("GetBucketLifecycleConfiguration", 2)
+	_, _, lifecycle := configure(t, f)
+	get := func() (*s3.GetBucketLifecycleConfigurationOutput, error) {
+		return f.GetBucketLifecycleConfiguration(
+			context.Background(),
+			&s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String("bucket-1")},
+		)
+	}
+
+	for range 2 {
+		_, err := get()
+		assert.Equal(t, "NoSuchLifecycleConfiguration", awskit.ErrorCode(err))
+	}
+	out, err := get()
+	require.NoError(t, err)
+	assert.Equal(t, lifecycle.Rules, out.Rules)
+	assertConfigured(t, f)
+}
+
+func TestS3ShowLateShowsTheOldSettingUntilReleased(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	f.ShowLate("GetBucketEncryption", -1)
+	_, encryption, _ := configure(t, f)
+	get := func() types.ServerSideEncryptionByDefault {
+		t.Helper()
+		out, err := f.GetBucketEncryption(
+			context.Background(),
+			&s3.GetBucketEncryptionInput{Bucket: aws.String("bucket-1")},
+		)
+		require.NoError(t, err)
+		return *out.ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault
+	}
+
+	for range 3 {
+		assert.Equal(t, types.ServerSideEncryptionAes256, get().SSEAlgorithm, "the SSE-S3 of a new bucket")
+	}
+	f.ShowLate("GetBucketEncryption", 0)
+	assert.Equal(t, *encryption.Rules[0].ApplyServerSideEncryptionByDefault, get())
+	_, err := f.GetPublicAccessBlock(
+		context.Background(),
+		&s3.GetPublicAccessBlockInput{Bucket: aws.String("bucket-1")},
+	)
+	require.NoError(t, err)
+}
+
+func TestS3ShowLateShowsTheOldTagsAfterAPut(t *testing.T) {
+	f := NewS3()
+	require.NoError(t, createBucket(f, "bucket-1", "eu-west-1"))
+	ctx := context.Background()
+	put := func(value string) {
+		t.Helper()
+		_, err := f.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+			Bucket:  aws.String("bucket-1"),
+			Tagging: &types.Tagging{TagSet: []types.Tag{{Key: aws.String("team"), Value: aws.String(value)}}},
+		})
+		require.NoError(t, err)
+	}
+	put("a")
+	f.ShowLate("GetBucketTagging", 1)
+
+	put("b")
+
+	out, err := f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
+	require.NoError(t, err)
+	assert.Equal(t, "a", aws.ToString(out.TagSet[0].Value))
+	out, err = f.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
+	require.NoError(t, err)
+	assert.Equal(t, "b", aws.ToString(out.TagSet[0].Value))
+}
+
+func TestS3ShowLateShowsNoTagsOfANewBucket(t *testing.T) {
+	f := NewS3()
+	f.ShowLate("GetBucketTagging", 1)
+	_, err := f.CreateBucket(context.Background(), &s3.CreateBucketInput{
+		Bucket: aws.String("bucket-1"),
+		CreateBucketConfiguration: &types.CreateBucketConfiguration{
+			LocationConstraint: "eu-west-1",
+			Tags:               []types.Tag{{Key: aws.String("team"), Value: aws.String("a")}},
+		},
+	})
+	require.NoError(t, err)
+	get := func() (*s3.GetBucketTaggingOutput, error) {
+		return f.GetBucketTagging(context.Background(), &s3.GetBucketTaggingInput{Bucket: aws.String("bucket-1")})
+	}
+
+	_, err = get()
+	assert.Equal(t, "NoSuchTagSet", awskit.ErrorCode(err))
+	out, err := get()
+	require.NoError(t, err)
+	assert.Equal(t, "a", aws.ToString(out.TagSet[0].Value))
+}

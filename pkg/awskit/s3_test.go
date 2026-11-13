@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -95,4 +96,156 @@ func TestEmptyBucketReturnsAnErrorOfS3(t *testing.T) {
 
 	require.ErrorIs(t, err, boom)
 	assert.Contains(t, err.Error(), `"bucket-1"`)
+}
+
+// putKeys puts n objects into bucket-1 of f.
+func putKeys(f *awsfake.S3, n int) {
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%04d", i)
+	}
+	f.PutObjects("bucket-1", keys...)
+}
+
+func deleteBucket(f *awsfake.S3) error {
+	_, err := f.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String("bucket-1")})
+	return err
+}
+
+func TestEmptyBucketWithinEmptiesABucketThatFitsTheBudget(t *testing.T) {
+	f := newS3(t)
+	putKeys(f, 2500)
+
+	remain, err := awskit.EmptyBucketWithin(context.Background(), f, "bucket-1", time.Minute)
+
+	require.NoError(t, err)
+	assert.False(t, remain)
+	require.NoError(t, deleteBucket(f))
+}
+
+func TestEmptyBucketWithinStopsAtTheEndOfTheBudget(t *testing.T) {
+	f := newS3(t)
+	putKeys(f, 2500)
+
+	remain, err := awskit.EmptyBucketWithin(context.Background(), f, "bucket-1", 0)
+
+	require.NoError(t, err)
+	assert.True(t, remain)
+	b, _ := f.Bucket("bucket-1")
+	assert.Len(t, b.Objects, 1500, "a budget that ended deletes one batch")
+}
+
+func TestEmptyBucketWithinGoesOnInALaterCall(t *testing.T) {
+	f := newS3(t)
+	putKeys(f, 2500)
+
+	calls := 0
+	for remain := true; remain; calls++ {
+		require.Less(t, calls, 10)
+		var err error
+		remain, err = awskit.EmptyBucketWithin(context.Background(), f, "bucket-1", 0)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 3, calls)
+	require.NoError(t, deleteBucket(f))
+}
+
+func TestEmptyBucketWithinDeletesEachVersionOfAVersionedBucket(t *testing.T) {
+	for _, status := range []types.BucketVersioningStatus{
+		types.BucketVersioningStatusEnabled,
+		types.BucketVersioningStatusSuspended,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			f := newS3(t)
+			putKeys(f, 1200)
+			f.Edit("bucket-1", func(b *awsfake.Bucket) {
+				b.Versioning = status
+				b.Versions = []awsfake.ObjectVersion{
+					{Key: "k0001", VersionID: "v1"},
+					{Key: "gone", VersionID: "v2", DeleteMarker: true},
+				}
+			})
+
+			remain, err := awskit.EmptyBucketWithin(context.Background(), f, "bucket-1", time.Minute)
+
+			require.NoError(t, err)
+			assert.False(t, remain)
+			require.NoError(t, deleteBucket(f), "no version and no delete marker stays")
+		})
+	}
+}
+
+func TestEmptyBucketLeavesTheVersionsOfAVersionedBucket(t *testing.T) {
+	f := newS3(t)
+	putKeys(f, 3)
+	f.Edit("bucket-1", func(b *awsfake.Bucket) { b.Versioning = types.BucketVersioningStatusEnabled })
+
+	require.NoError(t, awskit.EmptyBucket(context.Background(), f, "bucket-1"))
+
+	assert.Equal(t, "BucketNotEmpty", awskit.ErrorCode(deleteBucket(f)))
+}
+
+func TestEmptyBucketWithinNamesARefusedKey(t *testing.T) {
+	f := newS3(t)
+	f.PutObjects("bucket-1", "k1", "k2")
+	f.RefuseDelete("bucket-1", "k1", "AccessDenied")
+
+	_, err := awskit.EmptyBucketWithin(context.Background(), f, "bucket-1", time.Minute)
+
+	assert.ErrorContains(t, err, "k1: AccessDenied")
+}
+
+func TestEmptyBucketWithinOfAnEmptyBucketDeletesNothing(t *testing.T) {
+	f := newS3(t)
+
+	remain, err := awskit.EmptyBucketWithin(context.Background(), f, "bucket-1", time.Minute)
+
+	require.NoError(t, err)
+	assert.False(t, remain)
+	assert.Zero(t, count(f.Calls(), "DeleteObjects"))
+}
+
+func TestEmptyBucketWithinReturnsAnErrorOfS3(t *testing.T) {
+	f := newS3(t)
+	boom := errors.New("boom")
+	f.FailNext("GetBucketVersioning", boom)
+
+	_, err := awskit.EmptyBucketWithin(context.Background(), f, "bucket-1", time.Minute)
+
+	require.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), `"bucket-1"`)
+}
+
+// slowS3 is an S3 whose DeleteObjects calls after the first wait until their
+// context ends, as a call that S3 throttles does.
+type slowS3 struct {
+	*awsfake.S3
+	deletes int
+}
+
+func (s *slowS3) DeleteObjects(
+	ctx context.Context,
+	in *s3.DeleteObjectsInput,
+	opts ...func(*s3.Options),
+) (*s3.DeleteObjectsOutput, error) {
+	if s.deletes++; s.deletes > 1 {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return s.S3.DeleteObjects(ctx, in, opts...)
+}
+
+func TestEmptyBucketWithinEndsASlowCallAtTheEndOfTheBudget(t *testing.T) {
+	f := newS3(t)
+	putKeys(f, 2500)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	remain, err := awskit.EmptyBucketWithin(ctx, &slowS3{S3: f}, "bucket-1", 100*time.Millisecond)
+
+	require.NoError(t, err, "a call that the budget ended is not a failure")
+	assert.True(t, remain)
+	b, _ := f.Bucket("bucket-1")
+	assert.Len(t, b.Objects, 1500, "the first batch runs whatever the budget")
 }

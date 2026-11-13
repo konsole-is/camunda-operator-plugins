@@ -49,7 +49,8 @@ type Plugin[P, I any] interface {
 	// The finalizer stays until Delete returns nil, so Delete must succeed for
 	// resources that are already gone. A plugin deletes its cluster-scoped
 	// objects with DeleteClusterScoped, which matches the labels registration,
-	// request, and request-namespace.
+	// request, and request-namespace. A Delete that has more to delete than
+	// one call can do, such as a large bucket, returns Deleting.
 	Delete(ctx context.Context, req Request[P, I]) error
 	// Orphan releases the resources of a request with the deletion policy
 	// Orphan, for example the tags that tie a cloud resource to the request.
@@ -120,6 +121,17 @@ type Result struct {
 	// summary item "Last drift corrected" to the time, also when Reconcile
 	// returns an error.
 	Corrected []string
+}
+
+// Deleting is the error of a Delete or Orphan pass that is not done yet,
+// because more remains to delete or the plugin waits for a resource outside
+// the cluster.
+type Deleting struct {
+	Message string
+}
+
+func (d Deleting) Error() string {
+	return d.Message
 }
 
 // Waiting is the reason and the message of a False condition.

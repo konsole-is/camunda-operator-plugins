@@ -53,6 +53,14 @@ var consoles = map[string]string{
 	"aws-us-gov": "console.amazonaws-us-gov.com",
 }
 
+// CheckPartition returns an error when partition has no known console.
+func CheckPartition(partition string) error {
+	if _, ok := consoles[partition]; !ok {
+		return fmt.Errorf("the partition %q has no known console", partition)
+	}
+	return nil
+}
+
 // RoleConsoleURL returns the page of the role roleARN in the IAM console of
 // its partition. It refuses an ARN that is not an IAM role ARN, and a
 // partition without a known console.
@@ -95,4 +103,15 @@ func KeyConsoleURL(keyARN string) (string, error) {
 	}
 
 	return "https://" + parsed.Region + "." + host + "/kms/home?region=" + parsed.Region + "#/kms/keys/" + id, nil
+}
+
+// BucketConsoleURL returns the page of the bucket in the S3 console of its
+// partition and region. It refuses a partition without a known console.
+func BucketConsoleURL(partition, region, bucket string) (string, error) {
+	host, ok := consoles[partition]
+	if !ok {
+		return "", fmt.Errorf("the bucket %s is in the partition %q, which has no known console", bucket, partition)
+	}
+
+	return "https://" + region + "." + host + "/s3/buckets/" + bucket + "?region=" + region, nil
 }

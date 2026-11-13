@@ -22,6 +22,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
@@ -270,6 +271,26 @@ type S3 interface {
 		in *s3.DeleteObjectsInput,
 		opts ...func(*s3.Options),
 	) (*s3.DeleteObjectsOutput, error)
+	GetBucketVersioning(
+		ctx context.Context,
+		in *s3.GetBucketVersioningInput,
+		opts ...func(*s3.Options),
+	) (*s3.GetBucketVersioningOutput, error)
+	ListObjectVersions(
+		ctx context.Context,
+		in *s3.ListObjectVersionsInput,
+		opts ...func(*s3.Options),
+	) (*s3.ListObjectVersionsOutput, error)
+}
+
+// CloudWatch is the part of the CloudWatch API that the plugins call. Each
+// method behaves as the method of the same name of *cloudwatch.Client.
+type CloudWatch interface {
+	GetMetricStatistics(
+		ctx context.Context,
+		in *cloudwatch.GetMetricStatisticsInput,
+		opts ...func(*cloudwatch.Options),
+	) (*cloudwatch.GetMetricStatisticsOutput, error)
 }
 
 var (
@@ -278,6 +299,8 @@ var (
 	_ STS = (*sts.Client)(nil)
 	_ KMS = (*kms.Client)(nil)
 	_ S3  = (*s3.Client)(nil)
+
+	_ CloudWatch = (*cloudwatch.Client)(nil)
 )
 
 // Clients are the AWS clients of a plugin. KMS and S3 are the clients of the
@@ -332,5 +355,13 @@ func KMSIn(cfg aws.Config) func(region string) KMS {
 func S3In(cfg aws.Config) func(region string) S3 {
 	return func(region string) S3 {
 		return s3.NewFromConfig(cfg, func(o *s3.Options) { o.Region = region })
+	}
+}
+
+// CloudWatchIn returns a function that gives a CloudWatch client of cfg for a
+// region, such as the region of a bucket.
+func CloudWatchIn(cfg aws.Config) func(region string) CloudWatch {
+	return func(region string) CloudWatch {
+		return cloudwatch.NewFromConfig(cfg, func(o *cloudwatch.Options) { o.Region = region })
 	}
 }

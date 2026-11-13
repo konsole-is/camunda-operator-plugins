@@ -107,3 +107,31 @@ func TestKeyConsoleURLRefusesAnUnknownPartitionAndAnotherARN(t *testing.T) {
 		assert.ErrorContains(t, err, "is not the ARN of a KMS key", arn)
 	}
 }
+
+func TestBucketConsoleURLNamesTheBucketAndItsRegion(t *testing.T) {
+	got, err := BucketConsoleURL("aws", "eu-west-1", "camunda-orders-0123456789abcdef")
+
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		"https://eu-west-1.console.aws.amazon.com/s3/buckets/camunda-orders-0123456789abcdef?region=eu-west-1",
+		got,
+	)
+}
+
+func TestBucketConsoleURLRefusesAnUnknownPartition(t *testing.T) {
+	_, err := BucketConsoleURL("aws-iso", "us-iso-east-1", "b")
+
+	assert.ErrorContains(t, err, `partition "aws-iso"`)
+}
+
+func TestCheckPartitionAcceptsEachPartitionWithAConsole(t *testing.T) {
+	for _, partition := range []string{"aws", "aws-cn", "aws-us-gov"} {
+		assert.NoError(t, CheckPartition(partition), partition)
+	}
+}
+
+func TestCheckPartitionRefusesAnUnknownPartition(t *testing.T) {
+	assert.ErrorContains(t, CheckPartition("aws-gov"), `"aws-gov"`)
+	assert.Error(t, CheckPartition(""))
+}

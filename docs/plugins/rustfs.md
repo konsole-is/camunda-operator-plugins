@@ -91,7 +91,7 @@ With `Delete`, the plugin deletes these, in this order:
 1. The user, so that no key can write while the bucket empties.
 2. The policy.
 3. Each object of the bucket, and then the bucket.
-4. The Secret and the `ObjectStorageConfig`.
+4. The Secret and the `ObjectStorageConfig`, when each still has its owner reference to the request. A Secret or an `ObjectStorageConfig` whose owner reference someone removed stays.
 
 CAUTION: Use `Delete` only when you do not need the backups. `Delete` erases each backup in the bucket.
 

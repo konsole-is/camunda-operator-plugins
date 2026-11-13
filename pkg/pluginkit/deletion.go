@@ -18,6 +18,7 @@ package pluginkit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -44,6 +45,10 @@ const (
 	eventActionDelete            = "Delete"
 	eventActionOrphan            = "Orphan"
 )
+
+// deletingRequeue is the wait before the next pass of a Delete that returned
+// Deleting.
+const deletingRequeue = time.Second
 
 // delete applies the deletion policy of a deleted request, and then releases
 // its finalizer. The finalizer stays while the plugin fails, and while a Grant
@@ -80,8 +85,12 @@ func (r *reconciler[P, I]) delete(
 	} else {
 		err = r.plugin.Delete(ctx, pluginRequest)
 	}
+	if deleting, ok := errors.AsType[Deleting](err); ok {
+		stage(request, v1.ConditionReady, ReasonDeleting, deleting.Message)
+		return ctrl.Result{RequeueAfter: deletingRequeue}, nil
+	}
 	if err != nil {
-		stage(request, v1.ConditionReady, ReasonDeleteFailed, err.Error())
+		stageDeleteFailed(ctx, request, err)
 		return ctrl.Result{}, fmt.Errorf("applying the deletion policy %s: %w", policy, err)
 	}
 
@@ -95,7 +104,7 @@ func (r *reconciler[P, I]) delete(
 		}
 	}
 	if err != nil {
-		stage(request, v1.ConditionReady, ReasonDeleteFailed, err.Error())
+		stageDeleteFailed(ctx, request, err)
 		return ctrl.Result{}, err
 	}
 
@@ -106,6 +115,15 @@ func (r *reconciler[P, I]) delete(
 	log.Info("Released the cleanup finalizer of PluginRequest", "deletionPolicy", policy)
 
 	return ctrl.Result{}, nil
+}
+
+// stageDeleteFailed stages Ready=False with ReasonDeleteFailed and err. A pass
+// that the stop of the manager cancelled did not fail, so it stages nothing.
+func stageDeleteFailed(ctx context.Context, request *pluginsv1alpha1.PluginRequest, err error) {
+	if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+		return
+	}
+	stage(request, v1.ConditionReady, ReasonDeleteFailed, err.Error())
 }
 
 // deleteGrants deletes each Grant with the request label of request, also a

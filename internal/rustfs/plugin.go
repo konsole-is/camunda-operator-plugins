@@ -403,39 +403,9 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 		{&corev1.Secret{}, secretName(req.Object.Name)},
 		{&v1.ObjectStorageConfig{}, req.Object.Name},
 	} {
-		if err := p.deleteOwned(ctx, req.Object, o.obj, o.name); err != nil {
+		if err := pluginkit.DeleteOwned(ctx, p.reader, p.client, req.Object, o.obj, o.name); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-// deleteOwned deletes the object objName of the kind of obj in the namespace
-// of request when it carries the request label of request. An object of the
-// name that the plugin did not write stays.
-func (p *Plugin) deleteOwned(
-	ctx context.Context,
-	request *pluginsv1alpha1.PluginRequest,
-	obj client.Object,
-	objName string,
-) error {
-	err := p.reader.Get(ctx, client.ObjectKey{Namespace: request.Namespace, Name: objName}, obj)
-	switch {
-	case apierrors.IsNotFound(err):
-		return nil
-	case err != nil:
-		return fmt.Errorf("reading %T %q: %w", obj, objName, err)
-	}
-
-	labels := obj.GetLabels()
-	if labels[pluginsv1alpha1.LabelRequest] != request.Name ||
-		labels[pluginsv1alpha1.LabelRegistration] != request.Spec.Registration {
-		return nil
-	}
-
-	uid := obj.GetUID()
-	if err := p.client.Delete(ctx, obj, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("deleting %T %q: %w", obj, objName, err)
 	}
 	return nil
 }
