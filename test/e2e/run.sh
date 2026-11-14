@@ -10,8 +10,9 @@
 #   OPERATOR_DIR     the checkout of the operator (required, see up.sh)
 #   CHART_NAMESPACE  the namespace of the plugin releases (required)
 #   REPORT           the JUnit report to write (required)
-#   CAMUNDA_MINOR    the Camunda minor of the journey, a matrix file of the
-#                    operator checkout (required)
+#   CAMUNDA_MINOR    the Camunda minor of the journey (required). run.sh
+#                    fails before it creates the cluster when the operator
+#                    checkout has no test/e2e/matrix/<minor>.env.
 # setup.sh of the journey reads the other variables that it needs.
 set -euo pipefail
 
@@ -26,6 +27,10 @@ setup=$repo/test/e2e/$journey/setup.sh
 # The versions are those that the operator at the api ref was tested with,
 # so they move with the api module of go.mod.
 matrix=$OPERATOR_DIR/test/e2e/matrix/$CAMUNDA_MINOR.env
+[ -f "$matrix" ] || {
+  echo "test/e2e/matrix/$CAMUNDA_MINOR.env is not in the operator checkout at $OPERATOR_DIR, so the operator commit of go.mod does not support Camunda $CAMUNDA_MINOR" >&2
+  exit 1
+}
 value() { awk -F= -v key="$1" '$1 == key { print $2 }' "$2"; }
 CAMUNDA_VERSION=$(value CAMUNDA_VERSION "$matrix")
 ELASTICSEARCH_VERSION=$(value ELASTICSEARCH_VERSION "$matrix")

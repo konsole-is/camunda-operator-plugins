@@ -3,6 +3,10 @@
 # case with the policy as a suffix. The targets of one case share their
 # Services. The Services have no selector: the Gateway needs each backend of
 # a route to exist, not to answer.
+#
+# identity.version of the planes stays 8.9.0 and does not follow a Camunda
+# minor. No Identity pod runs, gateway-access reads only the endpoints of the
+# status, and the Conformance workflow has no matrix of minors.
 apiVersion: core.camunda.io/v1
 kind: CamundaCluster
 metadata:

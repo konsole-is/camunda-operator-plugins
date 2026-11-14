@@ -118,6 +118,10 @@ test-published-api: ## Check that check-published-api refuses a go.mod that requ
 list-plugins: ## Print the plugins, every directory of cmd/, as a JSON list.
 	@printf '%s\n' $(PLUGINS) | jq -R . | jq -cs .
 
+.PHONY: list-camunda-minors
+list-camunda-minors: ## Print CAMUNDA_MINORS, the Camunda minors of the journeys, as a JSON list.
+	@printf '%s\n' $(CAMUNDA_MINORS) | jq -R . | jq -cs .
+
 .PHONY: lint
 lint: golangci-lint check-published-api ## Run golangci-lint and check that go.mod requires only the published API.
 	"$(GOLANGCI_LINT)" run
@@ -209,9 +213,13 @@ POD_IDENTITY_WEBHOOK_VERSION ?= v0.6.19
 JOURNEY ?= bare-metal
 # JOURNEY_REPORT is the JUnit report of journey-kind.
 JOURNEY_REPORT ?= $(LOCALBIN)/journeys/$(JOURNEY).xml
-# CAMUNDA_MINOR is the Camunda minor of the journeys. The versions come from
+# CAMUNDA_MINORS are the Camunda minors that each journey runs on in CI, one
+# job for each. A minor needs test/e2e/matrix/<minor>.env in the operator
+# commit of go.mod. See CONTRIBUTING.md.
+CAMUNDA_MINORS := 8.9
+# CAMUNDA_MINOR is the Camunda minor of journey-kind. The versions come from
 # the matrix file of that minor in the operator checkout.
-CAMUNDA_MINOR ?= 8.9
+CAMUNDA_MINOR ?= $(firstword $(CAMUNDA_MINORS))
 # CURL_VERSION and AWS_CLI_VERSION are the images of the helper pods of the
 # journeys and of the AWS conformance runs.
 # renovate: datasource=docker depName=curlimages/curl

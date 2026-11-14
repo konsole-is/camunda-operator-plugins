@@ -31,16 +31,36 @@ permissions:
   contents: read
 
 jobs:
+  # CAMUNDA_MINORS of the Makefile lists the minors. Each journey runs one job
+  # for each minor, with its matrix from this job. See CONTRIBUTING.md.
+  minors:
+    name: List the Camunda minors
+    runs-on: ubuntu-latest
+    outputs:
+      minors: ${{ steps.list.outputs.minors }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+      - name: List the Camunda minors
+        id: list
+        run: echo "minors=$(make -s list-camunda-minors)" >> "${GITHUB_OUTPUT}"
+
   # A claim with the plugins of the bare-metal set, on one kind cluster with
   # the operator of the api ref, ECK, RustFS, and Envoy Gateway.
   bare-metal:
-    name: Bare-metal journey
+    name: Bare-metal journey on Camunda ${{ matrix.minor }}
+    needs: minors
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        minor: ${{ fromJSON(needs.minors.outputs.minors) }}
     env:
       JOURNEY: bare-metal
+      CAMUNDA_MINOR: ${{ matrix.minor }}
       KIND_CLUSTER: journey
-      JOURNEY_REPORT: ${{ github.workspace }}/journey-report/bare-metal.xml
+      JOURNEY_REPORT: ${{ github.workspace }}/journey-report/bare-metal-${{ matrix.minor }}.xml
     steps:
       - name: Clone the code
         uses: actions/checkout@v7
@@ -65,7 +85,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: journey-bare-metal
+          name: journey-bare-metal-${{ matrix.minor }}
           path: journey-report/
           if-no-files-found: warn
 
