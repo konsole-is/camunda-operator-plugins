@@ -16,7 +16,7 @@ require (
 	github.com/go-logr/logr v1.4.4
 	github.com/konsole-is/camunda-operator/api v0.2.1-0.20261111223906-af574314547a
 	github.com/konsole-is/camunda-operator/conformance v0.0.0-20261114182116-1dcb25a4bdfb
-	github.com/onsi/ginkgo/v2 v2.33.1
+	github.com/onsi/ginkgo/v2 v2.34.0
 	github.com/onsi/gomega v1.44.0
 	github.com/sourcehawk/operator-component-framework v0.24.1
 	github.com/stretchr/testify v1.12.1
