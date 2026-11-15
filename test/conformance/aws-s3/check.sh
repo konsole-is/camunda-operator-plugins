@@ -82,18 +82,22 @@ check_many_objects() {
     return
   fi
 
-  kubectl get -n "$ns" pluginrequest/many-objects -w \
-    -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.reason}{" "}{.message}{"\n"}{end}' \
-    > "$work/many.watch" &
+  # With -w, a jsonpath that filters with range prints only the first object.
+  kubectl get -n "$ns" pluginrequest/many-objects -w -o json > "$work/many.json" &
   watch=$!
   delete_request many-objects
   kill "$watch" 2> /dev/null || true
   wait "$watch" 2> /dev/null || true
+  jq -r '.status.conditions[]? | select(.type == "Ready") | "\(.reason) \(.message)"' \
+    "$work/many.json" > "$work/many.ready" || true
 
   # 2,500 objects take three passes or more, about one second apart, and the
   # watch sees each status write.
-  grep -qxF "Deleting Deleting the objects of the bucket $bucket" "$work/many.watch" ||
+  if ! grep -qxF "Deleting Deleting the objects of the bucket $bucket" "$work/many.ready"; then
     fail "Ready of many-objects never showed Deleting the objects of the bucket $bucket"
+    echo "Ready of many-objects during the delete:" >&2
+    cat "$work/many.ready" >&2
+  fi
   bucket_gone "$bucket" || fail "the bucket $bucket of many-objects stayed"
 }
 
