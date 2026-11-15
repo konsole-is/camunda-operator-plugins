@@ -7,7 +7,10 @@
 # cluster stays after the run, for the logs.
 #
 # render.sh fills the variables of the run into values.yaml and each config
-# first. It refuses a file that names a variable without a value.
+# first. It refuses a file that names a variable without a value. setup.sh
+# can add a variable with a line NAME=value in the file $RUN_VARS, and
+# render.sh fills it in each file that it renders after that line. check.sh
+# gets RUN_VARS too.
 #
 # Usage: run.sh <plugin> (make conformance-kind runs it)
 #
@@ -30,6 +33,9 @@ for f in setup.sh values.yaml config.yaml; do
 done
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# setup.sh adds the variables of the objects that it creates for the run.
+export RUN_VARS=$work/run-vars
+: > "$RUN_VARS"
 
 "$repo/test/kind/up.sh"
 "$dir/setup.sh"
