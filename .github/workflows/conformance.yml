@@ -228,9 +228,93 @@ jobs:
           kind delete cluster --name "${KIND_CLUSTER}" || true
           hack/aws-sandbox/teardown.sh "${RUN_ID}"
 
+  # The shared cases of pkg/awskit against the AWS sandbox, so that a fake
+  # that answers otherwise than AWS fails. The check is never required.
+  awskit-sandbox:
+    name: Fakes against the AWS sandbox
+    # The same condition as the job conformance-aws.
+    if: >-
+      github.repository == 'konsole-is/camunda-operator-plugins' &&
+      (github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action == 'opened' || github.event.action == 'synchronize') &&
+      format('{0}', github.event.pull_request.user.id) == vars.AWS_SANDBOX_ACTOR_ID &&
+      github.actor_id == vars.AWS_SANDBOX_ACTOR_ID))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: ${{ github.actor_id == vars.AWS_SANDBOX_ACTOR_ID && 'aws-sandbox' || 'aws-sandbox-review' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # leftovers.sh refuses an ID that does not match cpo-ci-[a-z0-9-]{1,40}.
+      RUN_ID: cpo-ci-${{ github.run_id }}-${{ github.run_attempt }}-awskit
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_KMS_REPLICA_REGION: ${{ vars.AWS_KMS_REPLICA_REGION }}
+      AWS_ISSUER_BUCKET: ${{ vars.AWS_ISSUER_BUCKET }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Check if the change can affect the fakes
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" != pull_request ]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # No pipe into grep -q: with pipefail, its early exit can fail git diff.
+          files=$(git diff --no-renames --name-only "${BASE}...${HEAD}")
+          run=false
+          if grep -qE '^(pkg/awskit/|go\.(mod|sum)$|hack/aws-sandbox/|\.github/workflows/conformance\.yml$)' <<< "${files}"; then
+            run=true
+          fi
+          echo "run=${run}" >> "${GITHUB_OUTPUT}"
+          if [ "${run}" = false ]; then
+            echo "The change touches nothing that the shared cases of pkg/awskit use." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Get the credentials of the CI role
+        id: aws
+        if: steps.scope.outputs.run == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The cases wait for AWS to show each write, so they run in parallel.
+      - name: Run the shared cases against the AWS sandbox
+        if: steps.scope.outputs.run == 'true'
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
+        run: go test -tags sandbox -count=1 -v -parallel 32 -timeout 30m -run 'CasesInTheSandbox$' ./pkg/awskit/
+
+      # The first session of the CI role can be over: it lasts one hour.
+      - name: Get the credentials of the CI role for the cleanup
+        if: ${{ always() && steps.aws.outcome != 'skipped' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The step fails when the run left a role, a policy, or a bucket.
+      - name: Remove what the run created
+        if: ${{ always() && steps.aws.outcome != 'skipped' }}
+        run: hack/aws-sandbox/teardown.sh "${RUN_ID}"
+
   report:
     name: File an issue for a red run on main
-    needs: [conformance, conformance-aws]
+    needs: [conformance, conformance-aws, awskit-sandbox]
     if: ${{ failure() && github.event_name == 'push' && github.repository == 'konsole-is/camunda-operator-plugins' }}
     runs-on: ubuntu-latest
     permissions:

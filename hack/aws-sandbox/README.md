@@ -6,6 +6,8 @@ The CI of the AWS plugins runs against a real AWS sandbox account. [`terraform/a
 
 The job `conformance-aws` of `.github/workflows/conformance.yml` uses these scripts. `CONTRIBUTING.md` tells how a plugin gets such a job. A job that uses AWS has the permission `id-token: write` and selects its environment as `.github/workflows/aws-sandbox.yml` does. It gets the credentials with `aws-actions/configure-aws-credentials` and the role `vars.AWS_ROLE_ARN`.
 
+The job `awskit-sandbox` of the same workflow runs no kind cluster. It uses only the credentials, the run ID, and `teardown.sh` of step 6. Steps 1 to 5 are for a run with a kind cluster.
+
 Give each run an ID that starts with `cpo-ci-`, for example `cpo-ci-${{ github.run_id }}-${{ github.run_attempt }}`. Put the ID into the name of each resource of the run, and into its tag `cpo-ci-run`.
 
 1. Publish the issuer of the kind cluster:
