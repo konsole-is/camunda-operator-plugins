@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests the Camunda minor of run.sh and of make journey-kind. make test-scripts
-# runs it.
+# Tests the Camunda minor of run.sh and of make journey-kind, and the
+# variables that make journey-kind passes. make test-scripts runs it.
 set -uo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -55,5 +55,11 @@ got=$(minor_of_make)
   fail "make without CAMUNDA_MINOR" "passes $got, want the first minor of list-camunda-minors, $first"
 got=$(CAMUNDA_MINOR=8.99 minor_of_make)
 [ "$got" = 'CAMUNDA_MINOR="8.99"' ] || fail "make with CAMUNDA_MINOR in the environment" "passes $got, want 8.99"
+
+# make -n prints the variables that journey-kind passes to the AWS journey.
+recipe=$(RUN_ID=cpo-ci-test make -s -n -C "$repo" journey-kind JOURNEY=aws)
+for want in 'CERT_MANAGER_VERSION="v[0-9]' 'POD_IDENTITY_WEBHOOK_VERSION="v[0-9]' 'RUN_ID="cpo-ci-test"'; do
+  grep -q -- "$want" <<< "$recipe" || fail "make journey-kind for the AWS journey" "does not pass $want"
+done
 
 exit "$failed"
