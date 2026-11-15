@@ -51,3 +51,5 @@ func TestSTSCasesOnTheFake(t *testing.T) { runCases(t, fakeAccount, stsCases) }
 func TestIAMCasesOnTheFake(t *testing.T) { runCases(t, fakeAccount, iamCases) }
 
 func TestKMSCasesOnTheFake(t *testing.T) { runCases(t, fakeAccount, kmsCases) }
+
+func TestS3BucketCasesOnTheFake(t *testing.T) { runCases(t, fakeAccount, s3BucketCases) }
