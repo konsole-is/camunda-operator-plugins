@@ -32,6 +32,8 @@ package awskit_test
 //   - A KMS deletion window other than 7 days: the boundary refuses it.
 //   - A write of a public access block: the boundary refuses it.
 //   - An IAM instance profile: the CI role may not create one.
+//   - A bucket name that ends in a dash: the SDK sends the call to a host
+//     name that does not resolve, so it never reaches S3.
 //   - The knobs of a fake, such as FailNext and ShowLate: AWS has none.
 
 import (

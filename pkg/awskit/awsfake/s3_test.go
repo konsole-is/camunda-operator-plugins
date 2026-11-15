@@ -169,7 +169,7 @@ func tag(key, value string) types.Tag {
 
 func TestS3RefusesAnInvalidBucketName(t *testing.T) {
 	f := NewS3()
-	for _, name := range []string{"ab", "-start"} {
+	for _, name := range []string{"ab", "-start", "end-"} {
 		assert.Equal(t, "InvalidBucketName", awskit.ErrorCode(createBucket(f, name, "eu-west-1")), name)
 	}
 	assert.Empty(t, f.Buckets())

@@ -87,7 +87,7 @@ var s3ObjectCases = []awsCase{
 
 		require.NoError(t, err)
 		assert.Empty(t, out.Contents)
-		assert.True(t, aws.ToBool(out.IsTruncated))
+		assert.False(t, aws.ToBool(out.IsTruncated))
 	}},
 	{"refuses a negative MaxKeys", func(t *testing.T, a account) {
 		bucket := a.bucket(t, "s3-negative-keys", nil)

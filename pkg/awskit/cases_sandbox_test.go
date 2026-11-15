@@ -129,5 +129,6 @@ func setSandboxVersioning(
 		assert.Equal(c, status, out.Status)
 	}, 5*time.Minute, time.Second)
 	// S3 can apply writes by the old versioning for a while after the change.
-	time.Sleep(2 * time.Minute)
+	// AWS asks for 15 minutes before writes after the first enable.
+	time.Sleep(15 * time.Minute)
 }

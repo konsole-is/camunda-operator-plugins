@@ -143,10 +143,19 @@ var iamCases = []awsCase{
 	}},
 }
 
-// iamPolicyOfSize returns an IAM policy of n characters, without white space.
+// iamPolicyOfSize returns an IAM policy of n characters, without white
+// space. n is at least 120.
 func iamPolicyOfSize(n int) string {
-	head := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:GetObject",` +
-		`"Resource":"arn:aws:s3:::`
-	tail := `"}]}`
-	return head + strings.Repeat("x", n-len(head)-len(tail)) + tail
+	head := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":[`
+	tail := `]}]}`
+	// IAM refuses a very long resource, so the policy pads with many resources.
+	resource := func(length int) string { return `"arn:aws:s3:::cpo-ci-pad/` + strings.Repeat("x", length) + `"` }
+	left := n - len(head) - len(tail)
+	var resources []string
+	for left > 2*len(resource(40))+1 {
+		resources = append(resources, resource(40))
+		left -= len(resource(40)) + 1
+	}
+	resources = append(resources, resource(left-len(resource(0))))
+	return head + strings.Join(resources, ",") + tail
 }

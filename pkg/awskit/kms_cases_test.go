@@ -145,7 +145,9 @@ var kmsCases = []awsCase{
 			return err
 		}
 
+		start := time.Now()
 		require.NoError(t, schedule())
+		end := time.Now()
 
 		a.eventually(t, func(c *assert.CollectT) {
 			out, err := a.kmsIn(a.region).DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: key.KeyId})
@@ -155,7 +157,11 @@ var kmsCases = []awsCase{
 			// replicas.
 			assert.Nil(c, out.KeyMetadata.PendingDeletionWindowInDays)
 			require.NotNil(c, out.KeyMetadata.DeletionDate)
-			assert.WithinDuration(c, time.Now().Add(7*24*time.Hour), *out.KeyMetadata.DeletionDate, time.Minute)
+			// KMS can delete a key up to a day after the end of its window. The
+			// bounds allow a minute of clock skew.
+			date := *out.KeyMetadata.DeletionDate
+			assert.False(c, date.Before(start.Add(7*24*time.Hour-time.Minute)), "the deletion date %s", date)
+			assert.False(c, date.After(end.Add(8*24*time.Hour+time.Minute)), "the deletion date %s", date)
 		})
 		err := schedule()
 		assert.Equal(t, "KMSInvalidStateException", awskit.ErrorCode(err), "a second schedule: %v", err)

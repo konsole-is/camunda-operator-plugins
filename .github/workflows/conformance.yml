@@ -241,7 +241,7 @@ jobs:
       format('{0}', github.event.pull_request.user.id) == vars.AWS_SANDBOX_ACTOR_ID &&
       github.actor_id == vars.AWS_SANDBOX_ACTOR_ID))
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     environment: ${{ github.actor_id == vars.AWS_SANDBOX_ACTOR_ID && 'aws-sandbox' || 'aws-sandbox-review' }}
     permissions:
       contents: read
@@ -292,12 +292,13 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      # The cases wait for AWS to show each write, so they run in parallel.
+      # The cases wait for AWS to show each write, and a versioning case
+      # waits 15 minutes, so they run in parallel.
       - name: Run the shared cases against the AWS sandbox
         if: steps.scope.outputs.run == 'true'
         env:
           AWS_ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
-        run: go test -tags sandbox -count=1 -v -parallel 32 -timeout 30m -run 'CasesInTheSandbox$' ./pkg/awskit/
+        run: go test -tags sandbox -count=1 -v -parallel 32 -timeout 40m -run 'CasesInTheSandbox$' ./pkg/awskit/
 
       # The first session of the CI role can be over: it lasts one hour.
       - name: Get the credentials of the CI role for the cleanup

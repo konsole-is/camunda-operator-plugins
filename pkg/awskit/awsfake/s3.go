@@ -433,7 +433,8 @@ func (r s3Region) CreateBucket(
 		return nil, err
 	}
 
-	tags, err := tagSet(config.Tags)
+	// S3 answers a create with two tags of one key with InternalError.
+	tags, err := tagSet(config.Tags, apiError("InternalError", "We encountered an internal error. Please try again."))
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +563,7 @@ func (r s3Region) GetBucketTagging(
 }
 
 // PutBucketTagging replaces every tag of a bucket. More than 50 tags is
-// InvalidTag.
+// BadRequest, and two tags with one key is InvalidTag.
 func (r s3Region) PutBucketTagging(
 	_ context.Context,
 	in *s3.PutBucketTaggingInput,
@@ -582,7 +583,7 @@ func (r s3Region) PutBucketTagging(
 	if in.Tagging == nil {
 		return nil, apiError("MalformedXML", "The XML you provided was not well-formed.")
 	}
-	tags, err := tagSet(in.Tagging.TagSet)
+	tags, err := tagSet(in.Tagging.TagSet, apiError("InvalidTag", "Cannot provide multiple Tags with the same key"))
 	if err != nil {
 		return nil, err
 	}
@@ -591,18 +592,18 @@ func (r s3Region) PutBucketTagging(
 	return &s3.PutBucketTaggingOutput{}, nil
 }
 
-// tagSet returns tags as a map. More than 50 tags, or two tags with one key,
-// is InvalidTag.
-func tagSet(tags []types.Tag) (map[string]string, error) {
+// tagSet returns tags as a map. More than 50 tags is BadRequest, and two
+// tags with one key is duplicate.
+func tagSet(tags []types.Tag, duplicate error) (map[string]string, error) {
 	if len(tags) > maxBucketTags {
-		return nil, apiError("InvalidTag", "Object tags cannot be greater than %d", maxBucketTags)
+		return nil, apiError("BadRequest", "Bucket tag count cannot be greater than %d", maxBucketTags)
 	}
 
 	set := make(map[string]string, len(tags))
 	for _, t := range tags {
 		key := aws.ToString(t.Key)
 		if _, ok := set[key]; ok {
-			return nil, apiError("InvalidTag", "Cannot provide multiple Tags with the same key")
+			return nil, duplicate
 		}
 		set[key] = aws.ToString(t.Value)
 	}
@@ -815,7 +816,8 @@ func checkRules(rules []types.LifecycleRule) error {
 }
 
 // ListObjectsV2 returns the objects of a bucket in key order, in pages of
-// MaxKeys, at most 1,000. A missing bucket is *types.NoSuchBucket.
+// MaxKeys, at most 1,000. A MaxKeys of zero gives an empty page that is not
+// truncated. A missing bucket is *types.NoSuchBucket.
 func (r s3Region) ListObjectsV2(
 	_ context.Context,
 	in *s3.ListObjectsV2Input,
@@ -854,7 +856,7 @@ func (r s3Region) ListObjectsV2(
 		keys = keys[start:]
 	}
 
-	truncated := len(keys) > size
+	truncated := size > 0 && len(keys) > size
 	keys = keys[:min(size, len(keys))]
 	out := &s3.ListObjectsV2Output{
 		Name:              in.Bucket,
