@@ -72,7 +72,7 @@ To add the job of a new plugin:
 
 3. A maintainer then makes the check `Conformance of <plugin>` required for the `main` branch. An AWS check is never required.
 
-Copy `test/conformance/gateway-access/` or `test/conformance/rustfs/` as a start, or `test/conformance/aws-kms/` for an AWS plugin. `setup.sh` and `check.sh` run with `kubectl` and `helm` pointed at the kind cluster, from the root of the repository. They get `CHART_NAMESPACE`, the namespace of the release, in their environment.
+Copy `test/conformance/gateway-access/` or `test/conformance/rustfs/` as a start. For an AWS plugin, copy `test/conformance/aws-kms/`, or `test/conformance/aws-s3/` when the plugin needs an AWS object of the run, such as a KMS key. `setup.sh` and `check.sh` run with `kubectl` and `helm` pointed at the kind cluster, from the root of the repository. They get `CHART_NAMESPACE`, the namespace of the release, in their environment.
 
 Before the job uses `values.yaml` and each config, it replaces these variables of the run in them:
 

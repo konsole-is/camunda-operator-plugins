@@ -125,6 +125,7 @@ jobs:
           - aws-connectors-role
           - aws-identity
           - aws-kms
+          - aws-s3
     env:
       PLUGIN: ${{ matrix.plugin }}
       KIND_CLUSTER: conformance
