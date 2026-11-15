@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	fleetv1alpha1 "github.com/konsole-is/camunda-operator/api/fleet/v1alpha1"
@@ -81,6 +82,55 @@ func TestDescribeClaimNamesUnobservedGeneration(t *testing.T) {
 
 // testClaim returns the claim bare-metal/orders at generation 2, observed,
 // with a backup-storage and an access request and the given conditions.
+func TestSectionsReadyNamesRequestCondition(t *testing.T) {
+	requests := []pluginsv1alpha1.PluginRequest{testRequest(
+		"orders-backup-storage",
+		metav1.Condition{Type: "OutputsReady", Status: metav1.ConditionTrue, Reason: "Healthy"},
+		metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "BucketPending",
+			Message: "creating the bucket",
+		},
+	)}
+
+	err := sectionsReady(testClaim(), requests, "backup-storage")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Ready of the request orders-backup-storage is not True")
+	assert.Contains(t, err.Error(), "Ready=False BucketPending: creating the bucket")
+}
+
+func TestSectionsReadyNeedsOutputsReady(t *testing.T) {
+	requests := []pluginsv1alpha1.PluginRequest{testRequest(
+		"orders-backup-storage",
+		metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Healthy"},
+	)}
+
+	err := sectionsReady(testClaim(), requests, "backup-storage")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OutputsReady of the request orders-backup-storage is not True")
+}
+
+func TestSectionsReadyNamesMissingRequest(t *testing.T) {
+	err := sectionsReady(testClaim(), nil, "encryption-key")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the request of the section encryption-key is missing")
+	assert.Contains(t, err.Error(), "CamundaClusterClaim bare-metal/orders")
+}
+
+func TestSectionsReadyLeavesOutOtherSections(t *testing.T) {
+	ready := []metav1.Condition{
+		{Type: "OutputsReady", Status: metav1.ConditionTrue, Reason: "Healthy"},
+		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Healthy"},
+	}
+	requests := []pluginsv1alpha1.PluginRequest{
+		testRequest("orders-backup-storage", ready...),
+		testRequest("orders-access", metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: "Pending"}),
+	}
+
+	assert.NoError(t, sectionsReady(testClaim(), requests, "backup-storage"))
+}
+
 func testClaim(conditions ...metav1.Condition) *fleetv1alpha1.CamundaClusterClaim {
 	return &fleetv1alpha1.CamundaClusterClaim{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "bare-metal", Name: "orders", Generation: 2},
