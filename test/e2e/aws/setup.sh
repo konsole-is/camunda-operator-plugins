@@ -25,19 +25,33 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 plugins=(aws-identity aws-kms aws-s3)
 
+# The journey runs no setup.sh of test/conformance/, so no RUN_VARS file adds
+# a variable. A file that names such a variable fails here, instead of
+# reaching helm or IAM with the variable as text.
+render() {
+  local out names
+  out=$(RUN_VARS='' "$repo/test/conformance/render.sh" "$1")
+  names=$(grep -oE '\$\{[A-Z][A-Z0-9_]*\}' <<< "$out" | sort -u | paste -sd ' ' - || true)
+  if [ -n "$names" ]; then
+    echo "$1 names variables that the journey does not set: $names" >&2
+    exit 1
+  fi
+  printf '%s\n' "$out"
+}
+
 "$kind/pod-identity-webhook.sh"
 
 # The release and its ServiceAccount have the name of the plugin, which the
 # serviceAccount.annotations of each values.yaml name.
 for plugin in "${plugins[@]}"; do
-  "$repo/test/conformance/render.sh" "$repo/test/conformance/$plugin/controller-policy.json" \
+  render "$repo/test/conformance/$plugin/controller-policy.json" \
     > "$work/$plugin-policy.json"
   "$repo/hack/aws-sandbox/plugin-role.sh" "$RUN_ID" "$plugin" "$CHART_NAMESPACE" "$plugin" \
     "$work/$plugin-policy.json"
 done
 
 echo "==> Creating the reader role of the journey"
-"$repo/test/conformance/render.sh" "$here/reader-policy.json" > "$work/reader-policy.json"
+render "$here/reader-policy.json" > "$work/reader-policy.json"
 out=$("$repo/hack/aws-sandbox/plugin-role.sh" "$RUN_ID" journey-reader aws-reader aws-reader \
   "$work/reader-policy.json")
 echo "$out"
@@ -48,7 +62,7 @@ kubectl create serviceaccount aws-reader -n aws-reader --dry-run=client -o yaml 
 kubectl annotate serviceaccount aws-reader -n aws-reader --overwrite "eks.amazonaws.com/role-arn=$reader"
 
 for plugin in "${plugins[@]}"; do
-  "$repo/test/conformance/render.sh" "$repo/test/conformance/$plugin/values.yaml" > "$work/$plugin-values.yaml"
+  render "$repo/test/conformance/$plugin/values.yaml" > "$work/$plugin-values.yaml"
   "$kind/plugin.sh" "$plugin" "$work/$plugin-values.yaml"
 done
 
