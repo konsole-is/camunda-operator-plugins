@@ -19,6 +19,8 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
 ns=conformance-aws-s3-checks
 resync=30
+# The settle time of the plugin, settleTime in internal/awss3/settle.go.
+settle=300
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -120,8 +122,15 @@ check_versioned() {
 
 check_steady() {
   echo "==> Checking that no request records DriftCorrected after the writes of the plugin"
-  local events drift bucket
-  sleep $((2 * resync + 15))
+  local since left events drift bucket
+  # When the settle time after its writes ends, the plugin checks the bucket
+  # once more, also without a resync. Two resyncs run after that.
+  since=$(kubectl get -n "$ns" pluginrequest/steady \
+    -o jsonpath='{.status.conditions[?(@.type=="OutputsReady")].lastTransitionTime}')
+  left=$(($(date -d "$since" +%s) + settle + 2 * resync + 15 - $(date +%s)))
+  if [ "$left" -gt 0 ]; then
+    sleep "$left"
+  fi
   events=$(drift_events)
   [ -z "$events" ] ||
     fail "requests of the run recorded DriftCorrected after the writes of the plugin: $events"
@@ -129,28 +138,29 @@ check_steady() {
     -o jsonpath='{.status.summary[?(@.label=="Last drift corrected")].value}')
   [ -z "$drift" ] || fail "steady shows Last drift corrected $drift"
 
-  # Without a resync, the check above passes on nothing. The plugin takes a
-  # missing lifecycle rule for one that S3 shows late until 5 minutes after
-  # its own write of the rule, so the wait is longer than that.
+  # Without a resync, the check above passes on nothing. After the settle
+  # time, only a resync reconciles the request again.
   echo "==> Checking that a lifecycle rule removed by hand gets DriftCorrected"
   bucket=$(bucket_of steady)
   aws s3api delete-bucket-lifecycle --bucket "$bucket" ||
     { fail "could not remove the lifecycle rule of the bucket $bucket"; return; }
   drift=""
-  for _ in $(seq 42); do
+  for _ in $(seq 18); do
     drift=$(drift_events "$ns" steady)
     [ -n "$drift" ] && break
     sleep 10
   done
   [ -n "$drift" ] ||
-    fail "steady did not record DriftCorrected within 7 minutes after the lifecycle rule was removed by hand, so no resync ran"
+    fail "steady did not record DriftCorrected within 3 minutes after the lifecycle rule was removed by hand, so no resync ran"
   delete_request steady
 }
 
 kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 "$repo/test/conformance/render.sh" "$here/requests.yaml" | kubectl apply -f -
+# No identity extension marks the Grants of the requests Ready, so Ready
+# stays False with WaitingForGrants.
 for r in many-objects versioned steady; do
-  kubectl wait -n "$ns" "pluginrequest/$r" --for=condition=Ready --timeout=6m
+  kubectl wait -n "$ns" "pluginrequest/$r" --for=condition=OutputsReady --timeout=6m
 done
 
 check_many_objects

@@ -57,6 +57,14 @@ run_vars $'TOKEN=a=b&c'
 expect "splits a line at the first = and keeps the value as it is" \
   $'token: ${TOKEN}' $'token: a=b&c' 0 "" RUN_VARS="$work/vars"
 
+run_vars $'FIRST=${SECOND}\nSECOND=literal'
+expect "does not fill a placeholder that a value holds" \
+  $'${FIRST} ${SECOND}' $'${SECOND} literal' 0 "" RUN_VARS="$work/vars"
+
+expect "does not fill a placeholder that a value of the environment holds" \
+  $'${AWS_ACCOUNT_ID} ${AWS_REGION}' $'${AWS_REGION} eu-west-1' 0 "" \
+  'AWS_ACCOUNT_ID=${AWS_REGION}' AWS_REGION=eu-west-1
+
 run_vars $'\nFIRST=1\n\nSECOND=2'
 expect "skips empty lines" $'${FIRST} ${SECOND}' $'1 2' 0 "" RUN_VARS="$work/vars"
 

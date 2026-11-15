@@ -6,8 +6,13 @@ set -uo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 owned=$(awk 'NF >= 2 && $1 !~ /^#/ { print $1 }' "$repo/.github/CODEOWNERS")
 
+if ! plugins=$(make -s -C "$repo" list-plugins | jq -r '.[]') || [ -z "$plugins" ]; then
+  echo "FAIL make list-plugins listed no plugin" >&2
+  exit 1
+fi
+
 failed=0
-for p in $(make -s -C "$repo" list-plugins | jq -r '.[]'); do
+for p in $plugins; do
   for path in "/cmd/$p/" "/internal/${p//-/}/" "/charts/$p/" "/test/conformance/$p/" "/docs/plugins/$p.md"; do
     if ! grep -qxF -- "$path" <<< "$owned"; then
       echo "FAIL .github/CODEOWNERS has no owner for $path" >&2

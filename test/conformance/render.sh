@@ -45,14 +45,21 @@ if [ -n "${RUN_VARS:-}" ]; then
 fi
 
 text=$(< "$file")
-for name in "${env_names[@]}" "${file_names[@]}"; do
-  placeholder="\${$name}"
-  [[ $text == *"$placeholder"* ]] || continue
-  value=${values[$name]}
-  if [ -z "$value" ]; then
-    echo "the file names $placeholder, which is empty" >&2
+open="\${"
+out=""
+while [[ $text == *"$open"* ]]; do
+  out+=${text%%"$open"*}
+  text=${text#*"$open"}
+  name=${text%%\}*}
+  if [[ $text != *\}* || ! $name =~ ^[A-Z][A-Z0-9_]*$ || -z ${values[$name]+set} ]]; then
+    out+=$open
+    continue
+  fi
+  if [ -z "${values[$name]}" ]; then
+    echo "the file names \${$name}, which is empty" >&2
     exit 1
   fi
-  text=${text//"$placeholder"/"$value"}
+  out+=${values[$name]}
+  text=${text#*\}}
 done
-printf '%s\n' "$text"
+printf '%s\n' "$out$text"
