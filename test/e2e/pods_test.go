@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -73,6 +74,25 @@ func runPod(pod *corev1.Pod, timeout time.Duration) (string, error) {
 	}
 
 	return string(logs), nil
+}
+
+// awsCLI runs the AWS CLI with args and env in a pod of namespace under
+// serviceAccount, where an empty serviceAccount is the default account, and
+// returns its output. A command that fails is an error that holds its
+// output.
+func awsCLI(namespace, serviceAccount string, env []corev1.EnvVar, args ...string) (string, error) {
+	return runPod(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "aws-", Namespace: namespace},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: serviceAccount,
+			Containers: []corev1.Container{{
+				Name:  "aws",
+				Image: requiredEnv("AWS_CLI_IMAGE"),
+				Args:  args,
+				Env:   env,
+			}},
+		},
+	}, podTimeout)
 }
 
 // parseKeys reads a listing of object keys, a JSON list of strings. null is
