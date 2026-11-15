@@ -29,6 +29,7 @@ jobs:
         # One line for each plugin, and test/conformance/<plugin>/ for its
         # setup. See CONTRIBUTING.md.
         plugin:
+          - aws-ebs
           - gateway-access
           - rustfs
     env:
@@ -84,6 +85,7 @@ jobs:
           kubectl get pods -A -o wide || true
           kubectl get pluginregistrations,pluginrequests,grants -A -o yaml || true
           kubectl get gateways,httproutes,grpcroutes -A -o yaml || true
+          kubectl get storageclasses -o yaml || true
           for target in \
             "camunda-operator-system deployment/camunda-operator-controller-manager" \
             "camunda-operator-plugins deployment/${PLUGIN}"; do
