@@ -202,7 +202,7 @@ CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
 # renovate: datasource=github-releases depName=envoyproxy/gateway
 ENVOY_GATEWAY_VERSION ?= v1.9.3
 # renovate: datasource=docker depName=rustfs/rustfs
-RUSTFS_VERSION ?= 1.0.4
+RUSTFS_VERSION ?= 1.0.5
 # CERT_MANAGER_VERSION and POD_IDENTITY_WEBHOOK_VERSION are the releases that
 # give the pods of the AWS conformance runs their roles, as on EKS.
 # renovate: datasource=github-releases depName=cert-manager/cert-manager
