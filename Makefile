@@ -200,7 +200,7 @@ OPERATOR_REPO ?= https://github.com/konsole-is/camunda-operator.git
 # CONFORMANCE_REPORT is the JUnit report of conformance-kind.
 CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
 # renovate: datasource=github-releases depName=envoyproxy/gateway
-ENVOY_GATEWAY_VERSION ?= v1.9.3
+ENVOY_GATEWAY_VERSION ?= v1.10.0
 # renovate: datasource=docker depName=rustfs/rustfs
 RUSTFS_VERSION ?= 1.0.5
 # CERT_MANAGER_VERSION and POD_IDENTITY_WEBHOOK_VERSION are the releases that
