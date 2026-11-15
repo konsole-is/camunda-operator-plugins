@@ -1,0 +1,61 @@
+# The requests of check.sh, as a claim controller writes them. Each bucket
+# name starts with the run ID, which the policy of the controller allows.
+#   - many-objects: check.sh fills its bucket with more objects than one
+#     delete pass can delete
+#   - versioned: check.sh turns on versioning of its bucket and writes
+#     object versions and a delete marker
+#   - steady: has the key and the principal, so that the plugin writes each
+#     setting that it can repair
+apiVersion: plugins.camunda.io/v1alpha1
+kind: PluginRequest
+metadata:
+  name: many-objects
+  namespace: conformance-aws-s3-checks
+  labels:
+    plugins.camunda.io/section: backup-storage
+    plugins.camunda.io/registration: aws-s3
+    fleet.camunda.io/claim: many-objects
+spec:
+  section: backup-storage
+  registration: aws-s3
+  claimRef: {kind: CamundaClusterClaim, name: many-objects}
+  target: {kind: CamundaCluster, name: many-objects, serviceAccountName: many-objects-camunda}
+  deletionPolicy: Delete
+  parameters: {bucketPrefix: ${RUN_ID}}
+---
+apiVersion: plugins.camunda.io/v1alpha1
+kind: PluginRequest
+metadata:
+  name: versioned
+  namespace: conformance-aws-s3-checks
+  labels:
+    plugins.camunda.io/section: backup-storage
+    plugins.camunda.io/registration: aws-s3
+    fleet.camunda.io/claim: versioned
+spec:
+  section: backup-storage
+  registration: aws-s3
+  claimRef: {kind: CamundaClusterClaim, name: versioned}
+  target: {kind: CamundaCluster, name: versioned, serviceAccountName: versioned-camunda}
+  deletionPolicy: Delete
+  parameters: {bucketPrefix: ${RUN_ID}}
+---
+apiVersion: plugins.camunda.io/v1alpha1
+kind: PluginRequest
+metadata:
+  name: steady
+  namespace: conformance-aws-s3-checks
+  labels:
+    plugins.camunda.io/section: backup-storage
+    plugins.camunda.io/registration: aws-s3
+    fleet.camunda.io/claim: steady
+spec:
+  section: backup-storage
+  registration: aws-s3
+  claimRef: {kind: CamundaClusterClaim, name: steady}
+  target: {kind: CamundaCluster, name: steady, serviceAccountName: steady-camunda}
+  deletionPolicy: Delete
+  inputs:
+    key: ${AWS_KMS_KEY_ARN}
+    principal: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-backup
+  parameters: {bucketPrefix: ${RUN_ID}}
