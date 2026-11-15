@@ -4,7 +4,7 @@ This guide gives the rules for a plugin in this repository. The maintainers and 
 
 ## 1. What a plugin is
 
-1. A plugin has one directory in each of these places: `cmd/<plugin>/`, `internal/<plugin>/`, `charts/<plugin>/`, and `test/conformance/<plugin>/`. It also has one page, `docs/plugins/<plugin>.md`.
+1. A plugin has one directory in each of these places: `cmd/<plugin>/`, `internal/<plugin>/`, `charts/<plugin>/`, and `test/conformance/<plugin>/`. It also has one page, `docs/plugins/<plugin>.md`. In `internal/`, the name of the directory has no hyphens, because it is the name of a Go package.
 2. To start a new plugin, copy the five parts of an existing plugin and rename them, for example `cmd/gateway-access/`, `internal/gatewayaccess/`, `charts/gateway-access/`, `test/conformance/gateway-access/`, and `docs/plugins/gateway-access.md`.
 3. Code that two or more plugins use goes in `pkg/`.
 4. A plugin serves its requests through `pkg/pluginkit`. See [`docs/pluginkit.md`](docs/pluginkit.md).
