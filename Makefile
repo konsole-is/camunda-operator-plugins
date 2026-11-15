@@ -270,7 +270,7 @@ GOLANGCI_LINT_VERSION ?= v2.8.0
 # renovate: datasource=npm depName=renovate
 RENOVATE_VERSION ?= 44.140.0
 # renovate: datasource=go depName=golang.org/x/vuln
-GOVULNCHECK_VERSION ?= v1.8.0
+GOVULNCHECK_VERSION ?= v1.9.0
 # renovate: datasource=go depName=github.com/rhysd/actionlint
 ACTIONLINT_VERSION ?= v1.7.12
 
