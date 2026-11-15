@@ -72,6 +72,8 @@ func TestSTSCasesInTheSandbox(t *testing.T) { runCases(t, sandboxAccount, stsCas
 
 func TestIAMCasesInTheSandbox(t *testing.T) { runCases(t, sandboxAccount, iamCases) }
 
+func TestKMSCasesInTheSandbox(t *testing.T) { runCases(t, sandboxAccount, kmsCases) }
+
 // putSandboxObjects puts an empty object for each key into bucket.
 func putSandboxObjects(t *testing.T, client *s3.Client, bucket string, keys []string) {
 	t.Helper()
