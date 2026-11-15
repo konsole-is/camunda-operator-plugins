@@ -19,8 +19,6 @@ package awsfake
 import (
 	"context"
 	"errors"
-	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -52,51 +50,6 @@ func putPolicy(f *IAM, name, doc string) error {
 	return err
 }
 
-// policyOfSize returns a JSON document of n characters.
-func policyOfSize(n int) string {
-	return `{"a":"` + strings.Repeat("x", n-8) + `"}`
-}
-
-func TestIAMReturnsDocumentsURLEncoded(t *testing.T) {
-	f := NewIAM()
-	createRole(t, f)
-	require.NoError(t, putPolicy(f, "p", `{"Resource":"a b"}`))
-
-	role, err := f.GetRole(context.Background(), &iam.GetRoleInput{RoleName: aws.String("r")})
-	require.NoError(t, err)
-	policy, err := f.GetRolePolicy(
-		context.Background(),
-		&iam.GetRolePolicyInput{RoleName: aws.String("r"), PolicyName: aws.String("p")},
-	)
-	require.NoError(t, err)
-
-	assert.Equal(t, url.QueryEscape(trust), aws.ToString(role.Role.AssumeRolePolicyDocument))
-	assert.Equal(t, "arn:aws:iam::111122223333:role/r", aws.ToString(role.Role.Arn))
-	assert.Equal(t, url.QueryEscape(`{"Resource":"a b"}`), aws.ToString(policy.PolicyDocument))
-}
-
-func TestIAMRefusesInlinePoliciesOverTheLimit(t *testing.T) {
-	f := NewIAM()
-	createRole(t, f)
-
-	require.NoError(t, putPolicy(f, "a", policyOfSize(6000)))
-	err := putPolicy(f, "b", policyOfSize(5000))
-
-	assert.True(t, awskit.IsLimitExceeded(err), err)
-	role, _ := f.Role("r")
-	assert.Len(t, role.InlinePolicies, 1)
-	assert.NoError(t, putPolicy(f, "a", policyOfSize(7000)), "a replaced policy counts once")
-}
-
-func TestIAMRefusesAPolicyThatIsNotJSON(t *testing.T) {
-	f := NewIAM()
-	createRole(t, f)
-
-	err := putPolicy(f, "a", `{`)
-
-	assert.True(t, awskit.IsMalformedPolicy(err), err)
-}
-
 func TestIAMPagesRolePolicies(t *testing.T) {
 	f := NewIAM()
 	f.PageSize = 1
@@ -124,32 +77,6 @@ func TestIAMPagesRolePolicies(t *testing.T) {
 
 	assert.Equal(t, []string{"a", "b", "c"}, names)
 	assert.Equal(t, 3, pages)
-}
-
-func TestIAMRefusesToDeleteARoleWithPolicies(t *testing.T) {
-	f := NewIAM()
-	createRole(t, f)
-	require.NoError(t, putPolicy(f, "a", `{}`))
-
-	_, err := f.DeleteRole(context.Background(), &iam.DeleteRoleInput{RoleName: aws.String("r")})
-
-	assert.Equal(t, "DeleteConflict", awskit.ErrorCode(err))
-	_, ok := f.Role("r")
-	assert.True(t, ok)
-}
-
-func TestIAMRefusesAMissingRoleAndASecondCreate(t *testing.T) {
-	f := NewIAM()
-
-	_, err := f.GetRole(context.Background(), &iam.GetRoleInput{RoleName: aws.String("r")})
-	assert.True(t, awskit.IsNotFound(err), err)
-
-	createRole(t, f)
-	_, err = f.CreateRole(context.Background(), &iam.CreateRoleInput{
-		RoleName:                 aws.String("r"),
-		AssumeRolePolicyDocument: aws.String(trust),
-	})
-	assert.True(t, awskit.IsAlreadyExists(err), err)
 }
 
 func TestIAMFailNextFailsOneCall(t *testing.T) {

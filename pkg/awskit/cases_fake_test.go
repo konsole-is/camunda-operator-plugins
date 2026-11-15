@@ -47,3 +47,5 @@ func fakeAccount(_ *testing.T) account {
 }
 
 func TestSTSCasesOnTheFake(t *testing.T) { runCases(t, fakeAccount, stsCases) }
+
+func TestIAMCasesOnTheFake(t *testing.T) { runCases(t, fakeAccount, iamCases) }
