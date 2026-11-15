@@ -1,0 +1,13 @@
+# The chart values of the conformance run in the AWS sandbox. render.sh
+# fills in the variables of the run. Every bucket gets the tag cpo-ci-run.
+# The sandbox refuses a public access block write and CloudWatch, so the
+# four flags stay on and the size is not known. One delete pass deletes one
+# batch of objects, and a resync runs each 30 seconds, for check.sh.
+region: ${AWS_REGION}
+extraTags:
+  cpo-ci-run: ${RUN_ID}
+deleteBudget: 1ms
+resync: 30s
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-aws-s3

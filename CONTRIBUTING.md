@@ -4,7 +4,7 @@ This guide gives the rules for a plugin in this repository. The maintainers and 
 
 ## 1. What a plugin is
 
-1. A plugin has one directory in each of these places: `cmd/<plugin>/`, `internal/<plugin>/`, `charts/<plugin>/`, and `test/conformance/<plugin>/`. It also has one page, `docs/plugins/<plugin>.md`.
+1. A plugin has one directory in each of these places: `cmd/<plugin>/`, `internal/<plugin>/`, `charts/<plugin>/`, and `test/conformance/<plugin>/`. It also has one page, `docs/plugins/<plugin>.md`. In `internal/`, the name of the directory has no hyphens, because it is the name of a Go package.
 2. To start a new plugin, copy the five parts of an existing plugin and rename them, for example `cmd/gateway-access/`, `internal/gatewayaccess/`, `charts/gateway-access/`, `test/conformance/gateway-access/`, and `docs/plugins/gateway-access.md`.
 3. Code that two or more plugins use goes in `pkg/`.
 4. A plugin serves its requests through `pkg/pluginkit`. See [`docs/pluginkit.md`](docs/pluginkit.md).
@@ -72,7 +72,7 @@ To add the job of a new plugin:
 
 3. A maintainer then makes the check `Conformance of <plugin>` required for the `main` branch. An AWS check is never required.
 
-Copy `test/conformance/gateway-access/` or `test/conformance/rustfs/` as a start, or `test/conformance/aws-kms/` for an AWS plugin. `setup.sh` and `check.sh` run with `kubectl` and `helm` pointed at the kind cluster, from the root of the repository. They get `CHART_NAMESPACE`, the namespace of the release, in their environment.
+Copy `test/conformance/gateway-access/` or `test/conformance/rustfs/` as a start. For an AWS plugin, copy `test/conformance/aws-kms/`, or `test/conformance/aws-s3/` when the plugin needs an AWS object of the run, such as a KMS key. `setup.sh` and `check.sh` run with `kubectl` and `helm` pointed at the kind cluster, from the root of the repository. They get `CHART_NAMESPACE`, the namespace of the release, in their environment.
 
 Before the job uses `values.yaml` and each config, it replaces these variables of the run in them:
 
@@ -86,11 +86,13 @@ Before the job uses `values.yaml` and each config, it replaces these variables o
 
 The job fails on a file that names one of these variables when the variable has no value. A kind job sets none of them. Other text, such as `{name}` or `$5`, stays as it is. `setup.sh` fills the variables into its own files, such as `controller-policy.json`, with `test/conformance/render.sh <file>`.
 
+`setup.sh` can add a variable of its own, such as the ARN of an AWS object that it creates for the run. It appends the line `NAME=value` to the file that the environment variable `RUN_VARS` names. `check.sh` gets `RUN_VARS` too. The job then fills `${NAME}` in `values.yaml` and in each config, and `test/conformance/render.sh` fills it in the files of `check.sh`. A name holds only `A-Z`, `0-9`, and `_`, and starts with a letter. The file cannot set a variable of the table above, and it cannot set a name twice. For example, `test/conformance/aws-s3/setup.sh` creates a KMS key and writes `AWS_KMS_KEY_ARN`.
+
 `make conformance-kind PLUGIN=<plugin>` runs the job of a kind plugin on your machine, after `make operator-source`. It needs Docker, kind, kubebuilder, kubectl, and helm. It creates the kind cluster `camunda-operator-plugins` and leaves it after the run. Delete it with `kind delete cluster --name camunda-operator-plugins`. An AWS job runs only in CI.
 
 ### The AWS jobs
 
-The AWS plugins run against a real AWS sandbox account, not against fakes. A job gets the credentials of a CI role from GitHub with OIDC. No access key exists. `terraform/aws-sandbox/README.md` tells how the account is set up and what a job can do there.
+The AWS plugins run against a real AWS sandbox account. A job gets the credentials of a CI role from GitHub with OIDC. No access key exists. `terraform/aws-sandbox/README.md` tells how the account is set up and what a job can do there.
 
 The AWS jobs run on each push to `main`, when a maintainer starts the workflow by hand, and on a pull request that the trusted user of the sandbox opened from a branch of this repository and pushed. The trusted user is the GitHub user whose ID is the repository variable `AWS_SANDBOX_ACTOR_ID`. Every other pull request skips them, and its AWS checks show as skipped: a pull request of another person, a pull request of the trusted user that another person pushed to, a pull request from a fork, and the pull requests of Renovate. A reopen of a pull request also skips them. Such a pull request gets no AWS credentials and waits for no approval in the environment `aws-sandbox-review`. Its AWS jobs run on `main` after the merge. A maintainer who read the change can run them before the merge on a branch of this repository, with `gh workflow run Conformance --ref <branch>`.
 
@@ -101,6 +103,8 @@ Each AWS job is one run with its own run ID, `cpo-ci-<GitHub run>-<attempt>-<row
 3. Creates the role of the controller with `hack/aws-sandbox/plugin-role.sh`, from `controller-policy.json`. The chart gives the role to the controller through `serviceAccount.annotations`.
 4. Runs the suites and `check.sh`.
 5. Deletes the kind cluster, and runs `hack/aws-sandbox/teardown.sh`, also when an earlier step failed. The step fails when the run left a role, a managed policy, an OIDC provider, or a bucket.
+
+The job `awskit-sandbox`, with the check `Fakes against the AWS sandbox`, tests the fakes of `pkg/awskit/awsfake` that the envtest suites of the AWS plugins use. The `*_cases_test.go` files of `pkg/awskit` hold shared cases: each case checks one behavior of an AWS API that awskit or a plugin relies on, such as an error code or the size of a page. To add a case, add it to the list of its service in those files, such as `iamCases` or `s3BucketCases`. `make test` runs the cases against the fakes. The job runs the same cases against the sandbox. It has the same triggers, credentials, and run ID rules as the other AWS jobs, but no kind cluster. Its run ID ends in `-awskit`. At the end it runs `hack/aws-sandbox/teardown.sh`, also when the cases failed. On a pull request, it runs only when the change touches `pkg/awskit/`, `go.mod`, `go.sum`, `hack/aws-sandbox/`, or the workflow. When the job fails because a fake answers otherwise than AWS, change the fake, not the case. A case that the sandbox cannot run, because the boundary refuses a call or the account lacks a service such as EKS, stays a test in `pkg/awskit/awsfake`. The head comment of `pkg/awskit/cases_test.go` lists these tests and tells why.
 
 Each AWS object of a run has a name that starts with the run ID and the tag `cpo-ci-run` with the run ID as its value. Each role has the boundary `cpo-sandbox-boundary` and no path. So the values of an AWS plugin set a name prefix and the extra tag, for example `roleNamePrefix: ${RUN_ID}-hub` and `extraTags: {cpo-ci-run: ${RUN_ID}}`. A KMS key gets a deletion window of 7 days, because the boundary refuses every other window.
 

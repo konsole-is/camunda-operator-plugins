@@ -49,7 +49,8 @@ func (f *STS) FailNext(operation string, err error) {
 	f.fail.next(operation, err)
 }
 
-// GetCallerIdentity returns the account of the fake.
+// GetCallerIdentity returns the account of the fake, and the ARN of a role
+// session in it, as for a pod with a role.
 func (f *STS) GetCallerIdentity(
 	_ context.Context,
 	_ *sts.GetCallerIdentityInput,
@@ -65,5 +66,8 @@ func (f *STS) GetCallerIdentity(
 	if account == "" {
 		account = DefaultAccount
 	}
-	return &sts.GetCallerIdentityOutput{Account: aws.String(account)}, nil
+	return &sts.GetCallerIdentityOutput{
+		Account: aws.String(account),
+		Arn:     aws.String("arn:aws:sts::" + account + ":assumed-role/awsfake/awsfake"),
+	}, nil
 }
