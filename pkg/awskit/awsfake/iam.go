@@ -41,8 +41,8 @@ var _ awskit.IAM = (*IAM)(nil)
 
 // IAM is an in-memory IAM.
 type IAM struct {
-	// PageSize is the number of items of one page of a list. Zero puts every
-	// item in one page.
+	// PageSize is the number of items of one page of a list whose call sets
+	// no MaxItems. Zero puts every item on one page.
 	PageSize int
 	// Account is the account of the ARNs. Empty is DefaultAccount.
 	Account string
@@ -463,7 +463,7 @@ func (f *IAM) GetRolePolicy(
 }
 
 // ListRolePolicies returns one page of the inline policy names of a role,
-// sorted.
+// sorted, of MaxItems names.
 func (f *IAM) ListRolePolicies(
 	_ context.Context,
 	in *iam.ListRolePoliciesInput,
@@ -480,11 +480,19 @@ func (f *IAM) ListRolePolicies(
 		return nil, err
 	}
 
-	names, next, err := page(slices.Sorted(maps.Keys(r.InlinePolicies)), in.Marker, f.PageSize)
+	names, next, err := page(slices.Sorted(maps.Keys(r.InlinePolicies)), in.Marker, f.pageSize(in.MaxItems))
 	if err != nil {
 		return nil, err
 	}
 	return &iam.ListRolePoliciesOutput{PolicyNames: names, IsTruncated: next != nil, Marker: next}, nil
+}
+
+// pageSize returns the size of a page of a list call with maxItems.
+func (f *IAM) pageSize(maxItems *int32) int {
+	if maxItems != nil {
+		return int(*maxItems)
+	}
+	return f.PageSize
 }
 
 // DeleteRolePolicy deletes an inline policy.
@@ -514,7 +522,7 @@ func (f *IAM) DeleteRolePolicy(
 }
 
 // ListAttachedRolePolicies returns one page of the managed policies of a
-// role, in attach order.
+// role, in attach order, of MaxItems policies.
 func (f *IAM) ListAttachedRolePolicies(
 	_ context.Context,
 	in *iam.ListAttachedRolePoliciesInput,
@@ -531,7 +539,7 @@ func (f *IAM) ListAttachedRolePolicies(
 		return nil, err
 	}
 
-	arns, next, err := page(r.Attached, in.Marker, f.PageSize)
+	arns, next, err := page(r.Attached, in.Marker, f.pageSize(in.MaxItems))
 	if err != nil {
 		return nil, err
 	}

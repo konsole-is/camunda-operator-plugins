@@ -289,7 +289,8 @@ func (r kmsRegion) metadata(k *Key) *types.KeyMetadata {
 		KeyUsage:     types.KeyUsageTypeEncryptDecrypt,
 		Origin:       types.OriginTypeAwsKms,
 	}
-	if k.PendingWindowDays != 0 {
+	// KMS gives the window only while a primary key waits for its replicas.
+	if k.State == types.KeyStatePendingReplicaDeletion {
 		m.PendingDeletionWindowInDays = aws.Int32(k.PendingWindowDays)
 	}
 	if !k.MultiRegion {

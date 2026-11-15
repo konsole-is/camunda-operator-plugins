@@ -42,13 +42,12 @@ import (
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 )
 
-// sandboxTrust is a trust policy that no principal can use.
-const sandboxTrust = `{"Version":"2012-10-17","Statement":[{"Effect":"Deny",` +
-	`"Principal":{"Service":"pods.eks.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
-
-// sandbox is the account of a test: the IAM client, the start of each name,
-// the extra tags with cpo-ci-run, and the boundary of each role.
+// sandbox is the account of a test: its config and ID, the IAM client, the
+// start of each name, the extra tags with cpo-ci-run, and the boundary of
+// each role.
 type sandbox struct {
+	cfg      aws.Config
+	account  string
 	iam      *iam.Client
 	prefix   string
 	extra    awskit.ExtraTags
@@ -65,6 +64,8 @@ func newSandbox(t *testing.T) sandbox {
 	require.NoError(t, err)
 
 	return sandbox{
+		cfg:      cfg,
+		account:  account,
 		iam:      iam.NewFromConfig(cfg),
 		prefix:   run + "-awskit",
 		extra:    awskit.ExtraTags{"cpo-ci-run": run},

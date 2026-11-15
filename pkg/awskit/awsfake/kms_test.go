@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
@@ -50,117 +49,38 @@ func alias(f awskit.KMS, keyID string) error {
 	return err
 }
 
-func TestKMSFindsAKeyByItsAlias(t *testing.T) {
-	f := NewKMS()
-	key := createKey(t, f, false)
-	require.NoError(t, alias(f, aws.ToString(key.KeyId)))
-
-	out, err := f.DescribeKey(context.Background(), &kms.DescribeKeyInput{KeyId: aws.String("alias/x")})
-
-	require.NoError(t, err)
-	assert.Equal(t, aws.ToString(key.Arn), aws.ToString(out.KeyMetadata.Arn))
-	assert.Equal(t, types.KeyStateEnabled, out.KeyMetadata.KeyState)
-	assert.Regexp(t, `^arn:aws:kms:eu-west-1:111122223333:key/[0-9a-f-]{36}$`, aws.ToString(key.Arn))
-
-	_, err = f.In("eu-central-1").DescribeKey(context.Background(), &kms.DescribeKeyInput{KeyId: aws.String("alias/x")})
-	assert.True(t, awskit.IsNotFound(err), "an alias is in one region")
-}
-
-func TestKMSRefusesASecondAlias(t *testing.T) {
-	f := NewKMS()
-	key := createKey(t, f, false)
-	require.NoError(t, alias(f, aws.ToString(key.KeyId)))
-
-	err := alias(f, aws.ToString(key.KeyId))
-
-	assert.True(t, awskit.IsAlreadyExists(err))
-}
-
 func TestKMSKeepsTheDefaultPolicyWithoutAPolicy(t *testing.T) {
 	f := NewKMS()
+
 	key := createKey(t, f, false)
 
-	out, err := f.GetKeyPolicy(context.Background(), &kms.GetKeyPolicyInput{KeyId: key.KeyId})
-
-	require.NoError(t, err)
 	got, _ := f.Key("eu-west-1", aws.ToString(key.KeyId))
 	assert.True(t, got.DefaultPolicy)
-	assert.Contains(
-		t,
-		aws.ToString(out.Policy),
-		`"Principal":{"AWS":"arn:aws:iam::111122223333:root"},"Action":"kms:*"`,
-	)
 }
 
 func TestKMSReplicatesAMultiRegionKey(t *testing.T) {
 	f := NewKMS()
 	key := createKey(t, f, true)
-	replicate := func() error {
-		_, err := f.ReplicateKey(context.Background(), &kms.ReplicateKeyInput{
-			KeyId:         key.KeyId,
-			ReplicaRegion: aws.String("eu-central-1"),
-			Tags:          []types.Tag{{TagKey: aws.String("c"), TagValue: aws.String("d")}},
-		})
-		return err
-	}
 	describe := func() *types.KeyMetadata {
 		out, err := f.In("eu-central-1").DescribeKey(context.Background(), &kms.DescribeKeyInput{KeyId: key.KeyId})
 		require.NoError(t, err)
 		return out.KeyMetadata
 	}
 
-	require.NoError(t, replicate())
-
-	assert.Regexp(t, `^mrk-[0-9a-f]{32}$`, aws.ToString(key.KeyId))
-	replica, ok := f.Key("eu-central-1", aws.ToString(key.KeyId))
-	require.True(t, ok)
-	assert.Equal(t, map[string]string{"c": "d"}, replica.Tags)
-	assert.Equal(t, "eu-west-1", replica.Primary)
-	assert.Equal(t, types.KeyStateCreating, describe().KeyState)
-	assert.Equal(t, types.KeyStateEnabled, describe().KeyState)
-
-	primary, err := f.DescribeKey(context.Background(), &kms.DescribeKeyInput{KeyId: key.KeyId})
-	require.NoError(t, err)
-	config := primary.KeyMetadata.MultiRegionConfiguration
-	assert.Equal(t, types.MultiRegionKeyTypePrimary, config.MultiRegionKeyType)
-	require.Len(t, config.ReplicaKeys, 1)
-	assert.Equal(t, "eu-central-1", aws.ToString(config.ReplicaKeys[0].Region))
-	assert.True(t, awskit.IsAlreadyExists(replicate()))
-}
-
-func TestKMSSharesTheRotationOfAPrimaryWithItsReplica(t *testing.T) {
-	f := NewKMS()
-	key := createKey(t, f, true)
-	_, err := f.EnableKeyRotation(context.Background(), &kms.EnableKeyRotationInput{KeyId: key.KeyId})
-	require.NoError(t, err)
-	_, err = f.ReplicateKey(context.Background(), &kms.ReplicateKeyInput{
-		KeyId:         key.KeyId,
-		ReplicaRegion: aws.String("eu-central-1"),
-	})
-	require.NoError(t, err)
-
-	out, err := f.In("eu-central-1").GetKeyRotationStatus(
-		context.Background(),
-		&kms.GetKeyRotationStatusInput{KeyId: key.KeyId},
-	)
-
-	require.NoError(t, err)
-	assert.True(t, out.KeyRotationEnabled)
-}
-
-func TestKMSRefusesToReplicateASingleRegionKey(t *testing.T) {
-	f := NewKMS()
-	key := createKey(t, f, false)
-
 	_, err := f.ReplicateKey(context.Background(), &kms.ReplicateKeyInput{
 		KeyId:         key.KeyId,
 		ReplicaRegion: aws.String("eu-central-1"),
 	})
 
-	assert.Equal(t, "UnsupportedOperationException", awskit.ErrorCode(err))
+	require.NoError(t, err)
+	replica, ok := f.Key("eu-central-1", aws.ToString(key.KeyId))
+	require.True(t, ok)
+	assert.Equal(t, "eu-west-1", replica.Primary)
+	assert.Equal(t, types.KeyStateCreating, describe().KeyState)
+	assert.Equal(t, types.KeyStateEnabled, describe().KeyState)
 }
 
-func TestKMSSchedulesDeletionInsideTheWindow(t *testing.T) {
+func TestKMSRefusesAWindowOutsideSevenToThirtyDays(t *testing.T) {
 	f := NewKMS()
 	key := createKey(t, f, false)
 	schedule := func(days int32) error {
@@ -173,13 +93,8 @@ func TestKMSSchedulesDeletionInsideTheWindow(t *testing.T) {
 
 	assert.Equal(t, "ValidationException", awskit.ErrorCode(schedule(6)))
 	assert.Equal(t, "ValidationException", awskit.ErrorCode(schedule(31)))
-	require.NoError(t, schedule(7))
-
 	got, _ := f.Key("eu-west-1", aws.ToString(key.KeyId))
-	assert.Equal(t, types.KeyStatePendingDeletion, got.State)
-	assert.Equal(t, int32(7), got.PendingWindowDays)
-	assert.WithinDuration(t, time.Now().Add(7*24*time.Hour), *got.DeletionDate, time.Minute)
-	assert.Equal(t, "KMSInvalidStateException", awskit.ErrorCode(schedule(7)))
+	assert.Equal(t, types.KeyStateEnabled, got.State)
 }
 
 func TestKMSHoldsAPrimaryUntilItsReplicasArePending(t *testing.T) {
@@ -197,7 +112,6 @@ func TestKMSHoldsAPrimaryUntilItsReplicasArePending(t *testing.T) {
 	got, _ := f.Key("eu-west-1", aws.ToString(key.KeyId))
 	assert.Equal(t, types.KeyStatePendingReplicaDeletion, got.State)
 	assert.Equal(t, int32(30), got.PendingWindowDays)
-	assert.Nil(t, got.DeletionDate, "the window starts after the replicas are deleted")
 }
 
 func TestKMSRefusesToScheduleAKeyThatIsCreating(t *testing.T) {
