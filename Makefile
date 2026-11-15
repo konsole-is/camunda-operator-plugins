@@ -225,7 +225,7 @@ CAMUNDA_MINOR ?= $(firstword $(CAMUNDA_MINORS))
 # renovate: datasource=docker depName=curlimages/curl
 CURL_VERSION ?= 8.23.0
 # renovate: datasource=docker depName=amazon/aws-cli
-AWS_CLI_VERSION ?= 2.37.13
+AWS_CLI_VERSION ?= 2.40.3
 
 .PHONY: operator-source
 operator-source: ## Check out the operator at API_REF into OPERATOR_DIR.
