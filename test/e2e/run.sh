@@ -49,9 +49,19 @@ kubectl rollout status deployment/camunda-operator-controller-manager -n camunda
 cd "$repo"
 "$setup"
 
+# Ginkgo stops the suite at its limit and still writes the report. go test
+# stops a suite that hangs 5 minutes later. Each job keeps time for the steps
+# after the journey.
+case $journey in
+  # A job of 120m: 13m setup, 70m go test, 3m logs, 14m cleanup = 100m.
+  aws) suite_timeout=65m test_timeout=70m ;;
+  # A job of 90m: 13m setup, 65m go test, 3m logs = 81m.
+  *) suite_timeout=60m test_timeout=65m ;;
+esac
+
 echo "==> Running the $journey journey"
 mkdir -p "$(dirname "$REPORT")"
 # go test prints the output of a test that passes only with -v, and the CI
 # log shows each spec and the count of the specs that ran.
-JOURNEY=$journey go test -tags e2e -count=1 -v -timeout 90m -run '^TestJourneys$' ./test/e2e/ \
-  -ginkgo.v -ginkgo.junit-report="$REPORT"
+JOURNEY=$journey go test -tags e2e -count=1 -v -timeout "$test_timeout" -run '^TestJourneys$' ./test/e2e/ \
+  -ginkgo.v -ginkgo.timeout="$suite_timeout" -ginkgo.junit-report="$REPORT"
