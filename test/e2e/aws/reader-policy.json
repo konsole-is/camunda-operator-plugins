@@ -10,7 +10,7 @@
     {
       "Sid": "Buckets",
       "Effect": "Allow",
-      "Action": ["s3:ListBucket"],
+      "Action": ["s3:ListBucket", "s3:GetEncryptionConfiguration"],
       "Resource": "arn:aws:s3:::${RUN_ID}-*"
     },
     {

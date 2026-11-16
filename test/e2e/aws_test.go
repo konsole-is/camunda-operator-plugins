@@ -19,7 +19,9 @@ limitations under the License.
 package e2e
 
 import (
+	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -120,7 +122,11 @@ var _ = Describe("the AWS journey", Ordered, Label(labelAWS), func() {
 
 	It("makes the claim and its cluster Ready, with the bucket of the claim as the backup storage", func() {
 		claimKey := client.ObjectKeyFromObject(&claim)
-		Eventually(func(g Gomega) { expectClaimReady(g, claimKey) }, claimReadyTimeout, 10*time.Second).Should(Succeed())
+		Eventually(
+			func(g Gomega) { expectClaimReady(g, claimKey) },
+			claimReadyTimeout,
+			10*time.Second,
+		).Should(Succeed())
 
 		Expect(k8s.Get(ctx, claimKey, &claim)).To(Succeed())
 		Expect(claim.Status.Cluster).NotTo(BeNil())
@@ -133,6 +139,35 @@ var _ = Describe("the AWS journey", Ordered, Label(labelAWS), func() {
 		storage := requestOf(requests, &claim, sectionBackupStorage)
 		Expect(storage).NotTo(BeNil())
 		Expect(cluster.Spec.BackupStorageRef).To(Equal(storage.Status.Outputs[outputObjectStorageConfig]))
+	})
+
+	// The backup stays until the end, so the last spec deletes a claim whose
+	// bucket holds a backup.
+	It("completes a backup with Elasticsearch into the bucket, encrypted with the key of the claim", func() {
+		Expect(readAWS(
+			"s3api", "get-bucket-encryption", "--bucket", bucket, "--output", "text",
+			"--query", "ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.KMSMasterKeyID",
+		)).To(WithTransform(strings.TrimSpace, Equal(key)))
+		before, err := awsBucketKeys(bucket)
+		Expect(err).NotTo(HaveOccurred())
+
+		createAll(&v1.LogicalBackupElasticsearch{
+			ObjectMeta: metav1.ObjectMeta{Name: backupName, Namespace: awsSet},
+			Spec:       v1.LogicalBackupElasticsearchSpec{ClusterRef: v1.ClusterRef{Name: cluster.Name}},
+		})
+		Eventually(func(g Gomega) {
+			var b v1.LogicalBackupElasticsearch
+			g.Expect(k8s.Get(ctx, client.ObjectKey{Namespace: awsSet, Name: backupName}, &b)).To(Succeed())
+			if b.Status.Phase == v1.LogicalBackupFailed {
+				StopTrying(fmt.Sprintf("the backup failed: %v", b.Status.Conditions)).Now()
+			}
+			g.Expect(b.Status.Phase).To(Equal(v1.LogicalBackupCompleted), "%v", b.Status.Conditions)
+		}, backupTimeout, 10*time.Second).Should(Succeed())
+
+		after, err := awsBucketKeys(bucket)
+		Expect(err).NotTo(HaveOccurred())
+		written := slices.DeleteFunc(after, func(k string) bool { return slices.Contains(before, k) })
+		Expect(written).NotTo(BeEmpty(), "the backup wrote nothing into the bucket %s", bucket)
 	})
 
 	It(
@@ -217,4 +252,25 @@ func readAWS(args ...string) (string, error) {
 	}
 
 	return awsCLI(readerNamespace, readerServiceAccount, env, args...)
+}
+
+// awsBucketKeys returns the keys of the objects in bucket, read as the reader
+// role of the run. A bucket that does not exist is an error, never an empty
+// list.
+func awsBucketKeys(bucket string) ([]string, error) {
+	listing, err := readAWS(
+		"s3api",
+		"list-objects-v2",
+		"--bucket",
+		bucket,
+		"--query",
+		"Contents[].Key",
+		"--output",
+		"json",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseKeys(listing)
 }
