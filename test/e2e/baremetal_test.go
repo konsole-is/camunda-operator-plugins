@@ -21,7 +21,6 @@ package e2e
 import (
 	"fmt"
 	"net/url"
-	"slices"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -121,26 +120,23 @@ var _ = Describe("the bare-metal journey", Ordered, Label(labelBareMetal), func(
 	})
 
 	It("completes a backup into the bucket of the rustfs-bucket plugin", func() {
-		before, err := bucketKeys(bucket)
-		Expect(err).NotTo(HaveOccurred())
-
 		createAll(&v1.LogicalBackupElasticsearch{
 			ObjectMeta: metav1.ObjectMeta{Name: backupName, Namespace: bareMetal},
 			Spec:       v1.LogicalBackupElasticsearchSpec{ClusterRef: v1.ClusterRef{Name: cluster.Name}},
 		})
+		var backup v1.LogicalBackupElasticsearch
 		Eventually(func(g Gomega) {
-			var b v1.LogicalBackupElasticsearch
-			g.Expect(k8s.Get(ctx, client.ObjectKey{Namespace: bareMetal, Name: backupName}, &b)).To(Succeed())
-			if b.Status.Phase == v1.LogicalBackupFailed {
-				StopTrying(fmt.Sprintf("the backup failed: %v", b.Status.Conditions)).Now()
+			g.Expect(k8s.Get(ctx, client.ObjectKey{Namespace: bareMetal, Name: backupName}, &backup)).To(Succeed())
+			if backup.Status.Phase == v1.LogicalBackupFailed {
+				StopTrying(fmt.Sprintf("the backup failed: %v", backup.Status.Conditions)).Now()
 			}
-			g.Expect(b.Status.Phase).To(Equal(v1.LogicalBackupCompleted), "%v", b.Status.Conditions)
+			g.Expect(backup.Status.Phase).To(Equal(v1.LogicalBackupCompleted), "%v", backup.Status.Conditions)
 		}, backupTimeout, 10*time.Second).Should(Succeed())
 
-		after, err := bucketKeys(bucket)
+		keys, err := bucketKeys(bucket)
 		Expect(err).NotTo(HaveOccurred())
-		written := slices.DeleteFunc(after, func(key string) bool { return slices.Contains(before, key) })
-		Expect(written).NotTo(BeEmpty(), "the backup wrote nothing into the bucket %s", bucket)
+		Expect(keysOfBackup(keys, backup.Status.BackupID)).
+			NotTo(BeEmpty(), "the bucket %s holds no object of the backup %d", bucket, backup.Status.BackupID)
 	})
 
 	// The backup stays until the end: its deletion removes its snapshots,

@@ -21,6 +21,9 @@ package e2e
 import (
 	"encoding/json"
 	"os"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/gomega"
@@ -156,4 +159,15 @@ func fixedParameter(value any) fleetv1alpha1.ParameterPolicy {
 	Expect(err).NotTo(HaveOccurred())
 
 	return fleetv1alpha1.ParameterPolicy{Value: &apiextensionsv1.JSON{Raw: raw}}
+}
+
+// keysOfBackup returns the keys that hold id as one path segment. Zeebe
+// writes each partition of a backup under <partition>/<backup ID>/, so a
+// backup that completed has at least one such key.
+func keysOfBackup(keys []string, id int64) []string {
+	segment := strconv.FormatInt(id, 10)
+
+	return slices.DeleteFunc(slices.Clone(keys), func(key string) bool {
+		return !slices.Contains(strings.Split(key, "/"), segment)
+	})
 }

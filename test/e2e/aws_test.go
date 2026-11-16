@@ -21,7 +21,6 @@ package e2e
 import (
 	"fmt"
 	"path"
-	"slices"
 	"strings"
 	"time"
 
@@ -148,26 +147,30 @@ var _ = Describe("the AWS journey", Ordered, Label(labelAWS), func() {
 			"s3api", "get-bucket-encryption", "--bucket", bucket, "--output", "text",
 			"--query", "ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.KMSMasterKeyID",
 		)).To(WithTransform(strings.TrimSpace, Equal(key)))
-		before, err := awsBucketKeys(bucket)
-		Expect(err).NotTo(HaveOccurred())
 
 		createAll(&v1.LogicalBackupElasticsearch{
 			ObjectMeta: metav1.ObjectMeta{Name: backupName, Namespace: awsSet},
 			Spec:       v1.LogicalBackupElasticsearchSpec{ClusterRef: v1.ClusterRef{Name: cluster.Name}},
 		})
+		var backup v1.LogicalBackupElasticsearch
 		Eventually(func(g Gomega) {
-			var b v1.LogicalBackupElasticsearch
-			g.Expect(k8s.Get(ctx, client.ObjectKey{Namespace: awsSet, Name: backupName}, &b)).To(Succeed())
-			if b.Status.Phase == v1.LogicalBackupFailed {
-				StopTrying(fmt.Sprintf("the backup failed: %v", b.Status.Conditions)).Now()
+			g.Expect(k8s.Get(ctx, client.ObjectKey{Namespace: awsSet, Name: backupName}, &backup)).To(Succeed())
+			if backup.Status.Phase == v1.LogicalBackupFailed {
+				StopTrying(fmt.Sprintf("the backup failed: %v", backup.Status.Conditions)).Now()
 			}
-			g.Expect(b.Status.Phase).To(Equal(v1.LogicalBackupCompleted), "%v", b.Status.Conditions)
+			g.Expect(backup.Status.Phase).To(Equal(v1.LogicalBackupCompleted), "%v", backup.Status.Conditions)
 		}, backupTimeout, 10*time.Second).Should(Succeed())
 
-		after, err := awsBucketKeys(bucket)
+		keys, err := awsBucketKeys(bucket)
 		Expect(err).NotTo(HaveOccurred())
-		written := slices.DeleteFunc(after, func(k string) bool { return slices.Contains(before, k) })
-		Expect(written).NotTo(BeEmpty(), "the backup wrote nothing into the bucket %s", bucket)
+		written := keysOfBackup(keys, backup.Status.BackupID)
+		Expect(
+			written,
+		).NotTo(BeEmpty(), "the bucket %s holds no object of the backup %d", bucket, backup.Status.BackupID)
+		Expect(readAWS(
+			"s3api", "head-object", "--bucket", bucket, "--key", written[0], "--output", "text",
+			"--query", "[ServerSideEncryption, SSEKMSKeyId]",
+		)).To(WithTransform(strings.Fields, Equal([]string{"aws:kms", key})))
 	})
 
 	It(

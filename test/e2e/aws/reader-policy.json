@@ -14,6 +14,12 @@
       "Resource": "arn:aws:s3:::${RUN_ID}-*"
     },
     {
+      "Sid": "Objects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::${RUN_ID}-*/*"
+    },
+    {
       "Sid": "Keys",
       "Effect": "Allow",
       "Action": ["kms:DescribeKey"],
