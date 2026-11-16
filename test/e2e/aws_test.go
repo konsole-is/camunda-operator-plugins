@@ -19,6 +19,7 @@ limitations under the License.
 package e2e
 
 import (
+	"fmt"
 	"path"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -64,10 +66,11 @@ const (
 
 var _ = Describe("the AWS journey", Ordered, Label(labelAWS), func() {
 	var (
-		claim  fleetv1alpha1.CamundaClusterClaim
-		role   string
-		key    string
-		bucket string
+		claim   fleetv1alpha1.CamundaClusterClaim
+		cluster v1.CamundaCluster
+		role    string
+		key     string
+		bucket  string
 	)
 
 	BeforeAll(func() {
@@ -114,6 +117,60 @@ var _ = Describe("the AWS journey", Ordered, Label(labelAWS), func() {
 		Expect(readAWS("s3api", "head-bucket", "--bucket", bucket)).Error().NotTo(HaveOccurred())
 		Expect(readAWS("kms", "describe-key", "--key-id", key, "--query", "KeyMetadata.KeyState", "--output", "text")).
 			To(WithTransform(strings.TrimSpace, Equal("Enabled")))
+	})
+
+	It("makes the claim and its cluster Ready, with the bucket of the claim as the backup storage", func() {
+		claimKey := client.ObjectKeyFromObject(&claim)
+		Eventually(
+			func(g Gomega) { expectClaimReady(g, claimKey) },
+			claimReadyTimeout,
+			10*time.Second,
+		).Should(Succeed())
+
+		Expect(k8s.Get(ctx, claimKey, &claim)).To(Succeed())
+		Expect(claim.Status.Cluster).NotTo(BeNil())
+		Expect(k8s.Get(ctx, client.ObjectKey{Namespace: awsSet, Name: claim.Status.Cluster.Name}, &cluster)).
+			To(Succeed())
+		Expect(meta.IsStatusConditionTrue(cluster.Status.Conditions, v1.ConditionReady)).To(BeTrue())
+
+		requests, err := claimRequests(&claim)
+		Expect(err).NotTo(HaveOccurred())
+		storage := requestOf(requests, &claim, sectionBackupStorage)
+		Expect(storage).NotTo(BeNil())
+		Expect(cluster.Spec.BackupStorageRef).To(Equal(storage.Status.Outputs[outputObjectStorageConfig]))
+	})
+
+	// The backup stays until the end, so the last spec deletes a claim whose
+	// bucket holds a backup.
+	It("completes a backup with Elasticsearch into the bucket, encrypted with the key of the claim", func() {
+		Expect(readAWS(
+			"s3api", "get-bucket-encryption", "--bucket", bucket, "--output", "text",
+			"--query", "ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.KMSMasterKeyID",
+		)).To(WithTransform(strings.TrimSpace, Equal(key)))
+
+		createAll(&v1.LogicalBackupElasticsearch{
+			ObjectMeta: metav1.ObjectMeta{Name: backupName, Namespace: awsSet},
+			Spec:       v1.LogicalBackupElasticsearchSpec{ClusterRef: v1.ClusterRef{Name: cluster.Name}},
+		})
+		var backup v1.LogicalBackupElasticsearch
+		Eventually(func(g Gomega) {
+			g.Expect(k8s.Get(ctx, client.ObjectKey{Namespace: awsSet, Name: backupName}, &backup)).To(Succeed())
+			if backup.Status.Phase == v1.LogicalBackupFailed {
+				StopTrying(fmt.Sprintf("the backup failed: %v", backup.Status.Conditions)).Now()
+			}
+			g.Expect(backup.Status.Phase).To(Equal(v1.LogicalBackupCompleted), "%v", backup.Status.Conditions)
+		}, backupTimeout, 10*time.Second).Should(Succeed())
+
+		keys, err := awsBucketKeys(bucket)
+		Expect(err).NotTo(HaveOccurred())
+		written := keysOfBackup(keys, backup.Status.BackupID)
+		Expect(
+			written,
+		).NotTo(BeEmpty(), "the bucket %s holds no object of the backup %d", bucket, backup.Status.BackupID)
+		Expect(readAWS(
+			"s3api", "head-object", "--bucket", bucket, "--key", written[0], "--output", "text",
+			"--query", "[ServerSideEncryption, SSEKMSKeyId]",
+		)).To(WithTransform(strings.Fields, Equal([]string{"aws:kms", key})))
 	})
 
 	It(
@@ -198,4 +255,25 @@ func readAWS(args ...string) (string, error) {
 	}
 
 	return awsCLI(readerNamespace, readerServiceAccount, env, args...)
+}
+
+// awsBucketKeys returns the keys of the objects in bucket, read as the reader
+// role of the run. A bucket that does not exist is an error, never an empty
+// list.
+func awsBucketKeys(bucket string) ([]string, error) {
+	listing, err := readAWS(
+		"s3api",
+		"list-objects-v2",
+		"--bucket",
+		bucket,
+		"--query",
+		"Contents[].Key",
+		"--output",
+		"json",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseKeys(listing)
 }

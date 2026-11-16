@@ -21,6 +21,9 @@ package e2e
 import (
 	"encoding/json"
 	"os"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/gomega"
@@ -35,7 +38,8 @@ import (
 )
 
 const (
-	claimName = "orders"
+	claimName  = "orders"
+	backupName = "orders-backup"
 	// fixtureName names the platform config, the release, and both presets.
 	fixtureName = "journey"
 
@@ -46,8 +50,10 @@ const (
 
 	outputObjectStorageConfig = "objectStorageConfig"
 
-	deletionTimeout = 10 * time.Minute
-	podTimeout      = 2 * time.Minute
+	claimReadyTimeout = 20 * time.Minute
+	backupTimeout     = 15 * time.Minute
+	deletionTimeout   = 10 * time.Minute
+	podTimeout        = 2 * time.Minute
 )
 
 // requiredEnv returns the environment variable name, and fails the spec when
@@ -153,4 +159,15 @@ func fixedParameter(value any) fleetv1alpha1.ParameterPolicy {
 	Expect(err).NotTo(HaveOccurred())
 
 	return fleetv1alpha1.ParameterPolicy{Value: &apiextensionsv1.JSON{Raw: raw}}
+}
+
+// keysOfBackup returns the keys that hold id as one path segment. Zeebe
+// writes each partition of a backup under <partition>/<backup ID>/, so a
+// backup that completed has at least one such key.
+func keysOfBackup(keys []string, id int64) []string {
+	segment := strconv.FormatInt(id, 10)
+
+	return slices.DeleteFunc(slices.Clone(keys), func(key string) bool {
+		return !slices.Contains(strings.Split(key, "/"), segment)
+	})
 }

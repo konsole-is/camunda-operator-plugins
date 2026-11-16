@@ -14,8 +14,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
 	github.com/aws/smithy-go v1.28.9
 	github.com/go-logr/logr v1.4.4
-	github.com/konsole-is/camunda-operator/api v0.2.1-0.20261111223906-af574314547a
-	github.com/konsole-is/camunda-operator/conformance v0.0.0-20261114182116-1dcb25a4bdfb
+	github.com/konsole-is/camunda-operator/api v0.2.1-0.20261116132614-b2ba1adc8be8
+	github.com/konsole-is/camunda-operator/conformance v0.0.0-20261116132614-b2ba1adc8be8
 	github.com/onsi/ginkgo/v2 v2.34.0
 	github.com/onsi/gomega v1.44.0
 	github.com/sourcehawk/operator-component-framework v0.24.1
