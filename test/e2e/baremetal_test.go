@@ -39,8 +39,7 @@ import (
 const (
 	// bareMetal is the name of the Environment of the journey and of its
 	// namespace.
-	bareMetal  = "bare-metal"
-	backupName = "orders-backup"
+	bareMetal = "bare-metal"
 
 	sectionAccess = "access"
 
@@ -61,9 +60,7 @@ const (
 	envoySelector = "gateway.envoyproxy.io/owning-gateway-namespace=gateway-system," +
 		"gateway.envoyproxy.io/owning-gateway-name=public"
 
-	claimReadyTimeout = 20 * time.Minute
-	operateTimeout    = 5 * time.Minute
-	backupTimeout     = 15 * time.Minute
+	operateTimeout = 5 * time.Minute
 )
 
 var _ = Describe("the bare-metal journey", Ordered, Label(labelBareMetal), func() {

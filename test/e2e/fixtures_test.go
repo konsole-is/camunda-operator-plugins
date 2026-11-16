@@ -35,7 +35,8 @@ import (
 )
 
 const (
-	claimName = "orders"
+	claimName  = "orders"
+	backupName = "orders-backup"
 	// fixtureName names the platform config, the release, and both presets.
 	fixtureName = "journey"
 
@@ -46,8 +47,10 @@ const (
 
 	outputObjectStorageConfig = "objectStorageConfig"
 
-	deletionTimeout = 10 * time.Minute
-	podTimeout      = 2 * time.Minute
+	claimReadyTimeout = 20 * time.Minute
+	backupTimeout     = 15 * time.Minute
+	deletionTimeout   = 10 * time.Minute
+	podTimeout        = 2 * time.Minute
 )
 
 // requiredEnv returns the environment variable name, and fails the spec when

@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -64,10 +65,11 @@ const (
 
 var _ = Describe("the AWS journey", Ordered, Label(labelAWS), func() {
 	var (
-		claim  fleetv1alpha1.CamundaClusterClaim
-		role   string
-		key    string
-		bucket string
+		claim   fleetv1alpha1.CamundaClusterClaim
+		cluster v1.CamundaCluster
+		role    string
+		key     string
+		bucket  string
 	)
 
 	BeforeAll(func() {
@@ -114,6 +116,23 @@ var _ = Describe("the AWS journey", Ordered, Label(labelAWS), func() {
 		Expect(readAWS("s3api", "head-bucket", "--bucket", bucket)).Error().NotTo(HaveOccurred())
 		Expect(readAWS("kms", "describe-key", "--key-id", key, "--query", "KeyMetadata.KeyState", "--output", "text")).
 			To(WithTransform(strings.TrimSpace, Equal("Enabled")))
+	})
+
+	It("makes the claim and its cluster Ready, with the bucket of the claim as the backup storage", func() {
+		claimKey := client.ObjectKeyFromObject(&claim)
+		Eventually(func(g Gomega) { expectClaimReady(g, claimKey) }, claimReadyTimeout, 10*time.Second).Should(Succeed())
+
+		Expect(k8s.Get(ctx, claimKey, &claim)).To(Succeed())
+		Expect(claim.Status.Cluster).NotTo(BeNil())
+		Expect(k8s.Get(ctx, client.ObjectKey{Namespace: awsSet, Name: claim.Status.Cluster.Name}, &cluster)).
+			To(Succeed())
+		Expect(meta.IsStatusConditionTrue(cluster.Status.Conditions, v1.ConditionReady)).To(BeTrue())
+
+		requests, err := claimRequests(&claim)
+		Expect(err).NotTo(HaveOccurred())
+		storage := requestOf(requests, &claim, sectionBackupStorage)
+		Expect(storage).NotTo(BeNil())
+		Expect(cluster.Spec.BackupStorageRef).To(Equal(storage.Status.Outputs[outputObjectStorageConfig]))
 	})
 
 	It(
