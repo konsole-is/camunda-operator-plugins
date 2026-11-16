@@ -48,6 +48,9 @@ const envJourney = "JOURNEY"
 // labelBareMetal is the label of the bare-metal journey.
 const labelBareMetal = "bare-metal"
 
+// labelAWS is the label of the AWS journey.
+const labelAWS = "aws"
+
 var (
 	ctx       = context.Background()
 	k8s       client.Client

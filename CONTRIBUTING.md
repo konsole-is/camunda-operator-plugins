@@ -118,7 +118,9 @@ A journey proves that a set of plugins gives a working cluster from end to end. 
 
 The journey runs on each pull request that changes `rustfs`, `gateway-access`, `pkg/`, the journey, the kind scripts, or `go.mod`, and each night. The operator is built from the commit that the api module of `go.mod` names. The Camunda and Elasticsearch versions come from that commit too, from its file `test/e2e/matrix/<minor>.env`.
 
-The journey runs once for each supported Camunda minor, with the check `Bare-metal journey on Camunda <minor>`. `CAMUNDA_MINORS` in the `Makefile` lists the minors, and the workflow reads it with `make list-camunda-minors`. To add a minor:
+The workflow also runs the AWS journey in the AWS sandbox of [The AWS jobs](#the-aws-jobs), each night and on a manual run, never on a pull request. It runs only when the repository variable `AWS_SANDBOX_ACTOR_ID` is set. A claim with `aws-irsa`, `aws-kms-key`, `aws-s3`, and the built-in Elasticsearch gets a role, a key, and a bucket. The bucket holds the key and trusts the role. A deletion of the claim with `Delete` removes the role and the bucket, and schedules the deletion of the key. The journey takes the chart values and the controller policies of the AWS plugins from `test/conformance/<plugin>/`. It does not run their `setup.sh`, so these files can name the variables of the run, but not a variable of `RUN_VARS`. It reads AWS from a pod, as the role `<run>-journey-reader` with the policy `test/e2e/aws/reader-policy.json`. Its job removes what the run created, also when the run fails or is cancelled.
+
+Each journey runs once for each supported Camunda minor, with the check `Bare-metal journey on Camunda <minor>` or `AWS journey on Camunda <minor>`. `CAMUNDA_MINORS` in the `Makefile` lists the minors, and the workflow reads it with `make list-camunda-minors`. To add a minor:
 
 1. Make sure that the operator has the file `test/e2e/matrix/<minor>.env`, and that `go.mod` names an operator commit that holds it. The journey of a minor without that file fails before it creates the cluster.
 2. Add the minor to `CAMUNDA_MINORS`, with the oldest minor first.
@@ -126,7 +128,7 @@ The journey runs once for each supported Camunda minor, with the check `Bare-met
 
 A journey is a directory `test/e2e/<journey>/` with an executable `setup.sh`, and one `Describe` with the label `<journey>` in `test/e2e/`. `setup.sh` installs what the journey needs beside the operator and ECK. A new journey gets its own job in `.github/workflows/journeys.yml`, with `needs: minors` and the matrix of the job `bare-metal`, so that it runs on the same minors. `make journey-kind JOURNEY=<journey>` runs a journey after `make operator-source`, with the tools of [section 6](#6-the-conformance-job). It runs on the first minor of `CAMUNDA_MINORS`, or on `CAMUNDA_MINOR=<minor>`. It creates the kind cluster `camunda-operator-plugins` and leaves it after the run.
 
-A red journey is a bug to fix, not a run to repeat.
+A red run of the night files the issue "Journeys failed on main", or adds a comment to it when it is open. A red journey is a bug to fix, not a run to repeat.
 
 ## 8. Before you open a pull request
 

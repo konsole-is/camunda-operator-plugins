@@ -23,9 +23,11 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
+# A scheduled or manual run is not cancelled, so that the AWS journey ends,
+# cleans up the AWS sandbox, and can file its issue.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -114,3 +116,138 @@ jobs:
             echo "=== logs of ${workload} in ${namespace}"
             kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
           done
+
+  # A claim with the plugins of the AWS set, on one kind cluster with the
+  # operator of the api ref and ECK, against the AWS sandbox. It runs each
+  # night and on a manual run, never on a pull request, and only when the
+  # sandbox is set up. Its checks are never required.
+  aws:
+    name: AWS journey on Camunda ${{ matrix.minor }}
+    needs: minors
+    if: >-
+      github.repository == 'konsole-is/camunda-operator-plugins' &&
+      github.event_name != 'pull_request' &&
+      vars.AWS_SANDBOX_ACTOR_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: ${{ github.actor_id == vars.AWS_SANDBOX_ACTOR_ID && 'aws-sandbox' || 'aws-sandbox-review' }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        minor: ${{ fromJSON(needs.minors.outputs.minors) }}
+    env:
+      JOURNEY: aws
+      CAMUNDA_MINOR: ${{ matrix.minor }}
+      KIND_CLUSTER: journey
+      JOURNEY_REPORT: ${{ github.workspace }}/journey-report/aws-${{ matrix.minor }}.xml
+      # One run ID for each minor. issuer.sh refuses an ID that does not
+      # match cpo-ci-[a-z0-9-]{1,40}.
+      RUN_ID: cpo-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_KMS_REPLICA_REGION: ${{ vars.AWS_KMS_REPLICA_REGION }}
+      AWS_ISSUER_BUCKET: ${{ vars.AWS_ISSUER_BUCKET }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install the kind tools
+        uses: ./.github/actions/kind-tools
+
+      - name: Raise vm.max_map_count for Elasticsearch
+        run: sudo sysctl -w vm.max_map_count=262144
+
+      - name: Get the credentials of the CI role
+        id: aws
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Publish the issuer of the run
+        id: issuer
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
+        run: |
+          echo "AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}" >> "${GITHUB_ENV}"
+          out=$(hack/aws-sandbox/issuer.sh up "${RUN_ID}" "${RUNNER_TEMP}/issuer")
+          echo "${out}"
+          echo "KIND_CONFIG=${RUNNER_TEMP}/issuer/kind.yaml" >> "${GITHUB_ENV}"
+          echo "AWS_OIDC_PROVIDER_ARN=$(sed -n 's/^provider=//p' <<< "${out}")" >> "${GITHUB_ENV}"
+
+      - name: Run the AWS journey on kind
+        run: make journey-kind
+
+      - name: Upload the journey report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: journey-aws-${{ matrix.minor }}
+          path: journey-report/
+          if-no-files-found: warn
+
+      - name: Read the kind cluster
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get camundaclusterclaims,pluginrequests,pluginregistrations,grants -A -o yaml || true
+          kubectl get camundaclusters,elasticsearchclusters,objectstorageconfigs -A -o yaml || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -200 || true
+          # The claim of the journey and its cluster live in the namespace aws.
+          for pod in $(kubectl get pods -n aws -o name 2> /dev/null); do
+            echo "=== logs of ${pod} in aws"
+            kubectl logs -n aws "${pod}" --all-containers --tail=200 || true
+          done
+          for target in \
+            "camunda-operator-system deployment/camunda-operator-controller-manager" \
+            "camunda-operator-plugins deployment/aws-identity" \
+            "camunda-operator-plugins deployment/aws-kms" \
+            "camunda-operator-plugins deployment/aws-s3" \
+            "default deployment/pod-identity-webhook" \
+            "elastic-system statefulset/elastic-operator"; do
+            read -r namespace workload <<< "${target}"
+            echo "=== logs of ${workload} in ${namespace}"
+            kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
+          done
+
+      # The first session of the CI role can be over: it lasts one hour.
+      - name: Get the credentials of the CI role for the cleanup
+        if: ${{ always() && steps.issuer.outcome != 'skipped' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The kind cluster goes first, so that no controller creates an object
+      # again. The step fails when the run left a role, a policy, an OIDC
+      # provider, or a bucket.
+      - name: Remove what the run created
+        if: ${{ always() && steps.issuer.outcome != 'skipped' }}
+        run: |
+          kind delete cluster --name "${KIND_CLUSTER}" || true
+          hack/aws-sandbox/teardown.sh "${RUN_ID}"
+
+  report:
+    name: File an issue for a red run of the night
+    needs: [bare-metal, aws]
+    if: ${{ failure() && github.event_name == 'schedule' && github.repository == 'konsole-is/camunda-operator-plugins' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: File or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: hack/failure-issue.sh "Journeys failed on main" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

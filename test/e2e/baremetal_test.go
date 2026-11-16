@@ -27,7 +27,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,22 +39,15 @@ import (
 const (
 	// bareMetal is the name of the Environment of the journey and of its
 	// namespace.
-	bareMetal = "bare-metal"
-	claimName = "orders"
-	// fixtureName names the platform config, the release, and both presets.
-	fixtureName = "journey"
-	backupName  = "orders-backup"
+	bareMetal  = "bare-metal"
+	backupName = "orders-backup"
 
-	sectionBackupStorage    = "backup-storage"
-	sectionAccess           = "access"
-	sectionSecondaryStorage = "secondary-storage"
+	sectionAccess = "access"
 
-	registrationRustFS        = "rustfs-bucket"
-	registrationGateway       = "gateway-public"
-	registrationElasticsearch = "elasticsearch"
+	registrationRustFS  = "rustfs-bucket"
+	registrationGateway = "gateway-public"
 
-	outputObjectStorageConfig = "objectStorageConfig"
-	outputExternalURL         = "externalUrl"
+	outputExternalURL = "externalUrl"
 
 	// The server and the admin key that test/kind/rustfs.sh writes.
 	rustfsNamespace       = "rustfs"
@@ -72,8 +64,6 @@ const (
 	claimReadyTimeout = 20 * time.Minute
 	operateTimeout    = 5 * time.Minute
 	backupTimeout     = 15 * time.Minute
-	deletionTimeout   = 10 * time.Minute
-	podTimeout        = 2 * time.Minute
 )
 
 var _ = Describe("the bare-metal journey", Ordered, Label(labelBareMetal), func() {
@@ -181,10 +171,6 @@ var _ = Describe("the bare-metal journey", Ordered, Label(labelBareMetal), func(
 // requires its one registration, so the claim gets exactly the plugins of
 // the bare-metal set.
 func bareMetalEnvironment() *fleetv1alpha1.Environment {
-	only := func(registration string) fleetv1alpha1.SectionPolicy {
-		return fleetv1alpha1.SectionPolicy{Required: true, Default: registration, Allowed: []string{registration}}
-	}
-
 	return &fleetv1alpha1.Environment{
 		ObjectMeta: metav1.ObjectMeta{Name: bareMetal},
 		Spec: fleetv1alpha1.EnvironmentSpec{
@@ -195,14 +181,12 @@ func bareMetalEnvironment() *fleetv1alpha1.Environment {
 			},
 			Releases: &fleetv1alpha1.EnvironmentReleases{Allowed: []string{fixtureName}, Default: fixtureName},
 			Sections: map[string]fleetv1alpha1.SectionPolicy{
-				sectionBackupStorage:    only(registrationRustFS),
-				sectionAccess:           only(registrationGateway),
-				sectionSecondaryStorage: only(registrationElasticsearch),
+				sectionBackupStorage:    onlyRegistration(registrationRustFS),
+				sectionAccess:           onlyRegistration(registrationGateway),
+				sectionSecondaryStorage: onlyRegistration(registrationElasticsearch),
 			},
 			Parameters: map[string]fleetv1alpha1.ParameterPolicies{
-				registrationElasticsearch: {
-					"preset": {Value: &apiextensionsv1.JSON{Raw: []byte(`"` + fixtureName + `"`)}},
-				},
+				registrationElasticsearch: {"preset": fixedParameter(fixtureName)},
 			},
 		},
 	}
@@ -292,23 +276,18 @@ func operateStatus(namespace, cluster, externalURL, address string) (string, err
 // key of RustFS. A bucket that does not exist is an error, never an empty
 // list.
 func bucketKeys(bucket string) ([]string, error) {
-	listing, err := runPod(&corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{GenerateName: "bucket-", Namespace: rustfsNamespace},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name:  "aws",
-			Image: requiredEnv("AWS_CLI_IMAGE"),
-			Args: []string{
-				"s3api", "list-objects-v2", "--bucket", bucket,
-				"--query", "Contents[].Key", "--output", "json",
-			},
-			Env: []corev1.EnvVar{
-				secretEnv("AWS_ACCESS_KEY_ID", rustfsAdminSecret, rustfsAccessKeyKey),
-				secretEnv("AWS_SECRET_ACCESS_KEY", rustfsAdminSecret, rustfsSecretKeyKey),
-				{Name: "AWS_DEFAULT_REGION", Value: "us-east-1"},
-				{Name: "AWS_ENDPOINT_URL", Value: rustfsEndpoint},
-			},
-		}}},
-	}, podTimeout)
+	env := []corev1.EnvVar{
+		secretEnv("AWS_ACCESS_KEY_ID", rustfsAdminSecret, rustfsAccessKeyKey),
+		secretEnv("AWS_SECRET_ACCESS_KEY", rustfsAdminSecret, rustfsSecretKeyKey),
+		{Name: "AWS_DEFAULT_REGION", Value: "us-east-1"},
+		{Name: "AWS_ENDPOINT_URL", Value: rustfsEndpoint},
+	}
+	listing, err := awsCLI(
+		rustfsNamespace,
+		"",
+		env,
+		"s3api", "list-objects-v2", "--bucket", bucket, "--query", "Contents[].Key", "--output", "json",
+	)
 	if err != nil {
 		return nil, err
 	}

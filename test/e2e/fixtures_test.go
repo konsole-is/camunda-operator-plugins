@@ -19,16 +19,35 @@ limitations under the License.
 package e2e
 
 import (
+	"encoding/json"
 	"os"
+	"time"
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	fleetv1alpha1 "github.com/konsole-is/camunda-operator/api/fleet/v1alpha1"
 	v1 "github.com/konsole-is/camunda-operator/api/v1"
+)
+
+const (
+	claimName = "orders"
+	// fixtureName names the platform config, the release, and both presets.
+	fixtureName = "journey"
+
+	sectionBackupStorage    = "backup-storage"
+	sectionSecondaryStorage = "secondary-storage"
+
+	registrationElasticsearch = "elasticsearch"
+
+	outputObjectStorageConfig = "objectStorageConfig"
+
+	deletionTimeout = 10 * time.Minute
+	podTimeout      = 2 * time.Minute
 )
 
 // requiredEnv returns the environment variable name, and fails the spec when
@@ -119,4 +138,19 @@ func environmentNamespace(name, environment string) *corev1.Namespace {
 			Labels: map[string]string{fleetv1alpha1.LabelEnvironment: environment},
 		},
 	}
+}
+
+// onlyRegistration returns the policy of a section that requires
+// registration and allows no other.
+func onlyRegistration(registration string) fleetv1alpha1.SectionPolicy {
+	return fleetv1alpha1.SectionPolicy{Required: true, Default: registration, Allowed: []string{registration}}
+}
+
+// fixedParameter returns the policy of a parameter whose value is value,
+// which a claim cannot change.
+func fixedParameter(value any) fleetv1alpha1.ParameterPolicy {
+	raw, err := json.Marshal(value)
+	Expect(err).NotTo(HaveOccurred())
+
+	return fleetv1alpha1.ParameterPolicy{Value: &apiextensionsv1.JSON{Raw: raw}}
 }

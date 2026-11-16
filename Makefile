@@ -204,7 +204,8 @@ ENVOY_GATEWAY_VERSION ?= v1.10.0
 # renovate: datasource=docker depName=rustfs/rustfs
 RUSTFS_VERSION ?= 1.0.5
 # CERT_MANAGER_VERSION and POD_IDENTITY_WEBHOOK_VERSION are the releases that
-# give the pods of the AWS conformance runs their roles, as on EKS.
+# give the pods of the AWS conformance runs and of the AWS journey their
+# roles, as on EKS.
 # renovate: datasource=github-releases depName=cert-manager/cert-manager
 CERT_MANAGER_VERSION ?= v1.21.3
 # renovate: datasource=github-tags depName=aws/amazon-eks-pod-identity-webhook
@@ -246,6 +247,9 @@ journey-kind: ## Create a kind cluster with the operator, ECK, and the plugins o
 	REPORT="$(JOURNEY_REPORT)" CAMUNDA_MINOR="$(CAMUNDA_MINOR)" GATEWAY_API_VERSION="$(GATEWAY_API_VERSION)" \
 	ENVOY_GATEWAY_VERSION="$(ENVOY_GATEWAY_VERSION)" RUSTFS_VERSION="$(RUSTFS_VERSION)" \
 	CURL_IMAGE="curlimages/curl:$(CURL_VERSION)" AWS_CLI_IMAGE="amazon/aws-cli:$(AWS_CLI_VERSION)" \
+	CERT_MANAGER_VERSION="$(CERT_MANAGER_VERSION)" POD_IDENTITY_WEBHOOK_VERSION="$(POD_IDENTITY_WEBHOOK_VERSION)" \
+	AWS_REGION="$(AWS_REGION)" RUN_ID="$(RUN_ID)" AWS_ACCOUNT_ID="$(AWS_ACCOUNT_ID)" \
+	AWS_OIDC_PROVIDER_ARN="$(AWS_OIDC_PROVIDER_ARN)" \
 		test/e2e/run.sh "$(JOURNEY)"
 
 ##@ Dependencies

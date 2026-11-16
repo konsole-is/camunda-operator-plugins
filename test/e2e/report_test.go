@@ -55,6 +55,50 @@ func expectClaimReady(g Gomega, key client.ObjectKey) {
 	}
 }
 
+// expectSectionsReady asserts that the claim key has a request with
+// OutputsReady and Ready for each of sections. The other sections of the
+// claim and the conditions of the claim do not count. It is written for
+// Eventually.
+func expectSectionsReady(g Gomega, key client.ObjectKey, sections ...string) {
+	var claim fleetv1alpha1.CamundaClusterClaim
+	g.Expect(k8s.Get(ctx, key, &claim)).To(Succeed())
+	requests, err := claimRequests(&claim)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(sectionsReady(&claim, requests, sections...)).To(Succeed())
+}
+
+// sectionsReady returns nil when the request of each of sections is in
+// requests with OutputsReady and Ready True. Otherwise it returns an error
+// that names the first section, in the order given, whose request is
+// missing, or the condition of its request that is not True, followed by
+// the report of describeClaim. The other sections of claim do not count.
+func sectionsReady(
+	claim *fleetv1alpha1.CamundaClusterClaim,
+	requests []pluginsv1alpha1.PluginRequest,
+	sections ...string,
+) error {
+	for _, section := range sections {
+		request := requestOf(requests, claim, section)
+		if request == nil {
+			return fmt.Errorf("the request of the section %s is missing\n%s", section, describeClaim(claim, requests))
+		}
+
+		for _, condition := range []string{pluginsv1alpha1.ConditionOutputsReady, v1.ConditionReady} {
+			if !meta.IsStatusConditionTrue(request.Status.Conditions, condition) {
+				return fmt.Errorf(
+					"%s of the request %s is not True\n%s",
+					condition,
+					request.Name,
+					describeClaim(claim, requests),
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
 // claimRequests returns the PluginRequests that the status of claim lists.
 // A listed request that does not exist is left out.
 func claimRequests(claim *fleetv1alpha1.CamundaClusterClaim) ([]pluginsv1alpha1.PluginRequest, error) {
