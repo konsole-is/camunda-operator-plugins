@@ -157,10 +157,10 @@ github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnr
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/klauspost/compress v1.20.1 h1:T7kKElXUMXrUJ2E9QhQhxFtcK5rPyLdsGZvdbLMPdiQ=
 github.com/klauspost/compress v1.20.1/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
-github.com/konsole-is/camunda-operator/api v0.2.1-0.20261111223906-af574314547a h1:K6w3Gv9WSOACJC/9H0zSbqwmgVzU1yYLf2vcwEEJ8WQ=
-github.com/konsole-is/camunda-operator/api v0.2.1-0.20261111223906-af574314547a/go.mod h1:43N5freTC8lCPf9T9AM/SZpNS77I4gZBvkwubME+Hsg=
-github.com/konsole-is/camunda-operator/conformance v0.0.0-20261114182116-1dcb25a4bdfb h1:G/aqCm1RDQ20ZlmgnFvhacUkWFFYh2DhdiLN7fUwmSs=
-github.com/konsole-is/camunda-operator/conformance v0.0.0-20261114182116-1dcb25a4bdfb/go.mod h1:wyxblI5JjFHEd3LGEFrY6bdDrqmpzmrCeWYpgYaVg18=
+github.com/konsole-is/camunda-operator/api v0.2.1-0.20261116132614-b2ba1adc8be8 h1:SrstgbV9NtAEa7i7oRGNi9Nm1uuPFZYYC7Lf9y+fYkg=
+github.com/konsole-is/camunda-operator/api v0.2.1-0.20261116132614-b2ba1adc8be8/go.mod h1:w7tX2bfA6KlrcPMxi4+ZMFplRPtvY3/cpXUB9UEd8WA=
+github.com/konsole-is/camunda-operator/conformance v0.0.0-20261116132614-b2ba1adc8be8 h1:d+Edc7rJfUYpWwGhuOz5v3HQI6QVUTX9MmxOkEcbkZU=
+github.com/konsole-is/camunda-operator/conformance v0.0.0-20261116132614-b2ba1adc8be8/go.mod h1:Gns5X8hbz5aw5og15BVQQUiDLpoJ/ZBXygRDc6SBy+0=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
