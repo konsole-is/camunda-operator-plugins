@@ -135,8 +135,8 @@ lint-renovate: ## Verify renovate.json5 with the validator of RENOVATE_VERSION. 
 	npx --yes --package renovate@$(RENOVATE_VERSION) renovate-config-validator --strict renovate.json5
 
 .PHONY: lint-config
-lint-config: golangci-lint golangci-lint-schema ## Verify the golangci-lint configuration.
-	"$(GOLANGCI_LINT)" config verify --schema "$(GOLANGCI_LINT_SCHEMA)"
+lint-config: golangci-lint ## Verify the golangci-lint configuration against the JSON schema of its release.
+	"$(GOLANGCI_LINT)" config verify
 
 .PHONY: lint-terraform
 lint-terraform: ## Check the format of each Terraform configuration under terraform/ and validate it, without its backend.
@@ -264,11 +264,9 @@ $(LOCALBIN):
 
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 GOVULNCHECK = $(LOCALBIN)/govulncheck
-# golangci-lint fetches its schema with a 2 s timeout and no retry, so
-# lint-config downloads it with retries and passes it in.
-GOLANGCI_LINT_SCHEMA = $(LOCALBIN)/golangci.$(basename $(GOLANGCI_LINT_VERSION)).jsonschema.json
-
-GOLANGCI_LINT_VERSION ?= v2.8.0
+# .custom-gcl.yml names the same release. Renovate moves both in one pull request.
+# renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
+GOLANGCI_LINT_VERSION ?= v2.15.0
 # RENOVATE_VERSION is the Renovate release whose validator lint-renovate runs
 # against renovate.json5.
 # renovate: datasource=npm depName=renovate
@@ -354,12 +352,6 @@ govulncheck: | $(LOCALBIN) ## Download govulncheck locally if necessary.
 		GOBIN="$(LOCALBIN)" go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION); \
 		echo "$$want" > "$(GOVULNCHECK).stamp"; \
 	}
-
-.PHONY: golangci-lint-schema
-golangci-lint-schema: $(GOLANGCI_LINT_SCHEMA) ## Download the golangci-lint JSON schema locally if necessary.
-$(GOLANGCI_LINT_SCHEMA): | $(LOCALBIN)
-	curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --max-time 60 \
-		-o "$@.tmp" "https://golangci-lint.run/jsonschema/$(notdir $@)" && mv -f "$@.tmp" "$@"
 
 # The custom golangci-lint holds the plugins of .custom-gcl.yml, and it cannot
 # load code that needs a newer Go than the Go that built it. A change of

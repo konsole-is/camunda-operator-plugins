@@ -56,9 +56,16 @@ linters:
       rules:
         - name: comment-spacings
         - name: import-shadowing
+    goconst:
+      # A test reads best with its expected values written out, not as constants.
+      ignore-tests: true
+      # A map key names a field of an outside format, such as an IAM policy or a query, next to its value.
+      ignore-map-keys: true
     modernize:
       disable:
         - omitzero
+        # The ObjectMeta of a Kubernetes object stays named in a literal, not set through promoted fields.
+        - embedlit
   exclusions:
     generated: lax
     rules:
