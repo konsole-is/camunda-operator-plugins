@@ -3,7 +3,8 @@
 // 15th, grouped so that one pull request carries what has to land together,
 // and a major update arrives when it is published. Go modules,
 // .tool-versions, GitHub Actions, and the Dockerfile go through the standard
-// managers. A marker comment above a Makefile variable names a tool pin:
+// managers. A marker comment above a Makefile variable, or above a key of
+// .custom-gcl.yml, names a tool pin:
 //
 //   # renovate: datasource=go depName=golang.org/x/vuln
 //   GOVULNCHECK_VERSION ?= v1.8.0
@@ -20,11 +21,12 @@
   },
   customManagers: [
     {
-      // The marker, then `NAME ?= <version>` on the next line.
+      // The marker, then `NAME ?= <version>` or `key: <version>` on the next
+      // line.
       customType: "regex",
-      managerFilePatterns: ["/^Makefile$/"],
+      managerFilePatterns: ["/^Makefile$/", "/^\\.custom-gcl\\.yml$/"],
       matchStrings: [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s*\\n\\w+\\s*\\??=\\s*(?<currentValue>\\S+)",
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s*\\n\\w+\\s*(?:\\??=|:)\\s*(?<currentValue>\\S+)",
       ],
     },
   ],
@@ -46,6 +48,12 @@
     {
       matchPackageNames: ["github.com/konsole-is/camunda-operator/api"],
       groupName: "operator-api",
+    },
+    {
+      // The Makefile and .custom-gcl.yml name one linter release, so one pull
+      // request moves both.
+      matchDepNames: ["github.com/golangci/golangci-lint/v2"],
+      groupName: "golangci-lint",
     },
     {
       matchPackageNames: ["github.com/aws/aws-sdk-go-v2{/,}**", "github.com/aws/smithy-go"],

@@ -1084,9 +1084,8 @@ func listedVersions(b *Bucket) []listedVersion {
 			all = append(all, listedVersion{ObjectVersion{Key: key, VersionID: nullVersion}, true})
 			latest = false
 		}
-		versions := byKey[key]
-		for i := len(versions) - 1; i >= 0; i-- {
-			all = append(all, listedVersion{versions[i], latest})
+		for _, v := range slices.Backward(byKey[key]) {
+			all = append(all, listedVersion{v, latest})
 			latest = false
 		}
 	}
