@@ -2,24 +2,24 @@
 
 The aws-s3 plugin serves the `backup-storage` section of the operator. It gives each Camunda cluster its own S3 bucket for its backups, and an `ObjectStorageConfig` that names the bucket. Zeebe needs a bucket that no other Zeebe cluster writes to, so one bucket serves one cluster. It serves through [pluginkit](../pluginkit.md).
 
-The chart installs one registration, `aws-s3`. It reads two optional inputs: the KMS key of the `encryption-key` section, and the IAM role of the `cloud-identity` section. The operator writes one PluginRequest in the namespace of each claim that picks this option, and deletes it with the claim. The request takes the deletion policy of the claim.
+aws-s3 is a controller of the chart [`aws`](aws.md), with the values block `s3`. It installs one registration, `aws-s3`. It reads two optional inputs: the KMS key of the `encryption-key` section, and the IAM role of the `cloud-identity` section. The operator writes one PluginRequest in the namespace of each claim that picks this option, and deletes it with the claim. The request takes the deletion policy of the claim.
 
 ## What it creates
 
 For each request, the plugin creates one general purpose bucket in the region of the request:
 
 - The name is `<bucketPrefix>-<namespace>-<claim>-<hash>`, at most 63 characters. Each `.` of the namespace or the claim becomes `-`. A name that is too long is cut before the hash. The hash is 16 hex digits of `<bucketPrefix>/<namespace>/<claim>`, so two prefixes or claims whose names read the same after the cut, or such as `a-b/c` and `a/b-c`, get two names.
-- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the PluginRequest. The tags of the chart value `extraTags` go on the bucket too.
+- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the PluginRequest. The tags of the shared value `extraTags` go on the bucket too.
 - The public access block has all four flags on. AWS turns them on for a new bucket. The plugin reads the block at each reconcile, and writes it only when a flag is off or the block is missing.
 - The default encryption is SSE-KMS with the key of the `key` input and an S3 Bucket Key. Without a key, it is SSE-S3. The `key` input must be the ARN of a key, not of an alias, in the region of the bucket.
 - The lifecycle rule `abort-incomplete-uploads` aborts an incomplete multipart upload after `abortIncompleteUploadDays` days. The plugin keeps each other lifecycle rule of the bucket.
 - Versioning stays off. The plugin never writes a bucket policy: pods get access to the bucket through the grants (see [Grants](#grants)).
 
-The plugin also writes one `ObjectStorageConfig` named after the request, in the namespace of the request. It has the type `S3`, the bucket, the region, and `auth.type: workloadIdentity`. With the chart value `mode: irsa`, `auth.workloadIdentity.roleArn` is the role of the `principal` input. With `mode: podIdentity`, it names no role, because a role annotation on the ServiceAccount makes the IRSA token win over Pod Identity.
+The plugin also writes one `ObjectStorageConfig` named after the request, in the namespace of the request. It has the type `S3`, the bucket, the region, and `auth.type: workloadIdentity`. With the shared value `mode: irsa`, `auth.workloadIdentity.roleArn` is the role of the `principal` input. With `mode: podIdentity`, it names no role, because a role annotation on the ServiceAccount makes the IRSA token win over Pod Identity.
 
 Before the plugin creates a bucket, it records the name and the region of the bucket in `status.resources` of the request. Then the request reports `RecordingBucket` for about one second. A bucket is bound to the PluginRequest that created it, by its tag `camunda.io/request-uid`. The plugin never uses, changes, or deletes a bucket with another UID or with no UID: the request reports `BucketNameInUse`. Bucket names are global across all AWS accounts. Two Kubernetes clusters with the same namespace and claim get the same name when they use the same `bucketPrefix`, also in two accounts. Give each Kubernetes cluster its own `bucketPrefix` (see [Parameters](#parameters)).
 
-At each reconcile, and at the latest after `resync`, the plugin writes the tags, the public access block, the default encryption, and the abort rule again when someone changed them. A repair of the public access block, the encryption, or the abort rule records the event `DriftCorrected` on the request.
+At each reconcile, and at the latest after `s3.resync`, the plugin writes the tags, the public access block, the default encryption, and the abort rule again when someone changed them. A repair of the public access block, the encryption, or the abort rule records the event `DriftCorrected` on the request.
 
 S3 can show a bucket setting late after a write. The plugin keeps in memory the value that it last wrote for the public access block, the default encryption, and the abort rule of each bucket, and the time of each write. For 5 minutes after the write of a setting, it does not write the setting again when S3 still shows it as before the write. When the 5 minutes end, the request reconciles again, and the plugin writes each setting that still differs. It writes the tags at once.
 
@@ -27,20 +27,20 @@ The plugin writes a setting at once, whatever S3 shows, when the value of the re
 
 The plugin also writes:
 
-- One PluginRegistration for each item of the chart value `registrations`.
-- One Lease `<release>` in the release namespace. Only the replica that holds it writes.
+- One PluginRegistration for each item of `s3.registrations`.
+- One Lease in the release namespace, with the name of the release, for all controllers of the release. Only the replica that holds it writes.
 
-The summary of a request shows the bucket, the stored size, the encryption, and the region. The stored size is the latest daily `BucketSizeBytes` metric of the bucket in CloudWatch, for the storage class S3 Standard only. An object that a lifecycle rule moved to another storage class does not count. It is `Not known yet` when CloudWatch has no data point of the last three days, or when the controller role cannot read CloudWatch. The request links to the bucket in the S3 console.
+The summary of a request shows the bucket, the stored size, the encryption, and the region. The stored size is the latest daily `BucketSizeBytes` metric of the bucket in CloudWatch, for the storage class S3 Standard only. An object that a lifecycle rule moved to another storage class does not count. It is `Not known yet` when CloudWatch has no data point of the last three days, or when the role of the release cannot read CloudWatch. The request links to the bucket in the S3 console.
 
 ## Prerequisites
 
 Before you install the chart, make sure that you have:
 
 1. A Kubernetes cluster with the CRDs of the operator.
-2. An IAM role for the controller, with the permissions below. Give it to the controller through `serviceAccount.annotations` (IRSA), or through a Pod Identity association of the ServiceAccount `<release>` in the release namespace. With Pod Identity, leave `serviceAccount.annotations` empty.
-3. For the grants, the [aws-identity](aws-identity.md) plugin. It gives the pods of each cluster their IAM role, also the association with Pod Identity, and puts the grants on that role. Its `allowedActions` must allow the actions of both grants: `s3:ListBucket`, `s3:GetBucketLocation`, `s3:ListBucketMultipartUploads`, `s3:ListBucketVersions`, `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts`, `kms:GenerateDataKey`, and `kms:Decrypt`.
+2. The [role of the controllers](aws.md#the-role-of-the-controllers) of the release, with the policy below.
+3. For the grants, the [aws-identity](aws-identity.md) plugin. It gives the pods of each cluster their IAM role, also the association with Pod Identity, and puts the grants on that role. Its `identity.allowedActions` must allow the actions of both grants: `s3:ListBucket`, `s3:GetBucketLocation`, `s3:ListBucketMultipartUploads`, `s3:ListBucketVersions`, `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts`, `kms:GenerateDataKey`, and `kms:Decrypt`.
 
-The controller role needs this policy. Replace `camunda` with your `bucketPrefix`. For each other prefix that your claims use, add one resource to the statement `Buckets` and one to the statement `Objects`. In the partition `aws-cn` or `aws-us-gov`, replace `arn:aws:` with `arn:aws-cn:` or `arn:aws-us-gov:`.
+Attach this policy to the role of the `aws` release. Replace `camunda` with your `bucketPrefix`. For each other prefix that your claims use, add one resource to the statement `Buckets` and one to the statement `Objects`. In the partition `aws-cn` or `aws-us-gov`, replace `arn:aws:` with `arn:aws-cn:` or `arn:aws-us-gov:`.
 
 ```json
 {
@@ -95,36 +95,38 @@ The controller needs no KMS permission: it only names the key in the default enc
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `region` | `""` | The AWS region of the bucket of a request that sets no `region` parameter. Empty takes the region of the pod, such as `AWS_REGION`. The controller does not start without a region. |
-| `partition` | `aws` | The AWS partition of the buckets: `aws`, `aws-cn`, or `aws-us-gov`. It goes into the bucket ARN of the outputs, which the grants read, and into the console link. |
-| `mode` | `irsa` | How the pods of a cluster get their AWS role: `irsa` or `podIdentity`. Only `irsa` puts the role of the `principal` input into the `ObjectStorageConfig`. Use the mode of the aws-identity plugin. |
-| `extraTags` | `{}` | Tags for each bucket, such as a cost center. At most 46, because a bucket also carries four `camunda.io/` tags. A key must not start with `aws:` or `camunda.io/`, and must not hold a `=`. A value must not hold a comma. |
-| `deleteBudget` | `15s` | The time for which one pass of a delete deletes objects. See [Deletion](#deletion). |
-| `resync` | `1h` | The time after which the controller reconciles each request again, and repairs a bucket setting that was changed outside the cluster. `0` turns it off. |
-| `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |
-| `serviceAccount.annotations` | `{}` | The annotations of the ServiceAccount of the controller, for example `eks.amazonaws.com/role-arn` of the controller role. |
-| `registrations` | `aws-s3` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
-| `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/aws-s3` | The image of the controller. |
-| `image.tag` | the `appVersion` of the chart | The tag of the image. |
-| `resources` | 10m CPU and 64Mi memory requested, 128Mi memory limit | The resources of the controller container. |
+| `s3.enabled` | `false` | Turns aws-s3 on. |
+| `s3.partition` | `aws` | The AWS partition of the buckets: `aws`, `aws-cn`, or `aws-us-gov`. It goes into the bucket ARN of the outputs, which the grants read, and into the console link. |
+| `s3.deleteBudget` | `15s` | The time for which one pass of a delete deletes objects. See [Deletion](#deletion). |
+| `s3.resync` | `1h` | The time after which the controller reconciles each request again, and repairs a bucket setting that was changed outside the cluster. `0` turns it off. |
+| `s3.registrations` | `aws-s3` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
 
-An install with the default registration:
+aws-s3 also reads the [shared values](aws.md#shared-values) `region`, `mode`, `extraTags`, and `endpointURL`:
+
+- `region` is the region of the bucket of a request that sets no `region` parameter. aws-s3 does not start without a region.
+- Only `mode: irsa` puts the role of the `principal` input into the `ObjectStorageConfig`. aws-identity reads the same `mode`.
+- Of `extraTags`, aws-s3 allows at most 46 tags, because a bucket also carries four `camunda.io/` tags.
+
+An install of only aws-s3, with the default registration:
 
 ```sh
-helm install aws-s3 charts/aws-s3 --namespace camunda-operator-plugins \
+helm install aws charts/aws --namespace camunda-operator-plugins \
+  --set s3.enabled=true \
   --set region=eu-west-1 \
-  --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=arn:aws:iam::111122223333:role/aws-s3-controller
+  --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=arn:aws:iam::111122223333:role/aws-plugins-controller
 ```
 
-To set a `bucketPrefix` for every claim of a Kubernetes cluster, copy the item `aws-s3` of `registrations` from the `values.yaml` of the chart into a values file, and add `parameterValues`. A list in a values file replaces the default list, so the copy must hold every field of the item. An Environment of the operator can override `parameterValues`.
+To set a `bucketPrefix` for every claim of a Kubernetes cluster, copy the item `aws-s3` of `s3.registrations` from the `values.yaml` of the chart into a values file, and add `parameterValues`. A list in a values file replaces the default list, so the copy must hold every field of the item. An Environment of the operator can override `parameterValues`.
 
 ```yaml
 region: eu-west-1
-registrations:
-  - name: aws-s3
-    # The other fields of the default aws-s3 item of values.yaml.
-    parameterValues:
-      bucketPrefix: prod-eu
+s3:
+  enabled: true
+  registrations:
+    - name: aws-s3
+      # The other fields of the default aws-s3 item of values.yaml.
+      parameterValues:
+        bucketPrefix: prod-eu
 ```
 
 ## Parameters
@@ -132,7 +134,7 @@ registrations:
 | Parameter | Meaning |
 | --- | --- |
 | `bucketPrefix` | The start of each bucket name. The default is `camunda`. 1 to 40 characters of `a-z`, `0-9`, and `-`, which start and end with a letter or a digit. S3 reserves the name prefixes `xn--`, `sthree-`, and `amzn-s3-demo-`, and the name continues with `-` after `bucketPrefix`, so `sthree` and `amzn-s3-demo` are refused too. |
-| `region` | The region of the bucket. Empty is the chart value `region`. |
+| `region` | The region of the bucket. Empty is the shared value `region`. |
 | `abortIncompleteUploadDays` | The days after which S3 aborts an incomplete multipart upload, from 1 to 2147483647. The default is 7. |
 
 `bucketPrefix` and `region` cannot change after the plugin recorded the bucket, which it does before it creates the bucket. The status of the request records the name and the region of its bucket. When a later value names another bucket, the request reports `InvalidParameters`, the backups stay in their bucket, and the plugin creates no second bucket. A bucket in another region needs a new claim. The plugin copies no backups into the bucket of the new claim.
@@ -145,7 +147,7 @@ Give each Kubernetes cluster its own `bucketPrefix` when two clusters can have a
 | --- | --- | --- |
 | `objectStorageConfig` | The name of the `ObjectStorageConfig`, in the namespace of the request. | the operator, which gives the backup storage of the cluster to Zeebe and the other consumers |
 | `bucket` | The name of the bucket. | the summary and the admin |
-| `bucketArn` | The ARN of the bucket, in the partition of the chart. | the grant `bucket-read-write` |
+| `bucketArn` | The ARN of the bucket, in the partition of `s3.partition`. | the grant `bucket-read-write` |
 | `keyArn` | The ARN of the key of the default encryption, format `aws-kms-arn`. Only with the `key` input. | the grant `bucket-key-use` |
 
 ## Grants
@@ -168,7 +170,7 @@ The registration offers the deletion policies `Delete` and `Orphan`.
 | `Delete` | Deletes each object of the bucket, also each object version and each delete marker when someone turned versioning on. Then deletes the bucket and the `ObjectStorageConfig`. **The backups are gone for good.** The finalizer of the request stays until the bucket is gone. |
 | `Orphan` | Keeps the bucket with its objects and its settings, and keeps the `ObjectStorageConfig` without its owner reference. Removes the four `camunda.io/` tags from the bucket, and keeps the tags of `extraTags`. |
 
-The delete of a large bucket takes several passes. S3 deletes at most 1,000 keys with one call, and about 3,500 objects per second for each prefix. So one million objects take at least about five minutes. One pass deletes objects for about `deleteBudget`, and the next pass starts about one second later. Meanwhile `Ready` of the request is `False` with reason `Deleting` and the message `Deleting the objects of the bucket <name>`. The message gives no count of the objects that are left. A stop or a restart of the controller ends the pass, and does not lose progress: the next pass goes on with the objects that are left.
+The delete of a large bucket takes several passes. S3 deletes at most 1,000 keys with one call, and about 3,500 objects per second for each prefix. So one million objects take at least about five minutes. One pass deletes objects for about `s3.deleteBudget`, and the next pass starts about one second later. Meanwhile `Ready` of the request is `False` with reason `Deleting` and the message `Deleting the objects of the bucket <name>`. The message gives no count of the objects that are left. A stop or a restart of the controller ends the pass, and does not lose progress: the next pass goes on with the objects that are left.
 
 `Delete` deletes nothing when the bucket does not carry the UID of the request, for example a bucket of another Kubernetes cluster. The request then goes away, and the bucket stays. It also keeps an `ObjectStorageConfig` without an owner reference to the request, such as the contract that an `Orphan` kept.
 
@@ -192,15 +194,15 @@ aws s3api put-bucket-tagging --bucket <bucket> --region <region> \
 
 | Reason | Condition | What to do |
 | --- | --- | --- |
-| `BucketNameInUse` | `OutputsReady` and `Ready` of the request | The bucket name belongs to another owner. The message names the bucket and the owner: a request with its UID, `no request` for a bucket without the tag `camunda.io/request-uid` such as an orphaned bucket, another AWS account or a bucket that the controller may not read, or a bucket of the same name in another region. When the bucket is yours, check that the controller role has `s3:ListBucket` on it. Set another `bucketPrefix` in the `parameterValues` of the registration (see [Chart values](#chart-values)), give the bucket to the request (see [Deletion](#deletion)), or delete the bucket with its backups. The plugin checks again each minute. |
+| `BucketNameInUse` | `OutputsReady` and `Ready` of the request | The bucket name belongs to another owner. The message names the bucket and the owner: a request with its UID, `no request` for a bucket without the tag `camunda.io/request-uid` such as an orphaned bucket, another AWS account or a bucket that the controller may not read, or a bucket of the same name in another region. When the bucket is yours, check that the role of the release has `s3:ListBucket` on it. Set another `bucketPrefix` in the `parameterValues` of the registration (see [Chart values](#chart-values)), give the bucket to the request (see [Deletion](#deletion)), or delete the bucket with its backups. The plugin checks again each minute. |
 | `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not match the schema, `bucketPrefix` or `region` changed after the plugin recorded the bucket, or the `key` input is not a key ARN or is in another region than the bucket. The message says which, and names the bucket and its region, or the key and its region. Set the parameters back, or give the claim a key of the region of the bucket. |
 | `RecordingBucket` | `OutputsReady` and `Ready` of the request | The plugin recorded the bucket in the status, and creates it at the next reconcile, after about one second. Nothing to do. |
 | `WaitingForBucketTags` | `OutputsReady` and `Ready` of the request | S3 does not show the tag `camunda.io/request-uid` of the bucket yet. The plugin changes nothing on the bucket and checks again within 10 seconds. If the tag does not show within 5 minutes, the request reports `BucketNameInUse`. Nothing to do. |
-| `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, usually `AccessDenied` when the controller role lacks a permission above. pluginkit tries again. |
+| `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, usually `AccessDenied` when the role of the release lacks a permission above. pluginkit tries again. |
 | `Deleting` | `Ready` of a deleted request | The plugin is deleting the objects of the bucket in passes, or it waits for S3 to show the tags of a new bucket. Nothing to do. |
-| `DeleteFailed` | `Ready` of a deleted request | The plugin could not empty or delete the bucket. The message gives the error. For an object that S3 refused to delete, it names the key and the code, for example `AccessDenied` when the role lacks `s3:DeleteObjectVersion`, or a code of S3 Object Lock. For an object under S3 Object Lock, wait until its retention ends, or remove its legal hold. When S3 refuses to show a bucket that the status of the request records, the delete fails with `AccessDenied` too. Give the controller role `s3:ListBucket` on that bucket. The finalizer stays, and pluginkit tries again. |
-| `Unhealthy` | `Ready` of the registration | The controller cannot list the buckets of the account with its credentials. The message gives the error. Check the controller role and `s3:ListAllMyBuckets`. |
+| `DeleteFailed` | `Ready` of a deleted request | The plugin could not empty or delete the bucket. The message gives the error. For an object that S3 refused to delete, it names the key and the code, for example `AccessDenied` when the role lacks `s3:DeleteObjectVersion`, or a code of S3 Object Lock. For an object under S3 Object Lock, wait until its retention ends, or remove its legal hold. When S3 refuses to show a bucket that the status of the request records, the delete fails with `AccessDenied` too. Give the role of the release `s3:ListBucket` on that bucket. The finalizer stays, and pluginkit tries again. |
+| `Unhealthy` | `Ready` of the registration | The controller cannot list the buckets of the account with its credentials. The message gives the error. Check the role of the release and `s3:ListAllMyBuckets`. |
 
-The stored size shows `Not known yet` for about one day after the create of a bucket, because S3 sends `BucketSizeBytes` to CloudWatch once a day. When it stays, give the controller role `cloudwatch:GetMetricStatistics`, and read the controller log for the error of CloudWatch.
+The stored size shows `Not known yet` for about one day after the create of a bucket, because S3 sends `BucketSizeBytes` to CloudWatch once a day. When it stays, give the role of the release `cloudwatch:GetMetricStatistics`, and read the controller log for the error of CloudWatch.
 
-When the controller Pod does not get ready, read its log with `kubectl logs deployment/<release> -n <namespace>`. The controller stops when it finds no region, when `partition` is not `aws`, `aws-cn`, or `aws-us-gov`, when `mode`, `extraTags`, or `deleteBudget` is not valid, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
+When the Pod of the release does not get ready, read its log with `kubectl logs deployment/aws -n camunda-operator-plugins`. aws-s3 stops the Pod when it finds no region, when `s3.partition` is not `aws`, `aws-cn`, or `aws-us-gov`, when `mode`, `extraTags`, or `s3.deleteBudget` is not valid, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.

@@ -2,7 +2,7 @@
 
 The aws-kms plugin serves the `encryption-key` section of the operator. It gives each Camunda cluster one customer-managed AWS KMS key with automatic rotation. Other sections, such as encrypted volumes and an encrypted backup bucket, read the ARN of the key from the outputs of the request. It serves through [pluginkit](../pluginkit.md).
 
-The chart installs two registrations:
+aws-kms is a controller of the chart [`aws`](aws.md), with the values block `kms`. It installs two registrations:
 
 - `aws-kms-key`: one key in the region of the plugin.
 - `aws-kms-key-multi-region`: one multi-Region key in the region of the plugin, and a replica of it in each region of the parameter `replicaRegions`.
@@ -13,9 +13,9 @@ For each request, the plugin creates one symmetric encryption key (`SYMMETRIC_DE
 
 - Automatic rotation is on.
 - The alias is `alias/<aliasPrefix>/<namespace>/<claim>`. Each character of the namespace or the claim other than a letter, a digit, `_`, or `-` becomes `_`. An alias longer than the 256 characters of KMS is cut, and ends with `-` and 8 hex digits of a hash.
-- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the PluginRequest. The tags of the chart value `extraTags` go on the key too.
+- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the PluginRequest. The tags of the shared value `extraTags` go on the key too.
 - The description is `Camunda cluster <namespace>/<claim>`.
-- The key policy is the default key policy of KMS, unless the chart sets `keyAdministratorArns` or `csiDriverRoleArn` (see [Key policy](#key-policy)).
+- The key policy is the default key policy of KMS, unless the chart sets `kms.keyAdministratorArns` or `kms.csiDriverRoleArn` (see [Key policy](#key-policy)).
 
 With `aws-kms-key-multi-region`, the key is a multi-Region primary key. The plugin creates one replica in each region of `replicaRegions`, with the same tags, the same description, and the same key policy. KMS rotates the replicas with the primary key.
 
@@ -23,8 +23,8 @@ The plugin finds the key of a request by its alias. A request whose status write
 
 The plugin also writes:
 
-- One PluginRegistration for each item of the chart value `registrations`.
-- One Lease `<release>` in the release namespace. Only the replica that holds it writes.
+- One PluginRegistration for each item of `kms.registrations`.
+- One Lease in the release namespace, with the name of the release, for all controllers of the release. Only the replica that holds it writes.
 
 The summary of a request shows the key state, the rotation, the alias, and the state of each replica. A replica outside `replicaRegions` shows as a `Warning`. A key that is pending deletion shows as an `Error`, with its deletion date once KMS gives one. A multi-Region primary key gets its date only after its replicas are deleted. The request links to the key in the KMS console.
 
@@ -33,9 +33,9 @@ The summary of a request shows the key state, the rotation, the alias, and the s
 Before you install the chart, make sure that you have:
 
 1. A Kubernetes cluster with the CRDs of the operator.
-2. An IAM role for the controller, with the permissions below. Give it to the controller through `serviceAccount.annotations` (IRSA) or a Pod Identity association of the ServiceAccount of the release.
+2. The [role of the controllers](aws.md#the-role-of-the-controllers) of the release, with the policy below.
 
-The controller role needs this policy. Replace the account, the regions, and `camunda`, the alias prefix. The statement `Aliases` names the region of the plugin only, because the plugin writes aliases only there. The statements `Keys` and `KeyPolicy` name the region of the plugin and each replica region. Without the multi-Region registration, remove the replica regions. Without `keyAdministratorArns` and `csiDriverRoleArn`, remove the statement `KeyPolicy`.
+Attach this policy to the role of the `aws` release. Replace the account, the regions, and `camunda`, the alias prefix. The statement `Aliases` names the region of the plugin only, because the plugin writes aliases only there. The statements `Keys` and `KeyPolicy` name the region of the plugin and each replica region. Without the multi-Region registration, remove the replica regions. Without `kms.keyAdministratorArns` and `kms.csiDriverRoleArn`, remove the statement `KeyPolicy`.
 
 ```json
 {
@@ -81,24 +81,24 @@ The controller role needs this policy. Replace the account, the regions, and `ca
 }
 ```
 
-KMS creates the service-linked role `AWSServiceRoleForKeyManagementServiceMultiRegionKeys` at the first multi-Region key of an account. With the multi-Region registration, create that role once before the install (`aws iam create-service-linked-role --aws-service-name mrk.kms.amazonaws.com`), or give the controller role `iam:CreateServiceLinkedRole` with the condition `"iam:AWSServiceName": "mrk.kms.amazonaws.com"`.
+KMS creates the service-linked role `AWSServiceRoleForKeyManagementServiceMultiRegionKeys` at the first multi-Region key of an account. With the multi-Region registration, create that role once before the install (`aws iam create-service-linked-role --aws-service-name mrk.kms.amazonaws.com`), or give the role of the release `iam:CreateServiceLinkedRole` with the condition `"iam:AWSServiceName": "mrk.kms.amazonaws.com"`.
 
-KMS refuses to create a key with a key policy that does not let the caller change that policy later. So with policy values, the controller role needs `kms:PutKeyPolicy` also to create a key. The statement `KeyAdministrators` below gives it that when the controller role is one of `keyAdministratorArns`. Else the statement `AccountRoot` gives it, through the IAM policy above.
+KMS refuses to create a key with a key policy that does not let the caller change that policy later. So with policy values, the role of the release needs `kms:PutKeyPolicy` also to create a key. The statement `KeyAdministrators` below gives it that when the role of the release is one of `kms.keyAdministratorArns`. Else the statement `AccountRoot` gives it, through the IAM policy above.
 
 ## Key policy
 
-When `keyAdministratorArns` and `csiDriverRoleArn` are both empty, each key keeps the default key policy of KMS: the account root may do every action, so IAM policies can grant the use of the key. The plugin then never reads or writes a key policy.
+When `kms.keyAdministratorArns` and `kms.csiDriverRoleArn` are both empty, each key keeps the default key policy of KMS: the account root may do every action, so IAM policies can grant the use of the key. The plugin then never reads or writes a key policy.
 
 When one of the two values is set, the plugin writes this key policy on each key and each replica:
 
 | Sid | Principal | Actions | When |
 | --- | --- | --- | --- |
 | `AccountRoot` | the account root | `kms:*` | always |
-| `KeyAdministrators` | `keyAdministratorArns` | `kms:Create*`, `kms:Describe*`, `kms:Enable*`, `kms:List*`, `kms:Put*`, `kms:Update*`, `kms:Revoke*`, `kms:Disable*`, `kms:Get*`, `kms:Delete*`, `kms:TagResource`, `kms:UntagResource`, `kms:ScheduleKeyDeletion`, `kms:CancelKeyDeletion`, `kms:ReplicateKey` | `keyAdministratorArns` is not empty |
-| `EBSCSIDriverUse` | `csiDriverRoleArn` | `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*`, `kms:GenerateDataKey*`, `kms:DescribeKey` | `csiDriverRoleArn` is set |
-| `EBSCSIDriverGrants` | `csiDriverRoleArn` | `kms:CreateGrant`, only when `kms:GrantIsForAWSResource` is `true` | `csiDriverRoleArn` is set |
+| `KeyAdministrators` | `kms.keyAdministratorArns` | `kms:Create*`, `kms:Describe*`, `kms:Enable*`, `kms:List*`, `kms:Put*`, `kms:Update*`, `kms:Revoke*`, `kms:Disable*`, `kms:Get*`, `kms:Delete*`, `kms:TagResource`, `kms:UntagResource`, `kms:ScheduleKeyDeletion`, `kms:CancelKeyDeletion`, `kms:ReplicateKey` | `kms.keyAdministratorArns` is not empty |
+| `EBSCSIDriverUse` | `kms.csiDriverRoleArn` | `kms:Encrypt`, `kms:Decrypt`, `kms:ReEncrypt*`, `kms:GenerateDataKey*`, `kms:DescribeKey` | `kms.csiDriverRoleArn` is set |
+| `EBSCSIDriverGrants` | `kms.csiDriverRoleArn` | `kms:CreateGrant`, only when `kms:GrantIsForAWSResource` is `true` | `kms.csiDriverRoleArn` is set |
 
-The EBS CSI driver needs `csiDriverRoleArn` to create volumes that are encrypted with the key, such as the volumes of the `aws-ebs-encrypted` option.
+The EBS CSI driver needs `kms.csiDriverRoleArn` to create volumes that are encrypted with the key, such as the volumes of the `aws-ebs-encrypted` option.
 
 When you change a policy value, the plugin writes the new key policy on each key at its next reconcile, at the latest after 10 minutes. When you clear both values, the plugin stops writing key policies, and each existing key keeps the policy that it has.
 
@@ -106,18 +106,14 @@ When you change a policy value, the plugin writes the new key policy on each key
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `region` | `""` | The AWS region of the keys. Empty takes the region of the pod, such as `AWS_REGION`. The controller does not start without a region. |
-| `aliasPrefix` | `camunda` | The prefix of each alias, after `alias/`. 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `/`, `_`, and `-`, not `aws`, not starting with `aws/` or `alias/`, and not starting or ending with `/`. The registrations show it as a limit. |
-| `extraTags` | `{}` | Tags for each key and each replica, such as a cost center. At most 46, because a key also carries four `camunda.io/` tags. A key must not start with `aws:` or `camunda.io/`, and must not hold a `=`. A value must not hold a comma. |
-| `keyAdministratorArns` | `[]` | The IAM principals that administer each key. See [Key policy](#key-policy). |
-| `csiDriverRoleArn` | `""` | The IAM role of the EBS CSI driver. See [Key policy](#key-policy). |
-| `resync` | `10m` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It repairs a key or a replica that someone changed in AWS (see [Drift](#drift)). A Go duration such as `1h`. `0` turns it off, and then a change in AWS stays until something else reconciles the request. |
-| `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |
-| `serviceAccount.annotations` | `{}` | The annotations of the ServiceAccount of the controller, for example `eks.amazonaws.com/role-arn` of the controller role. |
-| `registrations` | `aws-kms-key` and `aws-kms-key-multi-region` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
-| `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/aws-kms` | The image of the controller. |
-| `image.tag` | the `appVersion` of the chart | The tag of the image. |
-| `resources` | 10m CPU and 64Mi memory requested, 128Mi memory limit | The resources of the controller container. |
+| `kms.enabled` | `false` | Turns aws-kms on. |
+| `kms.aliasPrefix` | `camunda` | The prefix of each alias, after `alias/`. 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `/`, `_`, and `-`, not `aws`, not starting with `aws/` or `alias/`, and not starting or ending with `/`. The registrations show it as a limit. |
+| `kms.keyAdministratorArns` | `[]` | The IAM principals that administer each key. See [Key policy](#key-policy). |
+| `kms.csiDriverRoleArn` | `""` | The IAM role of the EBS CSI driver. See [Key policy](#key-policy). |
+| `kms.resync` | `10m` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It repairs a key or a replica that someone changed in AWS (see [Drift](#drift)). A Go duration such as `1h`. `0` turns it off, and then a change in AWS stays until something else reconciles the request. |
+| `kms.registrations` | `aws-kms-key` and `aws-kms-key-multi-region` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
+
+aws-kms also reads the [shared values](aws.md#shared-values) `region`, `extraTags`, and `endpointURL`. `region` is the region of the keys, and aws-kms does not start without a region. Of `extraTags`, aws-kms allows at most 46 tags, because a key also carries four `camunda.io/` tags.
 
 The registration `aws-kms-key-multi-region` requires `replicaRegions`. Set the regions for every claim in the `parameterValues` of the registration, for example with a values file:
 
@@ -125,28 +121,31 @@ The registration `aws-kms-key-multi-region` requires `replicaRegions`. Set the r
 region: eu-west-1
 serviceAccount:
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/aws-kms-controller
-registrations:
-  - name: aws-kms-key
-    # The other fields of the default aws-kms-key item of values.yaml.
-  - name: aws-kms-key-multi-region
-    # The other fields of the default aws-kms-key-multi-region item of values.yaml.
-    parameterValues:
-      replicaRegions: [eu-central-1]
+    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/aws-plugins-controller
+kms:
+  enabled: true
+  registrations:
+    - name: aws-kms-key
+      # The other fields of the default aws-kms-key item of values.yaml.
+    - name: aws-kms-key-multi-region
+      # The other fields of the default aws-kms-key-multi-region item of values.yaml.
+      parameterValues:
+        replicaRegions: [eu-central-1]
 ```
 
-A list in a values file replaces the default list, so copy each item of `registrations` from the `values.yaml` of the chart and change it there. Then install with the file:
+A list in a values file replaces the default list, so copy each item of `kms.registrations` from the `values.yaml` of the chart and change it there. Then install with the file:
 
 ```sh
-helm install aws-kms charts/aws-kms --namespace camunda-operator-plugins -f my-values.yaml
+helm install aws charts/aws --namespace camunda-operator-plugins -f my-values.yaml
 ```
 
-An install with the default registrations, without replica regions:
+An install of only aws-kms, with the default registrations, without replica regions:
 
 ```sh
-helm install aws-kms charts/aws-kms --namespace camunda-operator-plugins \
+helm install aws charts/aws --namespace camunda-operator-plugins \
+  --set kms.enabled=true \
   --set region=eu-west-1 \
-  --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=arn:aws:iam::111122223333:role/aws-kms-controller
+  --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=arn:aws:iam::111122223333:role/aws-plugins-controller
 ```
 
 ## Parameters
@@ -171,7 +170,7 @@ The plugin writes no Grants. The registrations have no grant templates. Give the
 
 ## Drift
 
-The plugin repairs a change that someone made in AWS to the key of a request or to one of its replicas: the tags, the key policy, and the rotation of the key. It repairs on each reconcile: after a change in the cluster, and at the latest after the chart value `resync`, `10m` by default.
+The plugin repairs a change that someone made in AWS to the key of a request or to one of its replicas: the tags, the key policy, and the rotation of the key. It repairs on each reconcile: after a change in the cluster, and at the latest after `kms.resync`, `10m` by default.
 
 For each reconcile that repaired a key that existed before the reconcile, the plugin records the event `DriftCorrected` on the request. Its note names what it repaired, for example `Corrected drift outside the cluster: key policy`. The summary item `Last drift corrected` of the request shows the time of the last repair. Find the events with:
 
@@ -179,7 +178,7 @@ For each reconcile that repaired a key that existed before the reconcile, the pl
 kubectl get events -n <namespace> --field-selector reason=DriftCorrected
 ```
 
-A change of the parameters of a request, such as a new region in `replicaRegions`, is not drift. The plugin keeps no record of the chart values that it applied, though. A new or changed tag in `extraTags`, or a change of `keyAdministratorArns` or `csiDriverRoleArn` while one of them is set, therefore also records `DriftCorrected`, on each request at its next reconcile.
+A change of the parameters of a request, such as a new region in `replicaRegions`, is not drift. The plugin keeps no record of the chart values that it applied, though. A new or changed tag in `extraTags`, or a change of `kms.keyAdministratorArns` or `kms.csiDriverRoleArn` while one of them is set, therefore also records `DriftCorrected`, on each request at its next reconcile.
 
 ## Deletion
 
@@ -206,8 +205,8 @@ When the controller stops between the create of a key and the create of its alia
 | `KeyNotEnabled` | `Ready` of the request | The key is in another state than `Enabled`, for example `Disabled`. The message names the state. Enable the key in the KMS console. |
 | `ReplicasPending` | `Ready` of the request | KMS is still creating a replica. The plugin checks again after 5 seconds. KMS usually needs less than a minute. When it stays, the summary shows the state of each replica: check the replica in the KMS console of its region. |
 | `KeyNotMultiRegion` | `Ready` of the request | The request asks for replicas, and its key is a single-Region key, for example after a change of the registration. The outputs stay. Remove `replicaRegions`, or delete the alias to let the plugin create a multi-Region key. |
-| `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, usually `AccessDeniedException` when the controller role lacks a permission above. pluginkit tries again. |
+| `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, usually `AccessDeniedException` when the role of the release lacks a permission above. pluginkit tries again. |
 | `DeleteFailed` | `Ready` of a deleted request | The plugin could not schedule the deletion or remove the tags, a replica is still being created, or `pendingWindowDays` is outside 7 to 30. The message gives the error. The finalizer stays, and pluginkit tries again. |
-| `Unhealthy` | `Ready` of the registration | The controller cannot list the aliases of its region with its credentials. The message gives the error. Check the controller role and `kms:ListAliases`. |
+| `Unhealthy` | `Ready` of the registration | The controller cannot list the aliases of its region with its credentials. The message gives the error. Check the role of the release and `kms:ListAliases`. |
 
-When the controller Pod does not get ready, read its log with `kubectl logs deployment/<release> -n <namespace>`. The controller stops when it finds no region, when `aliasPrefix`, `extraTags`, `keyAdministratorArns`, or `csiDriverRoleArn` is not valid, when it cannot read the file of its registrations or call STS, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
+When the Pod of the release does not get ready, read its log with `kubectl logs deployment/aws -n camunda-operator-plugins`. aws-kms stops the Pod when it finds no region, when `kms.aliasPrefix`, `extraTags`, `kms.keyAdministratorArns`, or `kms.csiDriverRoleArn` is not valid, when it cannot read the file of its registrations or call STS, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
