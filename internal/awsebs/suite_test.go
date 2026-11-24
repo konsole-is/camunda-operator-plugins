@@ -34,6 +34,7 @@ import (
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/aws"
 	"github.com/konsole-is/camunda-operator-plugins/internal/awsebs"
 )
 
@@ -69,12 +70,14 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	sa := pluginsv1alpha1.ServiceAccountRef{Namespace: pluginNamespace, Name: "aws-ebs"}
-	mgr, err := awsebs.NewManager(restConfig, awsebs.Options{
+	mgr, err := aws.NewManager(restConfig, aws.Options{
 		HealthProbeAddress: "0",
 		MetricsAddress:     "0",
-		Registrations:      registrations,
-		ServiceAccount:     sa,
-		Resync:             resync,
+		EBS: &awsebs.Options{
+			Registrations:  registrations,
+			ServiceAccount: sa,
+			Resync:         resync,
+		},
 	})
 	Expect(err).NotTo(HaveOccurred())
 
