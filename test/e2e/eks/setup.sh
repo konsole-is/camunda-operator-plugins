@@ -40,10 +40,10 @@ aws eks describe-pod-identity-association --cluster-name "$RUN_ID" --association
 "$repo/test/eks/plugin.sh" aws "$work/values.yaml"
 
 # Each controller writes its registration after the pod is Ready, and the
-# operator accepts it after that.
-for registration in aws-pod-identity aws-kms-key aws-ebs-encrypted; do
-  echo "==> Waiting for the PluginRegistration $registration"
-  kubectl wait "pluginregistration/$registration" --for=create --timeout=120s
-  kubectl wait "pluginregistration/$registration" --for=condition=Accepted --timeout=120s
-  kubectl wait "pluginregistration/$registration" --for=condition=Ready --timeout=120s
-done
+# operator accepts it after that. The three waits share one bound of 4
+# minutes, within the step "Run the proof".
+registrations=(pluginregistration/aws-pod-identity pluginregistration/aws-kms-key pluginregistration/aws-ebs-encrypted)
+echo "==> Waiting for the PluginRegistrations ${registrations[*]}"
+kubectl wait "${registrations[@]}" --for=create --timeout=120s
+kubectl wait "${registrations[@]}" --for=condition=Accepted --timeout=60s
+kubectl wait "${registrations[@]}" --for=condition=Ready --timeout=60s

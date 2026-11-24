@@ -35,4 +35,4 @@ helm upgrade --install "$release" "$repo/charts/$plugin" \
   --values "$values" \
   --set-string image.repository="${image%:*}" \
   --set-string image.tag="${image##*:}" \
-  --wait --timeout 5m
+  --wait --timeout 3m
