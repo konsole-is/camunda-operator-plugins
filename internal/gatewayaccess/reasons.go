@@ -24,3 +24,13 @@ const ReasonUnsupportedTarget = "UnsupportedTarget"
 // ReasonGatewayNotFound means that the Gateway of the parameters, or its
 // GatewayClass, does not exist. It is the reason of Ready=False.
 const ReasonGatewayNotFound = "GatewayNotFound"
+
+// ReasonPolicyKindNotAllowed means that a template of policyTemplates has a
+// kind that the chart value policyKinds does not list. It is the reason of
+// OutputsReady=False and Ready=False.
+const ReasonPolicyKindNotAllowed = "PolicyKindNotAllowed"
+
+// ReasonPolicyKindNotInstalled means that a template of policyTemplates has a
+// listed kind that the cluster did not serve when the controller started. It
+// is the reason of OutputsReady=False and Ready=False.
+const ReasonPolicyKindNotInstalled = "PolicyKindNotInstalled"
