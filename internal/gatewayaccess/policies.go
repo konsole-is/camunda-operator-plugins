@@ -17,6 +17,8 @@ limitations under the License.
 package gatewayaccess
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -41,6 +43,11 @@ const (
 	parameterPolicyTemplates = "policyTemplates"
 	parameterRouteFilters    = "routeFilters"
 )
+
+// AnnotationSpecHash is the annotation of a policy that holds a hash of the
+// spec that the plugin applies. A field that the API server defaults does not
+// change it, and a field that a template drops does.
+const AnnotationSpecHash = "gateway-access.plugins.camunda.io/spec-hash"
 
 // PolicyTemplate is one item of the parameter policyTemplates: the kind of a
 // policy and its spec, without its targets. A string of the spec that is
@@ -217,9 +224,14 @@ func policyOf(gvk schema.GroupVersionKind, spec map[string]any, i int, route cli
 		"name":  route.GetName(),
 	}}
 
+	// JSON values always encode, and the keys of a map encode in order.
+	raw, _ := json.Marshal(content)
+	hash := sha256.Sum256(raw)
+
 	policy := &unstructured.Unstructured{Object: map[string]any{"spec": content}}
 	policy.SetGroupVersionKind(gvk)
 	policy.SetName(PolicyName(route.GetName(), i))
+	policy.SetAnnotations(map[string]string{AnnotationSpecHash: hex.EncodeToString(hash[:])})
 	return policy
 }
 

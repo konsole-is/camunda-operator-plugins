@@ -326,3 +326,41 @@ func TestPolicyWaiting_AcceptanceForAListenerOfTheGatewayCounts(t *testing.T) {
 	assert.Equal(t, 2, accepted)
 	assert.Nil(t, waiting)
 }
+
+// withOldSpec returns live as it stays when the template of desired dropped
+// the field mode: the live copy still holds mode, and the hash of that spec.
+func withOldSpec(t *testing.T, live *unstructured.Unstructured) *unstructured.Unstructured {
+	t.Helper()
+	old := live.DeepCopy()
+	require.NoError(t, unstructured.SetNestedField(old.Object, "Deny", "spec", "mode"))
+	old.SetAnnotations(map[string]string{AnnotationSpecHash: "hash-of-the-old-spec"})
+	return old
+}
+
+func TestPolicyWaiting_LiveCopyWithAFieldThatTheTemplateDroppedIsPending(t *testing.T) {
+	p := templateParams(t, `[{"apiVersion":"policies.example.com/v1alpha1","kind":"ExamplePolicy","spec":{}}]`, nil)
+	desired, refused := Policies(p, clusterRoutes(t, p), PolicyKinds{examplePolicy: true})
+	require.Nil(t, refused)
+	old := withOldSpec(t, livePolicy(t, desired[0], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)))
+
+	_, reason, message := onlyFirstWaiting(t, desired, old)
+
+	assert.Equal(t, "Pending", reason)
+	assert.Contains(t, message, "differs from the policy that the plugin applies")
+}
+
+func TestPolicies_SetTheHashOfTheirSpec(t *testing.T) {
+	p := templateParams(t, allowlistTemplate, map[string]any{"allowedCIDRs": []any{"10.0.0.0/8"}})
+	got, refused := Policies(p, clusterRoutes(t, p), PolicyKinds{examplePolicy: true})
+	require.Nil(t, refused)
+
+	other := templateParams(t, allowlistTemplate, map[string]any{"allowedCIDRs": []any{"192.168.0.0/16"}})
+	changed, refused := Policies(other, clusterRoutes(t, other), PolicyKinds{examplePolicy: true})
+	require.Nil(t, refused)
+
+	assert.NotEmpty(t, got[0].GetAnnotations()[AnnotationSpecHash])
+	assert.NotEqual(t, got[0].GetAnnotations()[AnnotationSpecHash], got[1].GetAnnotations()[AnnotationSpecHash])
+	assert.NotEqual(t, got[0].GetAnnotations()[AnnotationSpecHash], changed[0].GetAnnotations()[AnnotationSpecHash])
+	again, _ := Policies(p, clusterRoutes(t, p), PolicyKinds{examplePolicy: true})
+	assert.Equal(t, got[0].GetAnnotations(), again[0].GetAnnotations())
+}

@@ -155,3 +155,16 @@ func TestStalePolicies_PolicyOfARouteWithoutTemplatesIsStale(t *testing.T) {
 
 	assert.Equal(t, []*unstructured.Unstructured{policy}, got)
 }
+
+func TestStalePolicies_KeepsThePolicyOfARouteWhileAnotherPolicyHoldsADroppedField(t *testing.T) {
+	desired := policyTargeting(examplePolicy, "a-policy-0", "a")
+	desired.SetAnnotations(map[string]string{AnnotationSpecHash: "hash-of-the-new-spec"})
+	kept := desired.DeepCopy()
+	require.NoError(t, unstructured.SetNestedField(kept.Object, "Deny", "spec", "mode"))
+	kept.SetAnnotations(map[string]string{AnnotationSpecHash: "hash-of-the-old-spec"})
+	shifted := policyTargeting(examplePolicy, "a-policy-1", "a")
+
+	got := StalePolicies([]*unstructured.Unstructured{kept, shifted}, []*unstructured.Unstructured{desired}, nil)
+
+	assert.Empty(t, got)
+}

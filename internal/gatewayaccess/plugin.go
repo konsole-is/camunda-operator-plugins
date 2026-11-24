@@ -472,8 +472,7 @@ func StalePolicies(
 		wanted[KeyOfPolicy(obj)] = true
 		current := liveByKey[KeyOfPolicy(obj)]
 		// A route keeps its old policies until their replacement is applied.
-		if current == nil || !current.GetDeletionTimestamp().IsZero() ||
-			!containsJSON(obj.Object["spec"], current.Object["spec"]) {
+		if current == nil || !current.GetDeletionTimestamp().IsZero() || !holdsSpec(obj, current) {
 			keep[policyTarget(obj)] = true
 		}
 	}

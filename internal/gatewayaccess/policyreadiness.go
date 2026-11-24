@@ -84,7 +84,7 @@ func policyWaiting(
 
 	// The conditions of a live copy with another spec are about that spec,
 	// until the apply of this reconcile gives the policy a new generation.
-	if !containsJSON(desired.Object["spec"], obj.Object["spec"]) {
+	if !holdsSpec(desired, obj) {
 		return &pluginkit.Waiting{
 			Reason: string(gatewayv1.RouteReasonPending),
 			Message: fmt.Sprintf(
@@ -149,6 +149,14 @@ func reportsOn(ref, parent gatewayv1.ParentReference, route RouteKey, namespace 
 		string(ptr.Deref(ref.Kind, "Gateway")) == route.Kind &&
 		ptr.Deref(ref.Namespace, gatewayv1.Namespace(namespace)) == gatewayv1.Namespace(namespace) &&
 		string(ref.Name) == route.Name
+}
+
+// holdsSpec reports whether live holds the spec of desired: the hash of
+// AnnotationSpecHash, and each field of the spec, which another writer can
+// change.
+func holdsSpec(desired, live *unstructured.Unstructured) bool {
+	return live.GetAnnotations()[AnnotationSpecHash] == desired.GetAnnotations()[AnnotationSpecHash] &&
+		containsJSON(desired.Object["spec"], live.Object["spec"])
 }
 
 // containsJSON reports whether got holds want: each key of a map with a value
