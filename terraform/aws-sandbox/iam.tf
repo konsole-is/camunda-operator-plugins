@@ -90,11 +90,33 @@ data "aws_iam_policy_document" "storage" {
   }
 }
 
+# A docker login to ECR Public, so that a job does not pull its images
+# anonymously, which ECR Public limits. The boundary and the permissions of
+# the CI role both hold it.
+data "aws_iam_policy_document" "registry_login" {
+  statement {
+    actions   = ["ecr-public:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    actions   = ["sts:GetServiceBearerToken"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "sts:AWSServiceName"
+      values   = ["ecr-public.amazonaws.com"]
+    }
+  }
+}
+
 # The most that the CI role and every role of a run can do. IAM is allowed
 # wide on cpo-ci-* names here, and the denies hold every limit: a role of a run
 # gets only the policies that the run writes, so only the boundary binds it.
 data "aws_iam_policy_document" "boundary" {
-  source_policy_documents = [data.aws_iam_policy_document.storage.json]
+  source_policy_documents = [
+    data.aws_iam_policy_document.storage.json,
+    data.aws_iam_policy_document.registry_login.json,
+  ]
 
   statement {
     actions = [
@@ -228,9 +250,10 @@ data "aws_iam_policy_document" "boundary" {
       "arn:${data.aws_partition.current.partition}:s3:::cpo-sandbox-*",
     ]
   }
+  # ECR Public gives its login token only in us-east-1.
   statement {
     effect      = "Deny"
-    not_actions = ["iam:*", "sts:*", "kms:*"]
+    not_actions = ["iam:*", "sts:*", "kms:*", "ecr-public:GetAuthorizationToken"]
     resources   = ["*"]
     condition {
       test     = "StringNotEquals"
@@ -294,6 +317,8 @@ data "aws_iam_policy_document" "boundary" {
 
 # The IAM grants of the CI role, one by one, within the boundary.
 data "aws_iam_policy_document" "ci_iam" {
+  source_policy_documents = [data.aws_iam_policy_document.registry_login.json]
+
   statement {
     actions = [
       "sts:GetCallerIdentity",

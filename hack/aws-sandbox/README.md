@@ -6,7 +6,7 @@ The CI of the AWS plugins runs against a real AWS sandbox account. [`terraform/a
 
 The job `conformance-aws` of `.github/workflows/conformance.yml` uses these scripts. `CONTRIBUTING.md` tells how a plugin gets such a job. A job that uses AWS has the permission `id-token: write` and selects its environment as `.github/workflows/aws-sandbox.yml` does. It gets the credentials with `aws-actions/configure-aws-credentials` and the role `vars.AWS_ROLE_ARN`.
 
-The job `awskit-sandbox` of the same workflow runs no kind cluster. It uses only the credentials, the run ID, and `teardown.sh` of step 6. Steps 1 to 5 are for a run with a kind cluster.
+The job `awskit-sandbox` of the same workflow runs no kind cluster. It uses only the credentials, the run ID, and `teardown.sh` of step 7. Steps 1 to 6 are for a run with a kind cluster.
 
 Give each run an ID that starts with `cpo-ci-`, for example `cpo-ci-${{ github.run_id }}-${{ github.run_attempt }}`. Put the ID into the name of each resource of the run, and into its tag `cpo-ci-run`.
 
@@ -24,20 +24,26 @@ Give each run an ID that starts with `cpo-ci-`, for example `cpo-ci-${{ github.r
 
     The API server of this cluster signs the ServiceAccount tokens with the key of the run. STS trusts these tokens through the OIDC provider of the run.
 
-3. Install the pod identity webhook, so that a ServiceAccount annotation gives a pod its role, as on EKS:
+3. Log in to ECR Public with the CI role. ECR Public limits an anonymous pull of the webhook image:
+
+    ```sh
+    aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+    ```
+
+4. Install the pod identity webhook, so that a ServiceAccount annotation gives a pod its role, as on EKS:
 
     ```sh
     test/kind/pod-identity-webhook.sh
     ```
 
-4. Create the role of each controller that calls AWS, with `plugin-role.sh <run ID> <name> <namespace> <service account> <policy file>`. The role `<run ID>-<name>` trusts only the ServiceAccount, and gets the managed policy `<run ID>-<name>` from the policy file. For the controller of aws-kms:
+5. Create the role of each controller that calls AWS, with `plugin-role.sh <run ID> <name> <namespace> <service account> <policy file>`. The role `<run ID>-<name>` trusts only the ServiceAccount, and gets the managed policy `<run ID>-<name>` from the policy file. For the controller of aws-kms:
 
     ```sh
     hack/aws-sandbox/plugin-role.sh "${RUN_ID}" aws-kms camunda-operator-plugins aws-kms controller-policy.json
     ```
 
-5. Run the tests. A role of the run trusts the provider `oidc-provider/<bucket host>/<run ID>`, which `issuer.sh up` prints.
-6. At the end of the job, also when the job fails, delete the kind cluster first, so that no controller creates an object again. Then remove what the run created:
+6. Run the tests. A role of the run trusts the provider `oidc-provider/<bucket host>/<run ID>`, which `issuer.sh up` prints.
+7. At the end of the job, also when the job fails, delete the kind cluster first, so that no controller creates an object again. Then remove what the run created:
 
     ```sh
     hack/aws-sandbox/teardown.sh "${RUN_ID}"

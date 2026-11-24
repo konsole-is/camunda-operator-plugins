@@ -171,6 +171,11 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # ECR Public limits an anonymous pull, and test/kind/pod-identity-webhook.sh
+      # pulls its image on the runner. Its login token comes only from us-east-1.
+      - name: Log in to ECR Public
+        run: aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+
       - name: Publish the issuer of the run
         id: issuer
         env:
