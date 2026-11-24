@@ -5,8 +5,8 @@
 #      on its own registrations, and aws starts no controller aws-kms.
 #   2. identity-check.sh and connectors-role-check.sh against the release aws.
 #   3. The move of aws-kms into the release aws, as the docs give it: a key
-#      of aws-keys stays Ready with the same key through the uninstall of
-#      aws-keys and the upgrade of aws, and the release aws serves its delete.
+#      of aws-keys never leaves Ready and keeps its key through the uninstall
+#      of aws-keys and the upgrade of aws. The release aws serves its delete.
 #
 # Needs RUN_ID, AWS_REGION, CHART_NAMESPACE, the variables of the two checks,
 # and the credentials of the CI role.
@@ -98,6 +98,9 @@ YAML
 kubectl wait -n "$ns" pluginrequest/moved-key --for=condition=Ready --timeout=5m
 key=$(kubectl get -n "$ns" pluginrequest/moved-key -o jsonpath='{.status.outputs.keyRef}')
 [ -n "$key" ] || { fail "moved-key has no keyRef"; report; exit 1; }
+# A Ready condition that turns False and back gets a new lastTransitionTime.
+ready_since=$(kubectl get -n "$ns" pluginrequest/moved-key \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastTransitionTime}')
 
 echo "==> Moving aws-kms from the release aws-keys into the release aws"
 helm uninstall aws-keys --namespace "$CHART_NAMESPACE" --wait
@@ -108,6 +111,10 @@ kubectl wait pluginregistration/aws-kms-key --for=condition=Ready --timeout=3m
 kubectl wait -n "$ns" pluginrequest/moved-key --for=condition=Ready --timeout=5m
 got=$(kubectl get -n "$ns" pluginrequest/moved-key -o jsonpath='{.status.outputs.keyRef}')
 [ "$got" = "$key" ] || fail "moved-key has the keyRef '$got' after the move, want $key"
+got=$(kubectl get -n "$ns" pluginrequest/moved-key \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastTransitionTime}')
+[ "$got" = "$ready_since" ] ||
+  fail "Ready of moved-key changed at $got during the move, want it Ready since $ready_since"
 state=$(aws kms describe-key --region "$AWS_REGION" --key-id "$key" --query KeyMetadata.KeyState --output text)
 [ "$state" = Enabled ] || fail "the key $key of moved-key is $state after the move, want Enabled"
 
