@@ -80,9 +80,12 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-duration-seconds: 7200
 
+      # The waits of eks-cluster.sh take at most 25 minutes. With 3 minutes
+      # of setup, 45 of the proof, 5 of the read, and 30 of the cleanup, the
+      # job stays within its 110.
       - name: Create the EKS cluster
         id: cluster
-        timeout-minutes: 25
+        timeout-minutes: 27
         run: hack/aws-sandbox/eks-cluster.sh "${RUN_ID}"
 
       - name: Run the proof

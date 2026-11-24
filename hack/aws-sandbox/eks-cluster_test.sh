@@ -21,6 +21,15 @@ arg() {
     shift
   done
 }
+# next_state <file> <default> prints the first line of $STUB/<file> and
+# removes it, but keeps the last line, so that a state stays.
+next_state() {
+  local f=$STUB/$1 state
+  [ -s "$f" ] || { echo "$2"; return; }
+  state=$(head -1 "$f")
+  [ "$(wc -l < "$f")" -le 1 ] || sed -i 1d "$f"
+  echo "$state"
+}
 case "$1 $2" in
   "eks describe-cluster-versions") echo '{"clusterVersions": [{"clusterVersion": "1.34"}]}' ;;
   "eks describe-addon-versions")
@@ -28,8 +37,12 @@ case "$1 $2" in
       {"addonVersion": "v1.1.0", "compatibilities": [{"defaultVersion": true}]}]}]}'
     ;;
   "eks describe-addon-configuration") jq -n --rawfile s "$STUB/schema.json" '{configurationSchema: $s}' ;;
+  # The cluster takes ELAPSED seconds of the clock of the stub date, and its
+  # states come from cluster.states.
   "eks describe-cluster")
-    echo '{"cluster": {"endpoint": "https://abc.eks.example", "version": "1.34",
+    [ -e "$STUB/offset" ] || echo "${ELAPSED:-0}" > "$STUB/offset"
+    status=$(next_state cluster.states ACTIVE)
+    echo '{"cluster": {"status": "'"$status"'", "endpoint": "https://abc.eks.example", "version": "1.34",
       "certificateAuthority": {"data": "Q0E="}, "kubernetesNetworkConfig": {"serviceIpv4Cidr": "10.100.0.0/16"},
       "resourcesVpcConfig": {"clusterSecurityGroupId": "sg-1"}}}'
     ;;
@@ -53,17 +66,11 @@ case "$1 $2" in
     ;;
   "eks create-cluster" | "eks create-access-entry" | \
     "eks create-pod-identity-association" | "eks create-addon") echo '{}' ;;
-  # The cluster takes ELAPSED seconds of the clock of the stub date.
-  # FAIL_WAIT names an add-on, or "cluster", whose wait fails.
-  "eks wait")
-    [ "$3" != cluster-active ] || echo "${ELAPSED:-0}" > "$STUB/offset"
-    if [ "${FAIL_WAIT:-}" = cluster ] && [ "$3" = cluster-active ] ||
-      { [ -n "${FAIL_WAIT:-}" ] && [ "$(arg --addon-name "$@")" = "${FAIL_WAIT:-}" ]; }; then
-      echo "Waiter failed: terminal failure state" >&2
-      exit 255
-    fi
+  # The states of an add-on come from addon-<name>.states.
+  "eks describe-addon")
+    status=$(next_state "addon-$(arg --addon-name "$@").states" ACTIVE)
+    echo '{"addon": {"status": "'"$status"'", "health": {"issues": [{"code": "InsufficientNumberOfReplicas", "message": "no nodes available to schedule pods"}]}}}'
     ;;
-  "eks describe-addon") echo '{"status": "CREATE_FAILED", "health": {"issues": [{"code": "ConfigurationConflict", "message": "Conflicts found"}]}}' ;;
   "eks update-kubeconfig") ;;
   *) echo "unexpected call: aws $*" >&2; exit 3 ;;
 esac
@@ -71,9 +78,15 @@ EOF
 cat > "$stub/kubectl" << 'EOF'
 #!/usr/bin/env bash
 echo "kubectl $*" >> "$STUB/calls"
+# FAIL_NODE keeps the node NotReady with the taint of a starting node.
 case $1 in
-  get) echo node/ip-10-42-0-1 ;;
-  wait) [ -z "${FAIL_NODE:-}" ] || { echo "error: timed out waiting for the condition" >&2; exit 1; } ;;
+  get)
+    if [ -n "${FAIL_NODE:-}" ]; then
+      echo '{"items": [{"spec": {"taints": [{"key": "node.kubernetes.io/not-ready"}]}, "status": {"conditions": [{"type": "Ready", "status": "False"}]}}]}'
+    else
+      echo '{"items": [{"spec": {}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]}'
+    fi
+    ;;
   describe) echo "Ready False KubeletNotReady container runtime network not ready" ;;
 esac
 EOF
@@ -87,7 +100,12 @@ else
   exec "$real_date" "\$@"
 fi
 EOF
-chmod +x "$stub/aws" "$stub/kubectl" "$stub/date"
+# sleep moves the clock of the stub date forward instead of waiting.
+cat > "$stub/sleep" << EOF
+#!/usr/bin/env bash
+echo \$((\$(cat "$stub/offset" 2> /dev/null || echo 0) + \$1)) > "$stub/offset"
+EOF
+chmod +x "$stub/aws" "$stub/kubectl" "$stub/date" "$stub/sleep"
 export PATH="$stub:$PATH" STUB=$stub AWS_REGION=eu-west-1 AWS_EKS_VPC_ID=vpc-1 \
   AWS_EKS_SUBNET_IDS=subnet-1,subnet-2 AWS_EKS_CLUSTER_ROLE_ARN=arn:aws:iam::1:role/cluster \
   AWS_EKS_NODE_ROLE_ARN=arn:aws:iam::1:role/node AWS_EKS_NODE_PROFILE=node \
@@ -102,7 +120,7 @@ fail() {
 
 schema='{"properties": {"controller": {"properties": {"extraVolumeTags": {"type": "object"}}}}}'
 reset() {
-  rm -f "$stub/calls" "$stub/user-data" "$stub/offset"
+  rm -f "$stub/calls" "$stub/user-data" "$stub/offset" "$stub"/*.states
   echo "$schema" > "$stub/schema.json"
   echo '{"Reservations": []}' > "$stub/instances.json"
 }
@@ -185,7 +203,9 @@ association=$(line_of "aws eks create-pod-identity-association")
 
 name="the kubeconfig and the node"
 [[ $(call "aws eks update-kubeconfig") == *"--name cpo-ci-1-1-1 --alias cpo-ci-1-1-1"* ]] || fail "$name" "no kubeconfig context"
-call "kubectl wait --for=condition=Ready nodes --all" > /dev/null || fail "$name" "did not wait for the node"
+call "kubectl get nodes -o json" > /dev/null || fail "$name" "did not wait for the node"
+[ "$(line_of 'kubectl rollout status deployment/coredns')" -lt "$(line_of 'create-addon --cluster-name cpo-ci-1-1-1 --addon-name aws-ebs-csi-driver')" ] ||
+  fail "$name" "the CSI add-on comes before the node and CoreDNS are ready"
 
 name="an add-on version without the keys"
 reset
@@ -210,20 +230,52 @@ code=$?
 [ "$code" -eq 2 ] || fail "$name" "exit $code, want 2"
 [ ! -s "$stub/calls" ] || fail "$name" "called: $(cat "$stub/calls")"
 
-for wait in cluster eks-pod-identity-agent aws-ebs-csi-driver; do
-  name="a wait for $wait that fails"
-  reset
-  FAIL_WAIT=$wait "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2> "$stub/stderr"
-  code=$?
-  [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
-  case $wait in
-    cluster) want="aws eks describe-cluster --name cpo-ci-1-1-1" ;;
-    *) want="aws eks describe-addon --cluster-name cpo-ci-1-1-1 --addon-name $wait" ;;
-  esac
-  grep -qF -- "$want" "$stub/calls" || fail "$name" "did not read the state with '$want'"
-  [ "$wait" = cluster ] || grep -q ConfigurationConflict "$stub/stderr" ||
-    fail "$name" "did not print the health of the add-on: $(cat "$stub/stderr")"
-done
+# run_states <name> runs the script, with stderr in $stub/stderr.
+run_states() {
+  "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2> "$stub/stderr"
+}
+
+name="an add-on that is DEGRADED twice, then ACTIVE"
+reset
+printf 'DEGRADED\nDEGRADED\nACTIVE\n' > "$stub/addon-aws-ebs-csi-driver.states"
+run_states
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0: $(cat "$stub/stderr")"
+
+name="an add-on that stays DEGRADED"
+reset
+echo DEGRADED > "$stub/addon-aws-ebs-csi-driver.states"
+run_states
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+grep -q 'no nodes available to schedule pods' "$stub/stderr" ||
+  fail "$name" "did not print the health of the add-on: $(cat "$stub/stderr")"
+[ "$(grep -c 'describe-addon --cluster-name cpo-ci-1-1-1 --addon-name aws-ebs-csi-driver --output json' "$stub/calls")" -gt 2 ] ||
+  fail "$name" "gave up before its bound"
+
+name="an add-on that failed to create"
+reset
+echo CREATE_FAILED > "$stub/addon-eks-pod-identity-agent.states"
+run_states
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+[ "$(grep -c 'describe-addon --cluster-name cpo-ci-1-1-1 --addon-name eks-pod-identity-agent --output json' "$stub/calls")" -eq 1 ] ||
+  fail "$name" "did not stop at the first CREATE_FAILED"
+
+name="a cluster that is CREATING, then ACTIVE"
+reset
+printf 'CREATING\nCREATING\nACTIVE\n' > "$stub/cluster.states"
+run_states
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0: $(cat "$stub/stderr")"
+
+name="a cluster that failed"
+reset
+echo FAILED > "$stub/cluster.states"
+run_states
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+! grep -q 'run-instances' "$stub/calls" || fail "$name" "started a node for a failed cluster"
 
 name="a node that does not become Ready"
 reset
@@ -231,6 +283,7 @@ FAIL_NODE=1 "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2> "$stub/stderr"
 code=$?
 [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
 grep -q 'KubeletNotReady' "$stub/stderr" || fail "$name" "did not print the node conditions: $(cat "$stub/stderr")"
+! grep -q 'create-addon --cluster-name cpo-ci-1-1-1 --addon-name aws-ebs-csi-driver' "$stub/calls" || fail "$name" "created the CSI add-on without a node"
 
 # at_of <schedule name> prints the time of the schedule in epoch seconds.
 at_of() {

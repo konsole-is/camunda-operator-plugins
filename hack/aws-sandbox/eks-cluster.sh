@@ -33,6 +33,9 @@ readonly cluster_lifetime_minutes=$((lifetime_minutes + 10))
 # itself down this much before the end of its schedule.
 readonly boot_minutes=5
 readonly group=cpo-sandbox-eks
+# The bounds of the waits, in seconds: 25 minutes in all, within the 27 of
+# the step "Create the EKS cluster" of .github/workflows/eks-proof.yml.
+readonly cluster_wait=840 node_wait=300 dns_wait=120 addon_wait=120
 
 run=${1:-}
 if ! [[ ${run} =~ ^cpo-ci-[a-z0-9-]{1,40}$ ]]; then
@@ -62,6 +65,42 @@ fail_with() {
   shift
   "$@" >&2 || true
   exit 1
+}
+
+# wait_for <seconds> <ready> <failed> <command...> runs the command, which
+# prints one state, every 10 seconds until it prints <ready>. It returns 1 at
+# once on a state that matches the regular expression <failed>, unless
+# <failed> is empty, and after <seconds> on any other state, such as DEGRADED
+# or a failed command.
+wait_for() {
+  local bound=$1 ready=$2 failed=$3 state deadline
+  shift 3
+  deadline=$(($(date +%s) + bound))
+  while true; do
+    state=$("$@" 2> /dev/null) || state=""
+    [ "${state}" != "${ready}" ] || return 0
+    [ -z "${failed}" ] || [[ ! ${state} =~ ^(${failed})$ ]] || return 1
+    [ "$(date +%s)" -lt "${deadline}" ] || return 1
+    sleep 10
+  done
+}
+
+cluster_status() {
+  aws eks describe-cluster --name "${run}" --output json | jq -r .cluster.status
+}
+
+addon_status() {
+  aws eks describe-addon --cluster-name "${run}" --addon-name "$1" --output json | jq -r .addon.status
+}
+
+# node_state prints "schedulable" when a node is Ready and has no taint of a
+# node that is still starting, so that a Deployment can run on it.
+node_state() {
+  kubectl get nodes -o json | jq -r '
+    if any(.items[]; any(.status.conditions[]?; .type == "Ready" and .status == "True") and
+      all((.spec.taints // [])[]; .key != "node.kubernetes.io/not-ready" and
+        .key != "node.cloudprovider.kubernetes.io/uninitialized"))
+    then "schedulable" else "starting" end'
 }
 
 # schedule <name> <epoch seconds> <API action> <input JSON> arms a one-time
@@ -110,7 +149,7 @@ aws eks create-cluster --name "${run}" --kubernetes-version "${version}" --role-
   --resources-vpc-config "subnetIds=${AWS_EKS_SUBNET_IDS},endpointPublicAccess=true,endpointPrivateAccess=true" \
   --access-config authenticationMode=API,bootstrapClusterCreatorAdminPermissions=true \
   --upgrade-policy supportType=STANDARD "${tags[@]}" > /dev/null
-aws eks wait cluster-active --name "${run}" ||
+wait_for "${cluster_wait}" ACTIVE FAILED cluster_status ||
   fail_with "The cluster ${run} did not become active:" \
     aws eks describe-cluster --name "${run}" --query 'cluster.{status: status, health: health}' --output json
 cluster=$(aws eks describe-cluster --name "${run}" --output json)
@@ -125,10 +164,8 @@ aws eks create-access-entry --cluster-name "${run}" --principal-arn "${AWS_EKS_N
 # of the run refuses an association without the run tag.
 aws eks create-pod-identity-association --cluster-name "${run}" --namespace kube-system \
   --service-account ebs-csi-controller-sa --role-arn "${AWS_EKS_CSI_ROLE_ARN}" "${tags[@]}" > /dev/null
+# The agent is a DaemonSet, so it starts with the node.
 aws eks create-addon --cluster-name "${run}" --addon-name eks-pod-identity-agent "${tags[@]}" > /dev/null
-aws eks create-addon --cluster-name "${run}" --addon-name aws-ebs-csi-driver --addon-version "${csi_version}" \
-  --configuration-values "$(jq -cn --arg run "${run}" '{controller: {extraVolumeTags: {"cpo-ci-run": $run}}}')" \
-  "${tags[@]}" > /dev/null
 
 shutdown_minutes=$(((node_end - $(date +%s)) / 60 - boot_minutes))
 [ "${shutdown_minutes}" -ge 1 ] || shutdown_minutes=1
@@ -190,14 +227,21 @@ schedule "${run}-terminate-nodes" "${node_end}" ec2:terminateInstances \
 
 echo "==> Waiting for the node ${instance}"
 aws eks update-kubeconfig --name "${run}" --alias "${run}" > /dev/null
-for _ in $(seq 1 60); do
-  [ -z "$(kubectl get nodes -o name 2> /dev/null)" ] || break
-  sleep 10
-done
-kubectl wait --for=condition=Ready nodes --all --timeout=10m ||
+# The node becomes Ready with the VPC CNI and kube-proxy, which EKS installs
+# with the cluster.
+wait_for "${node_wait}" schedulable "" node_state ||
   fail_with "The node ${instance} did not become Ready:" kubectl describe nodes
+kubectl rollout status deployment/coredns -n kube-system --timeout="${dns_wait}s" ||
+  fail_with "CoreDNS did not become ready:" kubectl describe pods -n kube-system -l k8s-app=kube-dns
+
+# EKS marks an add-on DEGRADED while its Deployment has no node, and a
+# DEGRADED add-on stops the waiter of the AWS CLI. So the driver comes after
+# the node, and the waits below go on through DEGRADED until their bound.
+aws eks create-addon --cluster-name "${run}" --addon-name aws-ebs-csi-driver --addon-version "${csi_version}" \
+  --configuration-values "$(jq -cn --arg run "${run}" '{controller: {extraVolumeTags: {"cpo-ci-run": $run}}}')" \
+  "${tags[@]}" > /dev/null
 for addon in eks-pod-identity-agent aws-ebs-csi-driver; do
-  aws eks wait addon-active --cluster-name "${run}" --addon-name "${addon}" ||
+  wait_for "${addon_wait}" ACTIVE "CREATE_FAILED|DELETE_FAILED|UPDATE_FAILED" addon_status "${addon}" ||
     fail_with "The add-on ${addon} did not become active:" aws eks describe-addon --cluster-name "${run}" \
       --addon-name "${addon}" --query 'addon.{status: status, health: health}' --output json
 done
