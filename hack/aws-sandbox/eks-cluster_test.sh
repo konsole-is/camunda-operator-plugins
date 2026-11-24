@@ -54,7 +54,16 @@ case "$1 $2" in
   "eks create-cluster" | "eks create-access-entry" | \
     "eks create-pod-identity-association" | "eks create-addon") echo '{}' ;;
   # The cluster takes ELAPSED seconds of the clock of the stub date.
-  "eks wait") [ "$3" != cluster-active ] || echo "${ELAPSED:-0}" > "$STUB/offset" ;;
+  # FAIL_WAIT names an add-on, or "cluster", whose wait fails.
+  "eks wait")
+    [ "$3" != cluster-active ] || echo "${ELAPSED:-0}" > "$STUB/offset"
+    if [ "${FAIL_WAIT:-}" = cluster ] && [ "$3" = cluster-active ] ||
+      { [ -n "${FAIL_WAIT:-}" ] && [ "$(arg --addon-name "$@")" = "${FAIL_WAIT:-}" ]; }; then
+      echo "Waiter failed: terminal failure state" >&2
+      exit 255
+    fi
+    ;;
+  "eks describe-addon") echo '{"status": "CREATE_FAILED", "health": {"issues": [{"code": "ConfigurationConflict", "message": "Conflicts found"}]}}' ;;
   "eks update-kubeconfig") ;;
   *) echo "unexpected call: aws $*" >&2; exit 3 ;;
 esac
@@ -62,7 +71,11 @@ EOF
 cat > "$stub/kubectl" << 'EOF'
 #!/usr/bin/env bash
 echo "kubectl $*" >> "$STUB/calls"
-[ "$1" != get ] || echo node/ip-10-42-0-1
+case $1 in
+  get) echo node/ip-10-42-0-1 ;;
+  wait) [ -z "${FAIL_NODE:-}" ] || { echo "error: timed out waiting for the condition" >&2; exit 1; } ;;
+  describe) echo "Ready False KubeletNotReady container runtime network not ready" ;;
+esac
 EOF
 # date +%s reads a clock that the stub aws can move forward.
 real_date=$(command -v date)
@@ -87,7 +100,7 @@ fail() {
   failed=1
 }
 
-schema='{"properties": {"controller": {"properties": {"env": {"type": "array"}, "extraVolumeTags": {"type": "object"}}}}}'
+schema='{"properties": {"controller": {"properties": {"extraVolumeTags": {"type": "object"}}}}}'
 reset() {
   rm -f "$stub/calls" "$stub/user-data" "$stub/offset"
   echo "$schema" > "$stub/schema.json"
@@ -161,7 +174,7 @@ ami=$(call "aws ssm get-parameter")
 
 name="the CSI driver"
 csi=$(call "create-addon --cluster-name cpo-ci-1-1-1 --addon-name aws-ebs-csi-driver")
-for want in "--addon-version v1.1.0" '"extraVolumeTags":{"cpo-ci-run":"cpo-ci-1-1-1"}' '{"name":"AWS_REGION","value":"eu-west-1"}'; do
+for want in "--addon-version v1.1.0" '--configuration-values {"controller":{"extraVolumeTags":{"cpo-ci-run":"cpo-ci-1-1-1"}}}'; do
   [[ $csi == *"$want"* ]] || fail "$name" "'$csi' lacks '$want'"
 done
 association=$(line_of "aws eks create-pod-identity-association")
@@ -196,6 +209,28 @@ AWS_EKS_SCHEDULER_ROLE_ARN='' "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2>
 code=$?
 [ "$code" -eq 2 ] || fail "$name" "exit $code, want 2"
 [ ! -s "$stub/calls" ] || fail "$name" "called: $(cat "$stub/calls")"
+
+for wait in cluster eks-pod-identity-agent aws-ebs-csi-driver; do
+  name="a wait for $wait that fails"
+  reset
+  FAIL_WAIT=$wait "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2> "$stub/stderr"
+  code=$?
+  [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+  case $wait in
+    cluster) want="aws eks describe-cluster --name cpo-ci-1-1-1" ;;
+    *) want="aws eks describe-addon --cluster-name cpo-ci-1-1-1 --addon-name $wait" ;;
+  esac
+  grep -qF -- "$want" "$stub/calls" || fail "$name" "did not read the state with '$want'"
+  [ "$wait" = cluster ] || grep -q ConfigurationConflict "$stub/stderr" ||
+    fail "$name" "did not print the health of the add-on: $(cat "$stub/stderr")"
+done
+
+name="a node that does not become Ready"
+reset
+FAIL_NODE=1 "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2> "$stub/stderr"
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+grep -q 'KubeletNotReady' "$stub/stderr" || fail "$name" "did not print the node conditions: $(cat "$stub/stderr")"
 
 # at_of <schedule name> prints the time of the schedule in epoch seconds.
 at_of() {

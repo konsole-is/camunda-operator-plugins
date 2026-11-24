@@ -54,6 +54,16 @@ cluster_end=$((start + cluster_lifetime_minutes * 60))
 work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 
+# fail_with <message> <command...> prints the message and the output of the
+# command on stderr, and exits 1. A failed wait uses it to show the state it
+# waited for.
+fail_with() {
+  echo "$1" >&2
+  shift
+  "$@" >&2 || true
+  exit 1
+}
+
 # schedule <name> <epoch seconds> <API action> <input JSON> arms a one-time
 # schedule that calls the action of the AWS SDK once at that time, and then
 # deletes itself.
@@ -76,11 +86,9 @@ csi_version=$(aws eks describe-addon-versions --addon-name aws-ebs-csi-driver --
   --output json | jq -r '[.addons[0].addonVersions[] | select(any(.compatibilities[]; .defaultVersion))][0].addonVersion // ""')
 [ -n "${csi_version}" ] || { echo "EKS lists no default aws-ebs-csi-driver for Kubernetes ${version}" >&2; exit 1; }
 # Without extraVolumeTags, the policy of the driver role refuses each volume.
-# The hop limit of the node keeps the controller from reading its region from
-# the instance metadata, so it takes AWS_REGION.
 if ! aws eks describe-addon-configuration --addon-name aws-ebs-csi-driver --addon-version "${csi_version}" --output json |
-  jq -e '.configurationSchema | fromjson | .properties.controller.properties | has("extraVolumeTags") and has("env")' > /dev/null; then
-  echo "aws-ebs-csi-driver ${csi_version} has no controller.extraVolumeTags or controller.env" >&2
+  jq -e '.configurationSchema | fromjson | .properties.controller.properties | has("extraVolumeTags")' > /dev/null; then
+  echo "aws-ebs-csi-driver ${csi_version} has no controller.extraVolumeTags" >&2
   exit 1
 fi
 running=$(aws ec2 describe-instances --output json --filters "Name=vpc-id,Values=${AWS_EKS_VPC_ID}" \
@@ -102,7 +110,9 @@ aws eks create-cluster --name "${run}" --kubernetes-version "${version}" --role-
   --resources-vpc-config "subnetIds=${AWS_EKS_SUBNET_IDS},endpointPublicAccess=true,endpointPrivateAccess=true" \
   --access-config authenticationMode=API,bootstrapClusterCreatorAdminPermissions=true \
   --upgrade-policy supportType=STANDARD "${tags[@]}" > /dev/null
-aws eks wait cluster-active --name "${run}"
+aws eks wait cluster-active --name "${run}" ||
+  fail_with "The cluster ${run} did not become active:" \
+    aws eks describe-cluster --name "${run}" --query 'cluster.{status: status, health: health}' --output json
 cluster=$(aws eks describe-cluster --name "${run}" --output json)
 endpoint=$(jq -r .cluster.endpoint <<< "${cluster}")
 ca=$(jq -r .cluster.certificateAuthority.data <<< "${cluster}")
@@ -117,8 +127,7 @@ aws eks create-pod-identity-association --cluster-name "${run}" --namespace kube
   --service-account ebs-csi-controller-sa --role-arn "${AWS_EKS_CSI_ROLE_ARN}" "${tags[@]}" > /dev/null
 aws eks create-addon --cluster-name "${run}" --addon-name eks-pod-identity-agent "${tags[@]}" > /dev/null
 aws eks create-addon --cluster-name "${run}" --addon-name aws-ebs-csi-driver --addon-version "${csi_version}" \
-  --configuration-values "$(jq -cn --arg region "${AWS_REGION}" --arg run "${run}" \
-    '{controller: {env: [{name: "AWS_REGION", value: $region}], extraVolumeTags: {"cpo-ci-run": $run}}}')" \
+  --configuration-values "$(jq -cn --arg run "${run}" '{controller: {extraVolumeTags: {"cpo-ci-run": $run}}}')" \
   "${tags[@]}" > /dev/null
 
 shutdown_minutes=$(((node_end - $(date +%s)) / 60 - boot_minutes))
@@ -185,7 +194,11 @@ for _ in $(seq 1 60); do
   [ -z "$(kubectl get nodes -o name 2> /dev/null)" ] || break
   sleep 10
 done
-kubectl wait --for=condition=Ready nodes --all --timeout=10m
-aws eks wait addon-active --cluster-name "${run}" --addon-name eks-pod-identity-agent
-aws eks wait addon-active --cluster-name "${run}" --addon-name aws-ebs-csi-driver
+kubectl wait --for=condition=Ready nodes --all --timeout=10m ||
+  fail_with "The node ${instance} did not become Ready:" kubectl describe nodes
+for addon in eks-pod-identity-agent aws-ebs-csi-driver; do
+  aws eks wait addon-active --cluster-name "${run}" --addon-name "${addon}" ||
+    fail_with "The add-on ${addon} did not become active:" aws eks describe-addon --cluster-name "${run}" \
+      --addon-name "${addon}" --query 'addon.{status: status, health: health}' --output json
+done
 echo "cluster=${run}"
