@@ -34,8 +34,9 @@ vpc=${AWS_EKS_VPC_ID}
 # terraform/aws-sandbox creates the repositories and the schedule group.
 repositories=(cpo-sandbox-eks/camunda-operator cpo-sandbox-eks/aws)
 group=cpo-sandbox-eks
-# EBS detaches the volumes of a terminated node within this time.
-volume_wait_seconds=300
+# EBS detaches the volumes of a terminated node, and EKS removes the network
+# interfaces of a deleted cluster, within this time.
+settle_seconds=300
 
 cutoff=0
 if [ -n "${hours}" ]; then
@@ -148,7 +149,7 @@ done
 # of the EBS CSI driver.
 listing volumes "EBS volumes" ec2 describe-volumes \
   --filters "Name=tag-key,Values=cpo-ci-run,ebs.csi.aws.com/cluster,kubernetes.io/cluster/cpo-ci-*"
-deadline=$(($(date +%s) + volume_wait_seconds))
+deadline=$(($(date +%s) + settle_seconds))
 while IFS='|' read -r id state created tag driver; do
   [ -n "${id}" ] || continue
   if [ "${tag}" = None ] && [ "${driver}" = true ]; then
@@ -182,11 +183,18 @@ if ! remaining=$(cluster_names); then
 fi
 
 # 4. The network interfaces. The VPC holds only runs, so an available
-# interface is a leftover once no cluster runs.
+# interface is a leftover once no cluster runs. EKS removes the interfaces of
+# a control plane some minutes after the delete of its cluster.
 if [ -z "${remaining}" ]; then
-  listing interfaces "network interfaces" ec2 describe-network-interfaces \
-    --filters "Name=vpc-id,Values=${vpc}" "Name=status,Values=available"
-  for id in $(jq -r '(.NetworkInterfaces // [])[].NetworkInterfaceId' <<< "${interfaces:-null}"); do
+  deadline=$(($(date +%s) + settle_seconds))
+  while true; do
+    listing interfaces "network interfaces" ec2 describe-network-interfaces --filters "Name=vpc-id,Values=${vpc}"
+    [ ${#deleted[@]} -gt 0 ] && [ "$(date +%s)" -lt "${deadline}" ] || break
+    [ "$(jq '[(.NetworkInterfaces // [])[] | select(.Status != "available")] | length' <<< "${interfaces:-null}")" -gt 0 ] ||
+      break
+    sleep 15
+  done
+  for id in $(jq -r '(.NetworkInterfaces // [])[] | select(.Status == "available") | .NetworkInterfaceId' <<< "${interfaces:-null}"); do
     echo "network interface ${id}"
     step aws ec2 delete-network-interface --network-interface-id "${id}"
   done

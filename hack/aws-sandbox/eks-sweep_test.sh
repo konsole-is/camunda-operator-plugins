@@ -131,7 +131,7 @@ name="the run and its neighbour"
 empty
 a_run cpo-ci-1-1-1 i-1 vol-1 "$young" ACTIVE
 a_run cpo-ci-1-1-10 i-10 vol-10 "$young" ACTIVE
-echo '{"NetworkInterfaces": [{"NetworkInterfaceId": "eni-1"}]}' > "$stub/interfaces.json"
+echo '{"NetworkInterfaces": [{"NetworkInterfaceId": "eni-1", "Status": "available"}]}' > "$stub/interfaces.json"
 "$here/eks-sweep.sh" --run cpo-ci-1-1-1 > /dev/null
 code=$?
 [ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
@@ -165,14 +165,14 @@ add clusters.json --arg at "$young" '. += [{name: "cpo-ci-1-1-1", status: "CREAT
 
 name="interfaces while another run's cluster is up"
 empty
-echo '{"NetworkInterfaces": [{"NetworkInterfaceId": "eni-1"}]}' > "$stub/interfaces.json"
+echo '{"NetworkInterfaces": [{"NetworkInterfaceId": "eni-1", "Status": "available"}]}' > "$stub/interfaces.json"
 add clusters.json --arg at "$young" '. += [{name: "cpo-ci-2-1-1", status: "ACTIVE", createdAt: $at, tags: {"cpo-ci-run": "cpo-ci-2-1-1"}}]'
 "$here/eks-sweep.sh" --older-than 2 > /dev/null
 ! called "delete-network-interface" || fail "$name" "deleted an interface while a cluster is up"
 
 name="interfaces when no cluster is left"
 empty
-echo '{"NetworkInterfaces": [{"NetworkInterfaceId": "eni-1"}]}' > "$stub/interfaces.json"
+echo '{"NetworkInterfaces": [{"NetworkInterfaceId": "eni-1", "Status": "available"}]}' > "$stub/interfaces.json"
 "$here/eks-sweep.sh" --older-than 2 > /dev/null
 called "ec2 delete-network-interface --network-interface-id eni-1" || fail "$name" "did not delete the interface"
 
