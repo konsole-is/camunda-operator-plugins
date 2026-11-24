@@ -1,0 +1,23 @@
+# The chart values of the release aws of the AWS journey: aws-identity,
+# aws-kms, and aws-s3 on. render.sh fills in the variables of the run. Every
+# AWS object gets the run in its name and the tag cpo-ci-run, and every role
+# the boundary of the sandbox. The sandbox refuses a key policy, so no key
+# administrator and no CSI driver role are set.
+mode: irsa
+region: ${AWS_REGION}
+oidcProviderArn: ${AWS_OIDC_PROVIDER_ARN}
+extraTags:
+  cpo-ci-run: ${RUN_ID}
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-aws
+identity:
+  enabled: true
+  permissionsBoundaryArn: arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary
+  allowedActions: ["s3:*", "kms:Decrypt", "kms:GenerateDataKey"]
+  roleNamePrefix: ${RUN_ID}-hub
+kms:
+  enabled: true
+  aliasPrefix: ${RUN_ID}
+s3:
+  enabled: true
