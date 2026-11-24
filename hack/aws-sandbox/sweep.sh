@@ -7,9 +7,11 @@
 #   sweep.sh --run <run-id>          what that run created, at any age
 #   sweep.sh --older-than <hours>    what any run created that many hours ago
 #
-# It removes a role, policy, OIDC provider, or KMS key only when it has the
-# tag. With --older-than, it also removes a cpo-ci-* bucket without the tag
-# that is that many hours old. Needs AWS_REGION and the credentials of the CI
+# It removes a policy, OIDC provider, or KMS key only when it has the tag,
+# and a role only when it has the tag or the trust below. With --older-than,
+# it also removes a cpo-ci-* bucket without the tag that is that many hours
+# old. In both modes, it also removes a cpo-ci-* role of any run and age that
+# trusts a principal that no run trusts, as trust.jq reads it. Needs AWS_REGION and the credentials of the CI
 # role. With AWS_KMS_REPLICA_REGION, it also schedules the keys there, which
 # hold the replicas of multi-Region keys. It exits 1 when a removal or the
 # listing of a resource type failed.
@@ -26,6 +28,8 @@ case ${1:-} in
     ;;
 esac
 : "${AWS_REGION:?}"
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+account=$(aws sts get-caller-identity --query Account --output text)
 
 cutoff=0
 if [ -n "${hours}" ]; then
@@ -135,17 +139,23 @@ delete_key() {
 }
 
 # Roles before policies, so that the policies are detached.
-if ! roles=$(aws iam list-roles --query "Roles[?starts_with(RoleName, 'cpo-ci-')].[RoleName, CreateDate]" --output text); then
+if ! roles=$(aws iam list-roles --output json | jq -r -L "${here}" --arg account "${account}" 'include "trust";
+  .Roles[] | select(.RoleName | startswith("cpo-ci-"))
+  | [.RoleName, .CreateDate, (.AssumeRolePolicyDocument | foreign($account))] | @tsv'); then
   echo "failed to list: roles" >&2
   failed=1
 fi
-while read -r role created; do
+while read -r role created foreign; do
   [ -n "${role}" ] || continue
   if ! tag=$(tags iam list-role-tags --role-name "${role}" | run_tag); then
     failed=1
     continue
   fi
-  if matches "${tag}" "${created}"; then
+  # A run can rewrite the trust of a role of another run.
+  if [ "${foreign}" = true ]; then
+    echo "role ${role} (${tag:-no tag}) trusts a principal that no run trusts"
+    step delete_role "${role}"
+  elif matches "${tag}" "${created}"; then
     echo "role ${role} (${tag})"
     step delete_role "${role}"
   fi
@@ -202,7 +212,6 @@ while read -r bucket created; do
   fi
 done <<<"${buckets}"
 
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 for region in "${AWS_REGION}" ${AWS_KMS_REPLICA_REGION:-}; do
   if ! keys=$("${here}/run-keys.sh" "${region}"); then
     echo "failed to list: keys in ${region}" >&2

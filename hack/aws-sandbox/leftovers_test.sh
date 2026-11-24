@@ -26,6 +26,7 @@ region=$(arg --region "$@")
 [ -z "$region" ] || [ "$region" = "$AWS_REGION" ] || dir=$STUB/$region
 answer() { cat "$dir/$1" 2> /dev/null || echo "$2"; }
 case "$1 $2" in
+  "sts get-caller-identity") echo 111122223333 ;;
   "iam list-roles") cat "$STUB/roles.json" ;;
   "iam list-policies") cat "$STUB/policies.json" ;;
   "iam list-open-id-connect-providers") cat "$STUB/providers.json" ;;
@@ -115,7 +116,26 @@ code=$?
 [ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
 [ -z "$out" ] || fail "$name" "printed '$out', want nothing"
 
+name="a role of another run that trusts another account"
+account "cpo-ci-other-hub-1" "" "" ""
+jq '.Roles[0].AssumeRolePolicyDocument = {Statement: [{Effect: "Allow", Action: "sts:AssumeRole",
+  Principal: {AWS: "arn:aws:iam::999999999999:root"}}]}' "$stub/roles.json" > "$stub/x" && mv "$stub/x" "$stub/roles.json"
+out=$("$here/leftovers.sh" cpo-ci-1-1-1)
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+[ "$out" = "left: role with a trust of no run cpo-ci-other-hub-1" ] ||
+  fail "$name" "printed '$out', want the role"
+
+name="a role of another run that trusts EKS Pod Identity"
+jq '.Roles[0].AssumeRolePolicyDocument = {Statement: [{Effect: "Allow", Action: ["sts:AssumeRole", "sts:TagSession"],
+  Principal: {Service: "pods.eks.amazonaws.com"}}]}' "$stub/roles.json" > "$stub/x" && mv "$stub/x" "$stub/roles.json"
+out=$("$here/leftovers.sh" cpo-ci-1-1-1)
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
+[ -z "$out" ] || fail "$name" "printed '$out', want nothing"
+
 name="a listing that fails"
+account "" "" "" ""
 rm "$stub/buckets.json"
 "$here/leftovers.sh" cpo-ci-1-1-1 > /dev/null 2>&1
 code=$?

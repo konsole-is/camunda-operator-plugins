@@ -12,8 +12,22 @@ trap 'rm -rf "$stub"' EXIT
 cat > "$stub/aws" << 'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
-  "iam list-roles") printf 'cpo-ci-other-hub-1\t2026-11-11T00:00:00Z\n' ;;
-  "iam list-role-tags") echo "An error occurred ($TAGS_ERROR) when calling the ListRoleTags operation" >&2; exit 254 ;;
+  "sts get-caller-identity") echo 111122223333 ;;
+  "iam list-roles")
+    trust=${TRUST:-'{"Statement": [{"Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
+      "Principal": {"Federated": "arn:aws:iam::111122223333:oidc-provider/b.s3.eu-west-1.amazonaws.com/cpo-ci-other"}}]}'}
+    jq -n --argjson t "$trust" '{Roles: [{RoleName: "cpo-ci-other-hub-1", CreateDate: "2026-11-11T00:00:00Z",
+      AssumeRolePolicyDocument: $t}]}'
+    ;;
+  "iam list-role-tags")
+    if [ -n "${TAGS_ERROR:-}" ]; then
+      echo "An error occurred ($TAGS_ERROR) when calling the ListRoleTags operation" >&2
+      exit 254
+    fi
+    echo '{"Tags": [{"Key": "cpo-ci-run", "Value": "cpo-ci-other"}]}'
+    ;;
+  "iam list-role-policies" | "iam list-attached-role-policies") ;;
+  "iam delete-role") echo "$*" >> "$STUB/deleted" ;;
   "iam list-policies" | "iam list-open-id-connect-providers" | "s3api list-buckets" | "kms list-keys") ;;
   # KEY_RUN is the run of the one key that the tagging API lists.
   "resourcegroupstaggingapi get-resources")
@@ -74,6 +88,22 @@ name="a read of a key that fails"
 TAGS_ERROR=NoSuchEntity KEY_RUN=cpo-ci-1-1-1 DESCRIBE_ERROR=AccessDeniedException "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
 code=$?
 [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+
+name="a role of another run that trusts another account"
+rm -f "$stub/deleted"
+TRUST='{"Statement": {"Effect": "Allow", "Action": "sts:AssumeRole", "Principal": {"AWS": "arn:aws:iam::999999999999:root"}}}' \
+  "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
+grep -q -- '--role-name cpo-ci-other-hub-1' "$stub/deleted" 2> /dev/null ||
+  fail "$name" "did not delete the role"
+
+name="a role of another run that trusts its issuer"
+rm -f "$stub/deleted"
+"$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
+[ ! -e "$stub/deleted" ] || fail "$name" "deleted a role of another run"
 
 name="a read of the tags that fails"
 TAGS_ERROR=AccessDenied "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1

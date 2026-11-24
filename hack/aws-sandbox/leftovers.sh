@@ -2,7 +2,9 @@
 # shellcheck disable=SC2016 # $run and $vpc are variables of jq, not of the shell
 # Prints each role, managed policy, OIDC provider, and bucket that one CI
 # run left in the sandbox account, one line "left: <kind> <name>" each. It
-# reads names, not tags, so it finds also an object that lost its tag.
+# reads names, not tags, so it finds also an object that lost its tag. It
+# also prints each cpo-ci-* role of any run that trusts a principal that no
+# run trusts, as trust.jq reads it.
 #
 # Usage: leftovers.sh [--eks] [--all-regions] <run-id>
 #
@@ -46,13 +48,15 @@ fi
 
 failed=0
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+account=$(aws sts get-caller-identity --query Account --output text)
 
 # left <kind> <jq filter> <aws arguments...> prints the names of the listing
 # that belong to the run.
 left() {
   local kind=$1 filter=$2 names
   shift 2
-  if ! names=$(aws "$@" --output json | jq -r --arg run "${run}" --arg vpc "${AWS_EKS_VPC_ID:-}" "${filter}"); then
+  if ! names=$(aws "$@" --output json | jq -r -L "${here}" --arg run "${run}" --arg vpc "${AWS_EKS_VPC_ID:-}" \
+    --arg account "${account}" "include \"trust\"; ${filter}"); then
     echo "failed to list: ${kind}" >&2
     failed=1
     return
@@ -123,6 +127,9 @@ keys_left() {
 
 # The dash after the run ID keeps cpo-ci-1-1-10 out of the run cpo-ci-1-1-1.
 left role '.Roles[].RoleName | select(startswith($run + "-"))' iam list-roles
+left "role with a trust of no run" \
+  '.Roles[] | select((.RoleName | startswith("cpo-ci-")) and (.AssumeRolePolicyDocument | foreign($account))) | .RoleName' \
+  iam list-roles
 left policy '.Policies[].PolicyName | select(startswith($run + "-"))' iam list-policies --scope Local
 left "OIDC provider" '.OpenIDConnectProviderList[].Arn | select(endswith("/" + $run))' \
   iam list-open-id-connect-providers
