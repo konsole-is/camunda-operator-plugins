@@ -1,0 +1,6 @@
+# Every controller is on, so the chart serves the registrations of all five.
+identity: {enabled: true}
+connectorsRole: {enabled: true}
+kms: {enabled: true}
+ebs: {enabled: true}
+s3: {enabled: true}

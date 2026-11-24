@@ -82,15 +82,17 @@ func connectorsSection() *pluginsv1alpha1.PluginSection {
 // with the defaults that its helper adds, so that the suite serves the
 // schemas that the chart ships.
 func chartRegistrations() []pluginsv1alpha1.PluginRegistration {
-	values, err := os.ReadFile(filepath.Join("..", "..", "charts", "aws-connectors-role", "values.yaml"))
+	values, err := os.ReadFile(filepath.Join("..", "..", "charts", "aws", "values.yaml"))
 	Expect(err).NotTo(HaveOccurred())
 
 	var chart struct {
-		Registrations []map[string]any `json:"registrations"`
+		ConnectorsRole struct {
+			Registrations []map[string]any `json:"registrations"`
+		} `json:"connectorsRole"`
 	}
 	Expect(yaml.Unmarshal(values, &chart)).To(Succeed())
 
-	for _, r := range chart.Registrations {
+	for _, r := range chart.ConnectorsRole.Registrations {
 		r["sections"] = []string{sectionName}
 		r["mode"] = pluginsv1alpha1.ModeOptional
 		r["deletionPolicies"] = []string{"Delete", "Orphan"}
@@ -103,7 +105,7 @@ func chartRegistrations() []pluginsv1alpha1.PluginRegistration {
 		}
 	}
 
-	out, err := yaml.Marshal(chart.Registrations)
+	out, err := yaml.Marshal(chart.ConnectorsRole.Registrations)
 	Expect(err).NotTo(HaveOccurred())
 	path := filepath.Join(GinkgoT().TempDir(), "registrations.yaml")
 	Expect(os.WriteFile(path, out, 0o600)).To(Succeed())

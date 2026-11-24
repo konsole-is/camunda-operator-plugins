@@ -28,8 +28,8 @@ import (
 )
 
 // Ceiling is the set of IAM actions that the hub puts on a role, from the
-// chart value allowedActions. It mirrors the permissions boundary, so that a
-// Grant over it is refused before AWS refuses the call at run time.
+// chart value identity.allowedActions. It mirrors the permissions boundary,
+// so that a Grant over it is refused before AWS refuses the call at run time.
 type Ceiling struct {
 	patterns []*regexp.Regexp
 }

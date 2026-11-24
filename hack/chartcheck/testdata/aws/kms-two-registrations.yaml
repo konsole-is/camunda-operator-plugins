@@ -1,0 +1,6 @@
+# The serve rule follows the registrations of the values, not a fixed name.
+kms:
+  enabled: true
+  registrations:
+    - name: skeleton-public
+    - name: skeleton-internal

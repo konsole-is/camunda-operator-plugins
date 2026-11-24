@@ -1,0 +1,4 @@
+# refuses: kms.registrations must name at least one registration
+kms:
+  enabled: true
+  registrations: null

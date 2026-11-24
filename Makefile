@@ -61,35 +61,15 @@ test-api-ref: ## Check that a pseudo-version and a tag of the api module map to 
 		[ "$$got" = api/v0.3.0-rc.1 ] || { echo "prerelease tag maps to '$$got', want api/v0.3.0-rc.1" >&2; exit 1; }
 
 .PHONY: chart-verify
-chart-verify: ## Lint and render the chart of each plugin, and check the serve rule of CONTRIBUTING.md.
+chart-verify: ## Render the chart of each plugin with its cases in hack/chartcheck/testdata/, and check the chart rule of CONTRIBUTING.md.
+	@for c in charts/*/; do \
+		c="$$(basename "$$c")"; \
+		test -d "cmd/$$c" || { echo "charts/$$c has no binary cmd/$$c" >&2; exit 1; }; \
+	done
 	@for p in $(PLUGINS); do \
 		test -f "charts/$$p/Chart.yaml" || { echo "cmd/$$p has no chart charts/$$p" >&2; exit 1; }; \
-		$(HELM) lint "charts/$$p" || exit 1; \
-		$(HELM) template verify "charts/$$p" --namespace $(CHART_NAMESPACE) \
-			| go run ./hack/chartcheck -values "charts/$$p/values.yaml" -namespace $(CHART_NAMESPACE) || exit 1; \
-		$(HELM) template verify "charts/$$p" --namespace $(CHART_NAMESPACE) -f hack/chartcheck/testdata/two-registrations.yaml \
-			| go run ./hack/chartcheck -values hack/chartcheck/testdata/two-registrations.yaml -namespace $(CHART_NAMESPACE) || exit 1; \
-		err="$$($(HELM) template verify "charts/$$p" --set registrations=null 2>&1 >/dev/null || true)"; \
-		case "$$err" in *"registrations must name at least one registration"*) ;; *) \
-			echo "charts/$$p renders without a registration" >&2; exit 1 ;; \
-		esac; \
-		echo "  charts/$$p refuses to render without a registration"; \
-		$(MAKE) -s chart-names-differ CHART="charts/$$p" A="team-a plugin" B="team a-plugin" || exit 1; \
-		$(MAKE) -s chart-names-differ CHART="charts/$$p" \
-			A="$$(printf 'n%.0s' $$(seq 60))a plugin" B="$$(printf 'n%.0s' $$(seq 60))b plugin" || exit 1; \
+		HELM="$(HELM)" hack/chartcheck/verify.sh "charts/$$p" "$(CHART_NAMESPACE)" || exit 1; \
 	done
-
-# chart-names-differ checks that two releases, A and B as "<namespace> <release>",
-# render different names for the cluster-scoped objects of CHART.
-.PHONY: chart-names-differ
-chart-names-differ:
-	@names() { $(HELM) template "$$2" "$(CHART)" --namespace "$$1" \
-		| awk '/^kind: ClusterRole(Binding)?$$/ { k = 1 } k && /^  name:/ { print $$2; k = 0 }'; }; \
-	a="$$(names $(A))"; b="$$(names $(B))"; \
-	if [ -z "$$a" ] || [ -n "$$(comm -12 <(printf '%s\n' $$a | sort) <(printf '%s\n' $$b | sort))" ]; then \
-		echo "$(CHART): the releases '$(A)' and '$(B)' share a cluster-scoped name: $$a" >&2; exit 1; \
-	fi; \
-	echo "  $(CHART): '$(A)' and '$(B)' render different cluster-scoped names"
 
 # GOMOD_FILE is the go.mod that check-published-api reads. test-published-api
 # sets it to a copy that requires the root module of the operator.

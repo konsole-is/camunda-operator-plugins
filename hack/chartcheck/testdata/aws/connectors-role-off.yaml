@@ -1,0 +1,6 @@
+# Every controller but connectorsRole is on, so the chart serves no registration of connectorsRole.
+identity: {enabled: true}
+connectorsRole: {enabled: false}
+kms: {enabled: true}
+ebs: {enabled: true}
+s3: {enabled: true}
