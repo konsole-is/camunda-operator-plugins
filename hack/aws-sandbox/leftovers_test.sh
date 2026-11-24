@@ -56,7 +56,15 @@ case "$1 $2" in
     key=$(arg --key-id "$@")
     cat "$dir/tags-$key.json" 2> /dev/null || { echo "An error occurred (AccessDeniedException)" >&2; exit 254; }
     ;;
-  "kms describe-key") cat "$dir/key-$(arg --key-id "$@").json" ;;
+  # key-<key>.error holds the error of describe-key for that key.
+  "kms describe-key")
+    key=$(arg --key-id "$@")
+    if [ -f "$dir/key-$key.error" ]; then
+      echo "An error occurred ($(cat "$dir/key-$key.error")) when calling the DescribeKey operation" >&2
+      exit 254
+    fi
+    cat "$dir/key-$key.json"
+    ;;
   "kms list-aliases") answer aliases.json '{"Aliases": []}' ;;
   *) echo "unexpected call: aws $*" >&2; exit 3 ;;
 esac
@@ -116,7 +124,7 @@ code=$?
 # The EKS listings. Each object carries the run tag of its run.
 tagged() { jq -cn --arg run "$1" '[{Key: "cpo-ci-run", Value: $run}]'; }
 eks_account() {
-  rm -rf "$stub"/*.json "$stub"/eu-central-1
+  rm -rf "$stub"/*.json "$stub"/*.error "$stub"/eu-central-1
   account "" "" "" ""
   echo '{"clusters": []}' > "$stub/clusters.json"
 }
@@ -251,6 +259,23 @@ out=$("$here/leftovers.sh" --eks cpo-ci-1-1-1)
 code=$?
 [ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
 [ -z "$out" ] || fail "$name" "printed '$out', want nothing"
+
+name="--eks a key that KMS deleted, which the tagging API still lists"
+eks_account
+add_key k-1 cpo-ci-1-1-1 Enabled
+echo NotFoundException > "$stub/key-k-1.error"
+out=$("$here/leftovers.sh" --eks cpo-ci-1-1-1 2> /dev/null)
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
+[ -z "$out" ] || fail "$name" "printed '$out', want nothing"
+
+name="--eks a read of a key that fails"
+eks_account
+add_key k-1 cpo-ci-1-1-1 Enabled
+echo AccessDeniedException > "$stub/key-k-1.error"
+"$here/leftovers.sh" --eks cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
 
 name="--eks --all-regions an instance in another region"
 eks_account

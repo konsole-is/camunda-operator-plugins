@@ -211,10 +211,14 @@ for region in "${AWS_REGION}" ${AWS_KMS_REPLICA_REGION:-}; do
   fi
   while read -r key tag; do
     [ -n "${key}" ] || continue
-    if ! metadata=$(aws kms describe-key --region "${region}" --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text); then
-      failed=1
+    err=$(mktemp)
+    if ! metadata=$(aws kms describe-key --region "${region}" --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text 2>"${err}"); then
+      # The tagging index can still list a key that KMS deleted.
+      grep -q NotFoundException "${err}" || { cat "${err}" >&2; failed=1; }
+      rm -f "${err}"
       continue
     fi
+    rm -f "${err}"
     read -r state created <<<"${metadata}"
     # A primary key waits in PendingReplicaDeletion until its replicas are gone.
     case ${state} in PendingDeletion | PendingReplicaDeletion) continue ;; esac

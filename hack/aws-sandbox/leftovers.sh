@@ -99,23 +99,26 @@ clusters_left() {
 # keys_left <region> <kind> prints each KMS key of the run in region that is
 # not pending deletion.
 keys_left() {
-  local region=$1 kind=$2 keys key tag state
+  local region=$1 kind=$2 keys key tag state err
   if ! keys=$("${here}/run-keys.sh" "${region}"); then
     echo "failed to list: ${kind}" >&2
     failed=1
     return
   fi
+  err=$(mktemp)
   while read -r key tag; do
     [ -n "${key}" ] && [ "${tag}" = "${run}" ] || continue
-    if ! state=$(aws kms describe-key --region "${region}" --key-id "${key}" --output json | jq -r .KeyMetadata.KeyState); then
-      echo "failed to read: ${kind} ${key}" >&2
-      failed=1
+    if ! state=$(aws kms describe-key --region "${region}" --key-id "${key}" --output json 2> "${err}" |
+      jq -r .KeyMetadata.KeyState); then
+      # The tagging index can still list a key that KMS deleted.
+      grep -q NotFoundException "${err}" || { echo "failed to read: ${kind} ${key}" >&2; failed=1; }
       continue
     fi
     case ${state} in PendingDeletion | PendingReplicaDeletion) continue ;; esac
     echo "left: ${kind} ${key}"
     failed=1
   done <<< "${keys}"
+  rm -f "${err}"
 }
 
 # The dash after the run ID keeps cpo-ci-1-1-10 out of the run cpo-ci-1-1-1.

@@ -23,7 +23,14 @@ case "$1 $2" in
       echo '{"ResourceTagMappingList": []}'
     fi
     ;;
-  "kms describe-key") printf 'Enabled\t2026-11-11T00:00:00Z\n' ;;
+  # DESCRIBE_ERROR is the error of describe-key.
+  "kms describe-key")
+    if [ -n "${DESCRIBE_ERROR:-}" ]; then
+      echo "An error occurred ($DESCRIBE_ERROR) when calling the DescribeKey operation" >&2
+      exit 254
+    fi
+    printf 'Enabled\t2026-11-11T00:00:00Z\n'
+    ;;
   "kms list-aliases") ;;
   "kms schedule-key-deletion") echo "$*" >> "$STUB/deleted" ;;
   *) echo "unexpected call: aws $*" >&2; exit 3 ;;
@@ -55,6 +62,18 @@ name="a key of another run"
 rm -f "$stub/deleted"
 TAGS_ERROR=NoSuchEntity KEY_RUN=cpo-ci-1-1-10 "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
 [ ! -e "$stub/deleted" ] || fail "$name" "scheduled the deletion of a key of another run"
+
+name="a key that KMS deleted, which the tagging API still lists"
+rm -f "$stub/deleted"
+TAGS_ERROR=NoSuchEntity KEY_RUN=cpo-ci-1-1-1 DESCRIBE_ERROR=NotFoundException "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
+[ ! -e "$stub/deleted" ] || fail "$name" "scheduled the deletion of a key that is gone"
+
+name="a read of a key that fails"
+TAGS_ERROR=NoSuchEntity KEY_RUN=cpo-ci-1-1-1 DESCRIBE_ERROR=AccessDeniedException "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
 
 name="a read of the tags that fails"
 TAGS_ERROR=AccessDenied "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
