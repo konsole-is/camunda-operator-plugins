@@ -1,0 +1,25 @@
+# The chart values of the release aws of the eks journey: aws-identity in
+# mode podIdentity, aws-kms, and aws-ebs on. render.sh fills in the
+# variables of the run. Every AWS object gets the run in its name and the tag
+# cpo-ci-run, and every role the boundary of the sandbox. The release gets
+# its role through a Pod Identity association that setup.sh creates, so the
+# ServiceAccount has no annotation. The sandbox refuses a key policy, so no
+# key administrator and no CSI driver role are set: the role of the driver
+# uses each key through its IAM policy.
+mode: podIdentity
+region: ${AWS_REGION}
+eksClusterName: ${RUN_ID}
+extraTags:
+  cpo-ci-run: ${RUN_ID}
+identity:
+  enabled: true
+  permissionsBoundaryArn: arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary
+  allowedActions: ["s3:*", "kms:Decrypt", "kms:GenerateDataKey"]
+  roleNamePrefix: ${RUN_ID}-hub
+  registrations:
+    - name: aws-pod-identity
+kms:
+  enabled: true
+  aliasPrefix: ${RUN_ID}
+ebs:
+  enabled: true

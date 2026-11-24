@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -51,12 +52,15 @@ const labelBareMetal = "bare-metal"
 // labelAWS is the label of the AWS journey.
 const labelAWS = "aws"
 
+// labelEKS is the label of the EKS journey, which runs on the EKS cluster of
+// a run in the AWS sandbox, not on kind.
+const labelEKS = "eks"
+
 var (
 	ctx       = context.Background()
 	k8s       client.Client
 	clientset kubernetes.Interface
-	// restConfig is the config of the kind cluster that TestJourneys
-	// checked.
+	// restConfig is the config of the cluster that TestJourneys checked.
 	restConfig *rest.Config
 )
 
@@ -72,7 +76,11 @@ func TestJourneys(t *testing.T) {
 	)
 	raw, err := kubeconfig.RawConfig()
 	require.NoError(t, err)
-	require.NoError(t, checkKindContext(raw.CurrentContext, os.Getenv("KIND_CLUSTER")))
+	if journey == labelEKS {
+		require.NoError(t, checkEKSContext(raw.CurrentContext, os.Getenv("EKS_CLUSTER")))
+	} else {
+		require.NoError(t, checkKindContext(raw.CurrentContext, os.Getenv("KIND_CLUSTER")))
+	}
 	restConfig, err = kubeconfig.ClientConfig()
 	require.NoError(t, err)
 
@@ -97,6 +105,23 @@ func checkKindContext(current, kindCluster string) error {
 	return nil
 }
 
+// checkEKSContext refuses a current kubeconfig context other than the one
+// of the EKS cluster eksCluster, and an EKS cluster that is not of a run in
+// the AWS sandbox, so that the EKS journey never writes to another cluster.
+func checkEKSContext(current, eksCluster string) error {
+	if eksCluster == "" {
+		return errors.New("EKS_CLUSTER is not set: make journey-eks runs the eks journey on the EKS cluster of a run")
+	}
+	if !strings.HasPrefix(eksCluster, "cpo-ci-") {
+		return fmt.Errorf("the EKS cluster %q is not of a run in the AWS sandbox", eksCluster)
+	}
+	if current != eksCluster {
+		return fmt.Errorf("the current kubeconfig context is %q, not %q of the EKS cluster", current, eksCluster)
+	}
+
+	return nil
+}
+
 func TestCheckKindContext(t *testing.T) {
 	require.NoError(t, checkKindContext("kind-journey", "journey"))
 
@@ -106,6 +131,18 @@ func TestCheckKindContext(t *testing.T) {
 	assert.Contains(t, err.Error(), `"kind-journey"`)
 
 	assert.Error(t, checkKindContext("kind-", ""))
+}
+
+func TestCheckEKSContext(t *testing.T) {
+	require.NoError(t, checkEKSContext("cpo-ci-1-1-eks", "cpo-ci-1-1-eks"))
+
+	err := checkEKSContext("production", "cpo-ci-1-1-eks")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"production"`)
+	assert.Contains(t, err.Error(), `"cpo-ci-1-1-eks"`)
+
+	assert.Error(t, checkEKSContext("", ""))
+	assert.Error(t, checkEKSContext("prod-eks", "prod-eks"))
 }
 
 var _ = BeforeSuite(func() {
