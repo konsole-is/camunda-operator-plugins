@@ -63,7 +63,7 @@ These values are at the top level of the values, and every controller that is on
 | --- | --- | --- |
 | `mode` | `irsa` | How the pods of a cluster assume their AWS roles: `irsa` (IAM roles for service accounts) or `podIdentity` (EKS Pod Identity). aws-identity, aws-connectors-role, and aws-s3 read it. |
 | `region` | `""` | The AWS region of the API calls, of the KMS keys, and of a bucket whose request sets no region. Empty takes the region of the pod, such as `AWS_REGION`. When the pod has no region either, aws-kms and aws-s3 do not start, and aws-connectors-role does not start with `podIdentity`. |
-| `extraTags` | `{}` | Tags that go on each AWS object of the controllers, next to the tags of the request, for example `cost-center: platform`. A key cannot start with `aws:` or `camunda.io/`, and cannot hold a `=`. A value cannot hold a comma. At most 45 tags when aws-identity or aws-connectors-role is on, else 46, because the controllers put their own tags on each object too. |
+| `extraTags` | `{}` | Tags that go on each AWS object of the controllers, next to the tags of the request, for example `cost-center: platform`. A key cannot start with `aws:` or `camunda.io/`. |
 | `oidcProviderArn` | `""` | The IAM OIDC provider of the EKS cluster. aws-identity and aws-connectors-role need it with `irsa`. |
 | `eksClusterName` | `""` | The EKS cluster of the Pod Identity associations. aws-identity and aws-connectors-role need it with `podIdentity`. |
 | `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |
@@ -131,59 +131,36 @@ The PluginRegistrations that the controller wrote stay, and so do the AWS object
 
 ## Move from the five charts
 
-Before this chart, each AWS controller had its own chart: `aws-identity`, `aws-connectors-role`, `aws-kms`, `aws-ebs`, and `aws-s3`. To move to the chart `aws`, do these steps. The steps keep every key, role, bucket, and StorageClass. The clusters keep working during the move, with their roles, keys, and buckets. Only new claims, and changes and deletes of claims, wait.
+Before this chart, each AWS controller had its own chart: `aws-identity`, `aws-connectors-role`, `aws-kms`, `aws-ebs`, and `aws-s3`. These steps move to the chart `aws` and keep every key, role, bucket, and StorageClass. The clusters keep working during the move. Only new claims, and changes and deletes of claims, wait.
 
 1. Write the `values.yaml` of the chart `aws` from the values of each old release. Get them with `helm get values <release> --namespace camunda-operator-plugins`.
-    - Put each value of a controller under the block of that controller, as the table below shows. Set `enabled: true` in each block.
-    - Write the shared values once. When the old releases set different `extraTags`, write all their tags. The controllers then add the new tags to their AWS objects.
-    - Do not copy `image`, `resources`, or `serviceAccount.annotations` of the old releases. Step 2 gives `serviceAccount.annotations` its new value.
-    - Keep the same `roleNamePrefix` of `identity` and `connectorsRole`, the same `kms.aliasPrefix`, `region`, and `s3.partition`. Copy the whole `registrations` list of each old release. A changed role name prefix or region makes the controllers create new AWS objects. A change of another value, such as `extraTags`, changes the objects in place.
-    - When the old releases used different regions, install two releases of the chart `aws`, one for each region. See [Two releases](#two-releases).
-2. Give the ServiceAccount `aws` the [role of the controllers](#the-role-of-the-controllers), with the policies of the controllers that are on. That is a role that trusts `system:serviceaccount:camunda-operator-plugins:aws` (IRSA), or a Pod Identity association. You can make a new role, or add this trust and the other policies to one old controller role. Set the IRSA annotation in `values.yaml`. When `kms.keyAdministratorArns` names an old controller role that you will delete, put the new role there instead.
-3. Make sure that the chart accepts the values. The command fails with the message of the chart when it refuses them:
-
-    ```sh
-    helm template aws oci://ghcr.io/konsole-is/camunda-operator-plugins/charts/aws \
-      --version <version> --namespace camunda-operator-plugins -f values.yaml > /dev/null
-    ```
-
-4. Save the outputs of each request, to compare them after the move. The outputs hold the ARN or the name of each key, role, and bucket:
-
-    ```sh
-    kubectl get pluginrequests -A -o json |
-      jq -S '[.items[] | {namespace: .metadata.namespace, name: .metadata.name, outputs: .status.outputs}]' > outputs-before.json
-    ```
-
-5. Uninstall the old releases, and wait until their Pods are gone:
+    - Put each value of a controller under the block of that controller, as the table below shows, and set `enabled: true` in each block. Write the shared values once.
+    - Keep the same `roleNamePrefix` of `identity` and `connectorsRole`, the same `kms.aliasPrefix`, `region`, and `s3.partition`, and the whole `registrations` list of each old release. A changed role name prefix or region makes the controllers create new AWS objects.
+    - When the old releases used different regions, install one release of the chart `aws` for each region. See [Two releases](#two-releases).
+2. Give the ServiceAccount `aws` the [role of the controllers](#the-role-of-the-controllers), with the policies of the controllers that are on, and set its IRSA annotation in `values.yaml`.
+3. Uninstall the old releases, and wait until their Pods are gone:
 
     ```sh
     helm uninstall aws-identity aws-connectors-role aws-kms aws-ebs aws-s3 \
       --namespace camunda-operator-plugins --wait
     ```
 
-    The uninstall keeps every registration, request, Grant, and AWS object. Nothing serves the requests until step 6.
+    The uninstall keeps every registration, request, Grant, and AWS object. Nothing serves the requests until step 4.
 
-6. Install the chart `aws`. At startup, each controller writes its registrations again, with the ServiceAccount `aws`:
+4. Install the chart `aws`. At startup, each controller writes its registrations again, with the ServiceAccount `aws`:
 
     ```sh
     helm install aws oci://ghcr.io/konsole-is/camunda-operator-plugins/charts/aws \
       --version <version> --namespace camunda-operator-plugins -f values.yaml
     ```
 
-7. Check the result. Each registration names the ServiceAccount `aws` and is `Ready`, and each request is `Ready`. The outputs of each request are the same as in step 4, so the controllers created no new AWS object. A changed output names a new object: compare the values of step 1 with the old values again.
+5. Check the result. Each registration names the ServiceAccount `aws` and is `Ready`, and each request is `Ready` with the outputs that it had before the move:
 
     ```sh
     kubectl get pluginregistrations \
       -o custom-columns='NAME:.metadata.name,SERVICE ACCOUNT:.spec.serviceAccount.name,READY:.status.conditions[?(@.type=="Ready")].status'
     kubectl get pluginrequests -A
-    kubectl get pluginrequests -A -o json |
-      jq -S '[.items[] | {namespace: .metadata.namespace, name: .metadata.name, outputs: .status.outputs}]' |
-      diff outputs-before.json -
     ```
-
-8. When step 7 shows no change, delete the old controller roles that the role of step 2 does not use.
-
-If the Pod does not get ready after step 6, read its log, correct the value, and upgrade the release. To go back to the five charts, uninstall the release `aws` with `--wait`. Then install the old releases again, with their old values and their old chart version.
 
 The old values go to these new values:
 

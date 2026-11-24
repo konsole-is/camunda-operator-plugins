@@ -143,6 +143,7 @@ A red run of the night files the issue "Journeys failed on main", or adds a comm
 2. The release publishes the image and the chart of every plugin, all at version `X.Y.Z`.
 3. The release then opens a pull request on `konsole-is/camunda-operator`. That pull request sets the versions in the catalog of official plugins that the fleet manager shows. It stops when a chart of the catalog has no release at the new version.
 4. A prerelease, for example `v0.2.0-rc.1`, publishes the images and the charts, but it does not change the catalog.
+5. Until the catalog of the operator lists the chart `aws` in place of the five AWS charts, the catalog step of a full release stops. Until then, cut a prerelease, or run the workflow Catalog by hand after the catalog lists `aws`.
 
 The release opens the catalog pull request with a token of the GitHub App `camunda-operator-catalog`. To set up such an App, for example for a rebuilt repository:
 
