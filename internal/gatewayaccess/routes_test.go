@@ -256,7 +256,10 @@ func TestClusterRoutes_AddEachRouteFilterToEachRule(t *testing.T) {
 }
 
 func TestClusterRoutes_NoRouteFiltersGiveNoFilters(t *testing.T) {
-	httpRoute, grpcRoute := routesByKind(t, ClusterRoutes("orders-access", validParams(), testHosts(t), standaloneEndpoints()))
+	httpRoute, grpcRoute := routesByKind(
+		t,
+		ClusterRoutes("orders-access", validParams(), testHosts(t), standaloneEndpoints()),
+	)
 
 	for _, rule := range httpRoute.Spec.Rules {
 		assert.Nil(t, rule.Filters)

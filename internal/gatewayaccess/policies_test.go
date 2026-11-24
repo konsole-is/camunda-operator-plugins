@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package gatewayaccess
 
 import (
@@ -62,7 +61,11 @@ func templateParams(t *testing.T, templates string, extra map[string]any) Params
 func specOf(t *testing.T, templates string, allowedCIDRs any) map[string]any {
 	t.Helper()
 	p := templateParams(t, templates, map[string]any{"allowedCIDRs": allowedCIDRs})
-	got, refused := Policies(p, ClusterRoutes("orders-access", p, testHosts(t), standaloneEndpoints()), PolicyKinds{examplePolicy: true})
+	got, refused := Policies(
+		p,
+		ClusterRoutes("orders-access", p, testHosts(t), standaloneEndpoints()),
+		PolicyKinds{examplePolicy: true},
+	)
 	require.Nil(t, refused)
 	require.NotEmpty(t, got)
 	spec, _, err := unstructured.NestedMap(got[0].Object, "spec")
@@ -109,7 +112,11 @@ func TestPolicies_OnePolicyForEachTemplateAndRoute(t *testing.T) {
 
 func TestPolicies_PoliciesShareNoValue(t *testing.T) {
 	p := templateParams(t, allowlistTemplate, map[string]any{"allowedCIDRs": []any{"10.0.0.0/8"}})
-	got, refused := Policies(p, ClusterRoutes("orders-access", p, testHosts(t), standaloneEndpoints()), PolicyKinds{examplePolicy: true})
+	got, refused := Policies(
+		p,
+		ClusterRoutes("orders-access", p, testHosts(t), standaloneEndpoints()),
+		PolicyKinds{examplePolicy: true},
+	)
 	require.Nil(t, refused)
 	require.Len(t, got, 2)
 
@@ -123,7 +130,11 @@ func TestPolicies_PoliciesShareNoValue(t *testing.T) {
 
 func TestPolicies_NoTemplatesGiveNoPolicies(t *testing.T) {
 	p := validParams()
-	got, refused := Policies(p, ClusterRoutes("orders-access", p, testHosts(t), standaloneEndpoints()), PolicyKinds{examplePolicy: true})
+	got, refused := Policies(
+		p,
+		ClusterRoutes("orders-access", p, testHosts(t), standaloneEndpoints()),
+		PolicyKinds{examplePolicy: true},
+	)
 	assert.Nil(t, refused)
 	assert.Nil(t, got)
 }
@@ -204,7 +215,12 @@ func TestPolicies_RefusesAKindThatIsNotListed(t *testing.T) {
 }
 
 func TestPolicies_RefusesAListedKindThatWasNotServed(t *testing.T) {
-	got := refusalOf(t, allowlistTemplate, map[string]any{"allowedCIDRs": []any{"a"}}, PolicyKinds{examplePolicy: false})
+	got := refusalOf(
+		t,
+		allowlistTemplate,
+		map[string]any{"allowedCIDRs": []any{"a"}},
+		PolicyKinds{examplePolicy: false},
+	)
 	assert.Contains(t, got, ReasonPolicyKindNotInstalled+": ")
 	assert.Contains(t, got, "restart")
 }

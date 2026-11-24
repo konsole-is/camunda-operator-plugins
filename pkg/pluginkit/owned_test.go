@@ -78,7 +78,9 @@ func TestPrepareOwnedGivesANamespacedObjectAnOwnerReference(t *testing.T) {
 
 func TestPrepareOwnedKeepsTheKindOfAnUnstructuredObjectOutsideTheScheme(t *testing.T) {
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "ExamplePolicy"})
+	u.SetGroupVersionKind(
+		schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "ExamplePolicy"},
+	)
 	u.SetName("orders-access-policy-0")
 
 	got, err := prepareOwned(ownedRequest(), u, true, ownedScheme(t))

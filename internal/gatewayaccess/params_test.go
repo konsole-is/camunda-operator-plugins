@@ -37,7 +37,10 @@ func validParams() Params {
 
 func TestParams_KeepsEveryParameterForReferences(t *testing.T) {
 	var p Params
-	require.NoError(t, json.Unmarshal([]byte(`{"hostnamePattern":"{name}.x","allowedCIDRs":["10.0.0.0/8"],"limit":3}`), &p))
+	require.NoError(
+		t,
+		json.Unmarshal([]byte(`{"hostnamePattern":"{name}.x","allowedCIDRs":["10.0.0.0/8"],"limit":3}`), &p),
+	)
 	assert.Equal(t, "{name}.x", p.HostnamePattern)
 	assert.Equal(t, []any{"10.0.0.0/8"}, p.values["allowedCIDRs"])
 	assert.Equal(t, int64(3), p.values["limit"])

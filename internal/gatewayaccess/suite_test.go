@@ -59,7 +59,11 @@ var (
 
 // missingPolicyKind is a policy kind that the chart lists and that has no CRD
 // in the suite.
-var missingPolicyKind = schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "MissingPolicy"}
+var missingPolicyKind = schema.GroupVersionKind{
+	Group:   "policies.example.com",
+	Version: "v1alpha1",
+	Kind:    "MissingPolicy",
+}
 
 func TestGatewayAccess(t *testing.T) {
 	RegisterFailHandler(Fail)

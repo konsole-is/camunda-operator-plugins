@@ -456,7 +456,10 @@ func listPolicies(
 // StalePolicies returns the policies of live whose kind and name are not in
 // desired, except a policy whose target is a route of goingRoutes: it stays
 // until that route is gone.
-func StalePolicies(live, desired []*unstructured.Unstructured, goingRoutes []client.Object) []*unstructured.Unstructured {
+func StalePolicies(
+	live, desired []*unstructured.Unstructured,
+	goingRoutes []client.Object,
+) []*unstructured.Unstructured {
 	wanted := make(map[PolicyKey]bool, len(desired))
 	for _, obj := range desired {
 		wanted[KeyOfPolicy(obj)] = true

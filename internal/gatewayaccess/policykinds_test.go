@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package gatewayaccess
 
 import (
@@ -27,7 +26,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-var securityPolicy = schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "SecurityPolicy"}
+var securityPolicy = schema.GroupVersionKind{
+	Group:   "gateway.envoyproxy.io",
+	Version: "v1alpha1",
+	Kind:    "SecurityPolicy",
+}
 
 // failingMapper answers every lookup with an error that is not a missing
 // kind, as a failed discovery does.
@@ -40,7 +43,9 @@ func (failingMapper) RESTMapping(schema.GroupKind, ...string) (*meta.RESTMapping
 }
 
 func TestParsePolicyKinds_ReadsEachKindOfTheList(t *testing.T) {
-	got, err := ParsePolicyKinds("gateway.envoyproxy.io/v1alpha1/SecurityPolicy,security.istio.io/v1/AuthorizationPolicy")
+	got, err := ParsePolicyKinds(
+		"gateway.envoyproxy.io/v1alpha1/SecurityPolicy,security.istio.io/v1/AuthorizationPolicy",
+	)
 	require.NoError(t, err)
 	assert.Equal(t, []schema.GroupVersionKind{
 		securityPolicy,
@@ -82,7 +87,10 @@ func TestResolvePolicyKinds_MarksAServedKindAndAKindWithoutCRD(t *testing.T) {
 
 func TestResolvePolicyKinds_ServedInAnotherVersionOnlyIsNotServed(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper(nil)
-	mapper.Add(schema.GroupVersionKind{Group: securityPolicy.Group, Version: "v1", Kind: securityPolicy.Kind}, meta.RESTScopeNamespace)
+	mapper.Add(
+		schema.GroupVersionKind{Group: securityPolicy.Group, Version: "v1", Kind: securityPolicy.Kind},
+		meta.RESTScopeNamespace,
+	)
 
 	got, err := ResolvePolicyKinds(mapper, []schema.GroupVersionKind{securityPolicy})
 

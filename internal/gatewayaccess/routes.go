@@ -124,7 +124,10 @@ func httpRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 func httpFilters(p Params) []gatewayv1.HTTPRouteFilter {
 	var filters []gatewayv1.HTTPRouteFilter
 	for _, ref := range p.RouteFilters {
-		filters = append(filters, gatewayv1.HTTPRouteFilter{Type: gatewayv1.HTTPRouteFilterExtensionRef, ExtensionRef: &ref})
+		filters = append(
+			filters,
+			gatewayv1.HTTPRouteFilter{Type: gatewayv1.HTTPRouteFilterExtensionRef, ExtensionRef: &ref},
+		)
 	}
 	return filters
 }
@@ -157,7 +160,10 @@ func grpcRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 func grpcFilters(p Params) []gatewayv1.GRPCRouteFilter {
 	var filters []gatewayv1.GRPCRouteFilter
 	for _, ref := range p.RouteFilters {
-		filters = append(filters, gatewayv1.GRPCRouteFilter{Type: gatewayv1.GRPCRouteFilterExtensionRef, ExtensionRef: &ref})
+		filters = append(
+			filters,
+			gatewayv1.GRPCRouteFilter{Type: gatewayv1.GRPCRouteFilterExtensionRef, ExtensionRef: &ref},
+		)
 	}
 	return filters
 }

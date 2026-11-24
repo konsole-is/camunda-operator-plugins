@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package gatewayaccess
 
 import (
@@ -133,7 +132,11 @@ func TestPolicyWaiting_RejectedPolicyGivesTheReasonOfTheController(t *testing.T)
 
 // onlyFirstWaiting returns the waiting of desired when only desired[0] has
 // the live copy first and desired[1] is accepted.
-func onlyFirstWaiting(t *testing.T, desired []*unstructured.Unstructured, first *unstructured.Unstructured) (int, string, string) {
+func onlyFirstWaiting(
+	t *testing.T,
+	desired []*unstructured.Unstructured,
+	first *unstructured.Unstructured,
+) (int, string, string) {
 	t.Helper()
 	live := livePolicies(livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)))
 	if first != nil {
@@ -149,7 +152,11 @@ func TestPolicyWaiting_MissingPolicyIsPending(t *testing.T) {
 	accepted, reason, message := onlyFirstWaiting(t, desiredPolicies(t), nil)
 	assert.Equal(t, 1, accepted)
 	assert.Equal(t, "Pending", reason)
-	assert.Equal(t, "ExamplePolicy orders-access-policy-0 waits for the controller example.com/gateway to accept it", message)
+	assert.Equal(
+		t,
+		"ExamplePolicy orders-access-policy-0 waits for the controller example.com/gateway to accept it",
+		message,
+	)
 }
 
 func TestPolicyWaiting_PolicyWithoutAReportIsPending(t *testing.T) {
@@ -210,7 +217,10 @@ func TestPolicyWaiting_LiveCopyWithAnotherSpecIsPending(t *testing.T) {
 func TestPolicyWaiting_LiveCopyWithAnotherListIsPending(t *testing.T) {
 	desired := desiredPolicies(t)
 	changed := livePolicy(t, desired[0], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1))
-	require.NoError(t, unstructured.SetNestedSlice(changed.Object, []any{"10.0.0.0/8", "192.168.0.0/16"}, "spec", "allowed"))
+	require.NoError(
+		t,
+		unstructured.SetNestedSlice(changed.Object, []any{"10.0.0.0/8", "192.168.0.0/16"}, "spec", "allowed"),
+	)
 
 	_, reason, _ := onlyFirstWaiting(t, desired, changed)
 
@@ -221,7 +231,10 @@ func TestPolicyWaiting_DefaultedFieldsOfTheLiveCopyDoNotCount(t *testing.T) {
 	desired := desiredPolicies(t)
 	defaulted := livePolicy(t, desired[0], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1))
 	require.NoError(t, unstructured.SetNestedField(defaulted.Object, int64(30), "spec", "timeout"))
-	live := livePolicies(defaulted, livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)))
+	live := livePolicies(
+		defaulted,
+		livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)),
+	)
 
 	accepted, waiting := PolicyWaiting(desired, live, testController)
 

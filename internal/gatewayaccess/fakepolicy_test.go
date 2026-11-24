@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package gatewayaccess_test
 
 import (
@@ -33,7 +32,11 @@ import (
 )
 
 // examplePolicyKind is the kind of testdata/crds/examplepolicies.yaml.
-var examplePolicyKind = schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "ExamplePolicy"}
+var examplePolicyKind = schema.GroupVersionKind{
+	Group:   "policies.example.com",
+	Version: "v1alpha1",
+	Kind:    "ExamplePolicy",
+}
 
 // The verdicts of the fake policy controller for a policy name.
 const (
