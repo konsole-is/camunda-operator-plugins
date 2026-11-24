@@ -7,10 +7,11 @@
 # Usage: eks-cluster.sh <run-id>
 #
 # Before its first create, it arms a one-time schedule that deletes the
-# cluster, and after the node a second one that terminates the node. The node
-# also shuts itself down, which terminates it. So the cluster and the node go
-# within three hours also when no cleanup of the run runs. Remove the run with
-# eks-teardown.sh, also when this script fails half way.
+# cluster 160 minutes after the start of the script. After the node, a second
+# one terminates the node 150 minutes after the start, and the node shuts
+# itself down a few minutes before that. So the node and then the cluster go
+# also when no cleanup of the run runs. Remove the run with eks-teardown.sh,
+# also when this script fails half way.
 #
 # Inputs (the environment aws-eks sets each AWS_EKS_* variable):
 #   AWS_REGION, AWS_EKS_VPC_ID, AWS_EKS_SUBNET_IDS (comma-separated),
@@ -28,6 +29,9 @@ readonly nodes=1 max_nodes=2 lifetime_minutes=150
 # The node goes first, so that the delete of the cluster finds no node that
 # holds its security group.
 readonly cluster_lifetime_minutes=$((lifetime_minutes + 10))
+# The node runs its user data some minutes after run-instances, so it shuts
+# itself down this much before the end of its schedule.
+readonly boot_minutes=5
 readonly group=cpo-sandbox-eks
 
 run=${1:-}
@@ -44,15 +48,18 @@ for input in AWS_REGION AWS_EKS_VPC_ID AWS_EKS_SUBNET_IDS AWS_EKS_CLUSTER_ROLE_A
 done
 IFS=, read -r -a subnets <<< "${AWS_EKS_SUBNET_IDS}"
 tags=(--tags "cpo-ci-run=${run}")
+start=$(date +%s)
+node_end=$((start + lifetime_minutes * 60))
+cluster_end=$((start + cluster_lifetime_minutes * 60))
 work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 
-# schedule <name> <minutes> <API action> <input JSON> arms a one-time
-# schedule that calls the action of the AWS SDK once, and then deletes
-# itself.
+# schedule <name> <epoch seconds> <API action> <input JSON> arms a one-time
+# schedule that calls the action of the AWS SDK once at that time, and then
+# deletes itself.
 schedule() {
   local at
-  at=$(date -u -d "+$2 min" +%Y-%m-%dT%H:%M:%S)
+  at=$(date -u -d "@$2" +%Y-%m-%dT%H:%M:%S)
   aws scheduler create-schedule --name "$1" --group-name "${group}" \
     --schedule-expression "at(${at})" --schedule-expression-timezone UTC \
     --flexible-time-window Mode=OFF --action-after-completion DELETE \
@@ -88,7 +95,7 @@ ami=$(aws ssm get-parameter --output json \
   jq -r .Parameter.Value)
 
 echo "==> Arming the delete of the cluster ${run} in ${cluster_lifetime_minutes} minutes"
-schedule "${run}-delete-cluster" "${cluster_lifetime_minutes}" eks:deleteCluster "$(jq -cn --arg n "${run}" '{name: $n}')"
+schedule "${run}-delete-cluster" "${cluster_end}" eks:deleteCluster "$(jq -cn --arg n "${run}" '{name: $n}')"
 
 echo "==> Creating the EKS cluster ${run} (Kubernetes ${version})"
 aws eks create-cluster --name "${run}" --kubernetes-version "${version}" --role-arn "${AWS_EKS_CLUSTER_ROLE_ARN}" \
@@ -116,6 +123,8 @@ aws eks create-addon --cluster-name "${run}" --addon-name aws-ebs-csi-driver --a
 
 # The script part arms the end of the node first. nodeadm reads the
 # NodeConfig part, and Elasticsearch needs the kernel limit.
+shutdown_minutes=$(((node_end - $(date +%s)) / 60 - boot_minutes))
+[ "${shutdown_minutes}" -ge 1 ] || shutdown_minutes=1
 cat > "${work}/user-data" << EOF
 MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary="BOUNDARY"
@@ -124,7 +133,7 @@ Content-Type: multipart/mixed; boundary="BOUNDARY"
 Content-Type: text/x-shellscript; charset="us-ascii"
 
 #!/bin/bash
-shutdown -h +${lifetime_minutes}
+shutdown -h +${shutdown_minutes}
 sysctl -w vm.max_map_count=262144
 
 --BOUNDARY
@@ -167,7 +176,7 @@ for subnet in "${subnets[@]:0:2}"; do
   grep -q InsufficientInstanceCapacity "${work}/err" || exit 1
 done
 [ -n "${instance}" ] || { echo "no zone had capacity for ${AWS_EKS_INSTANCE_TYPE}" >&2; exit 1; }
-schedule "${run}-terminate-nodes" "${lifetime_minutes}" ec2:terminateInstances \
+schedule "${run}-terminate-nodes" "${node_end}" ec2:terminateInstances \
   "$(jq -cn --arg id "${instance}" '{InstanceIds: [$id]}')"
 
 echo "==> Waiting for the node ${instance}"

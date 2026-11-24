@@ -30,7 +30,9 @@ case "$1 $2" in
   "ec2 run-instances") echo '{"Instances": [{"InstanceId": "i-1"}]}' ;;
   "scheduler create-schedule" | "eks create-cluster" | "eks create-access-entry" | \
     "eks create-pod-identity-association" | "eks create-addon") echo '{}' ;;
-  "eks wait" | "eks update-kubeconfig") ;;
+  # The cluster takes ELAPSED seconds of the clock of the stub date.
+  "eks wait") [ "$3" != cluster-active ] || echo "${ELAPSED:-0}" > "$STUB/offset" ;;
+  "eks update-kubeconfig") ;;
   *) echo "unexpected call: aws $*" >&2; exit 3 ;;
 esac
 EOF
@@ -39,7 +41,17 @@ cat > "$stub/kubectl" << 'EOF'
 echo "kubectl $*" >> "$STUB/calls"
 [ "$1" != get ] || echo node/ip-10-42-0-1
 EOF
-chmod +x "$stub/aws" "$stub/kubectl"
+# date +%s reads a clock that the stub aws can move forward.
+real_date=$(command -v date)
+cat > "$stub/date" << EOF
+#!/usr/bin/env bash
+if [ "\$*" = +%s ]; then
+  echo \$((\$("$real_date" +%s) + \$(cat "$stub/offset" 2> /dev/null || echo 0)))
+else
+  exec "$real_date" "\$@"
+fi
+EOF
+chmod +x "$stub/aws" "$stub/kubectl" "$stub/date"
 export PATH="$stub:$PATH" STUB=$stub AWS_REGION=eu-west-1 AWS_EKS_VPC_ID=vpc-1 \
   AWS_EKS_SUBNET_IDS=subnet-1,subnet-2 AWS_EKS_CLUSTER_ROLE_ARN=arn:aws:iam::1:role/cluster \
   AWS_EKS_NODE_ROLE_ARN=arn:aws:iam::1:role/node AWS_EKS_NODE_PROFILE=node \
@@ -54,7 +66,7 @@ fail() {
 
 schema='{"properties": {"controller": {"properties": {"env": {"type": "array"}, "extraVolumeTags": {"type": "object"}}}}}'
 reset() {
-  rm -f "$stub/calls" "$stub/user-data"
+  rm -f "$stub/calls" "$stub/user-data" "$stub/offset"
   echo "$schema" > "$stub/schema.json"
   echo '{"Reservations": []}' > "$stub/instances.json"
 }
@@ -110,7 +122,7 @@ for want in "--count 1" "--instance-type t3.xlarge" "--image-id ami-1" "--subnet
   "--instance-initiated-shutdown-behavior terminate" "DeleteOnTermination=true" "VolumeType=gp3"; do
   [[ $run == *"$want"* ]] || fail "$name" "'$run' lacks '$want'"
 done
-for want in "shutdown -h +150" "vm.max_map_count=262144" "kind: NodeConfig" "name: cpo-ci-1-1-1" \
+for want in "shutdown -h +" "vm.max_map_count=262144" "kind: NodeConfig" "name: cpo-ci-1-1-1" \
   "apiServerEndpoint: https://abc.eks.example" "certificateAuthority: Q0E=" "cidr: 10.100.0.0/16"; do
   grep -qF -e "$want" "$stub/user-data" 2> /dev/null || fail "$name" "the user data lacks '$want'"
 done
@@ -161,5 +173,31 @@ AWS_EKS_SCHEDULER_ROLE_ARN='' "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2>
 code=$?
 [ "$code" -eq 2 ] || fail "$name" "exit $code, want 2"
 [ ! -s "$stub/calls" ] || fail "$name" "called: $(cat "$stub/calls")"
+
+# at_of <schedule name> prints the time of the schedule in epoch seconds.
+at_of() {
+  local at
+  at=$(grep -F -- "--name $1 " "$stub/calls" | grep -oE 'at\([0-9T:-]+\)' | tr -d 'at()')
+  [ -z "$at" ] || date -u -d "${at}Z" +%s
+}
+
+for elapsed in 0 1500 6000; do
+  name="the node ends before the cluster after $elapsed seconds of cluster creation"
+  reset
+  before=$(date +%s)
+  ELAPSED=$elapsed "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2>&1 || fail "$name" "the script failed"
+  node=$(at_of cpo-ci-1-1-1-terminate-nodes)
+  cluster=$(at_of cpo-ci-1-1-1-delete-cluster)
+  shutdown=$(grep -oE 'shutdown -h \+[0-9]+' "$stub/user-data" | grep -oE '[0-9]+$')
+  if [ -z "$node" ] || [ -z "$cluster" ] || [ -z "$shutdown" ]; then
+    fail "$name" "no schedule or no shutdown"
+    continue
+  fi
+  [ "$node" -lt "$cluster" ] || fail "$name" "the node schedule $node is not before the cluster schedule $cluster"
+  [ $((cluster - node)) -eq 600 ] || fail "$name" "the cluster schedule is $((cluster - node)) s after the node schedule, want 600"
+  [ $((node - before)) -le $((150 * 60 + 5)) ] || fail "$name" "the node schedule is $((node - before)) s after the start, want 150 minutes"
+  [ $((before + elapsed + shutdown * 60)) -lt "$node" ] ||
+    fail "$name" "the node shuts down after $shutdown minutes, after its schedule"
+done
 
 exit "$failed"
