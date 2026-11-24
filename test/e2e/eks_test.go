@@ -23,10 +23,12 @@ import (
 	"os/exec"
 	"path"
 	"strings"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -60,12 +62,15 @@ const (
 	// take before the pods of its ServiceAccount get credentials.
 	credentialsTimeout = 3 * time.Minute
 
-	// The bounds of the specs add up to 23 minutes, the suite timeout of the
-	// eks journey in test/e2e/run.sh, so a slow spec fails with its own
-	// message and the specs after it still run.
-	eksRequestsTimeout   = 4 * time.Minute
-	eksClaimReadyTimeout = 10 * time.Minute
-	eksDeletionTimeout   = 4 * time.Minute
+	// The bounds of the specs add up to 25 minutes, the suite timeout of the
+	// eks journey in test/e2e/run.sh: 3 for the requests, 10 for the claim,
+	// credentialsTimeout and a last pod of up to podTimeout, podTimeout for
+	// the pod without credentials, and 3 and 2 for the delete. So a slow spec
+	// fails with its own message and the specs after it still run.
+	eksRequestsTimeout     = 3 * time.Minute
+	eksClaimReadyTimeout   = 10 * time.Minute
+	eksDeletionTimeout     = 3 * time.Minute
+	eksStorageClassTimeout = 2 * time.Minute
 )
 
 // eksBrokerStorage is the size of the broker volume. An EBS volume has its
@@ -207,7 +212,7 @@ var _ = Describe("the EKS proof", Ordered, ContinueOnFailure, Label(labelEKS), f
 		Eventually(func(g Gomega) {
 			err := k8s.Get(ctx, client.ObjectKey{Name: class}, &storagev1.StorageClass{})
 			g.Expect(err).To(Satisfy(apierrors.IsNotFound), "the StorageClass %s is still there", class)
-		}, eksDeletionTimeout, 10*time.Second).Should(Succeed())
+		}, eksStorageClassTimeout, 10*time.Second).Should(Succeed())
 	})
 })
 
@@ -358,4 +363,12 @@ func describeNamespace(namespace string) string {
 	}
 
 	return b.String()
+}
+
+func TestEKSBrokerStorage(t *testing.T) {
+	// The broker allocates a journal segment of 1 GiB at its start, and the
+	// EBS CSI role of the sandbox refuses a volume above 10 GiB.
+	size := eksBrokerStorage.String()
+	assert.GreaterOrEqual(t, eksBrokerStorage.Cmp(resource.MustParse("2Gi")), 0, "the broker volume %s", size)
+	assert.LessOrEqual(t, eksBrokerStorage.Cmp(resource.MustParse("10Gi")), 0, "the broker volume %s", size)
 }

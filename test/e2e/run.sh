@@ -66,7 +66,7 @@ case $journey in
   # A job of 120m: 13m setup, 70m go test, 3m logs, 14m cleanup = 100m.
   aws) suite_timeout=65m test_timeout=70m ;;
   # A step of 45m: 18m images, charts, ECK, and plugin, 27m go test.
-  eks) suite_timeout=23m test_timeout=27m ;;
+  eks) suite_timeout=25m test_timeout=27m ;;
   # A job of 90m: 13m setup, 65m go test, 3m logs = 81m.
   *) suite_timeout=60m test_timeout=65m ;;
 esac
