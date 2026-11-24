@@ -94,18 +94,10 @@ data "aws_iam_policy_document" "storage" {
 # anonymously, which ECR Public limits. The boundary and the permissions of
 # the CI role both hold it.
 data "aws_iam_policy_document" "registry_login" {
+  # No sts:AWSServiceName condition: ECR Public refuses the login with it.
   statement {
-    actions   = ["ecr-public:GetAuthorizationToken"]
+    actions   = ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"]
     resources = ["*"]
-  }
-  statement {
-    actions   = ["sts:GetServiceBearerToken"]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "sts:AWSServiceName"
-      values   = ["ecr-public.amazonaws.com"]
-    }
   }
 }
 
