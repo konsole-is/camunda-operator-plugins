@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -65,6 +67,11 @@ type Options struct {
 	ReportCertificateExpiry bool
 	// Resync is the pluginkit.Config.Resync of the plugin.
 	Resync time.Duration
+	// PolicyKinds are the kinds that a policy template can have, from the
+	// chart value policyKinds. A kind that the cluster does not serve when
+	// the manager starts is used after a restart. NewManager refuses a
+	// cluster-scoped kind.
+	PolicyKinds []schema.GroupVersionKind
 }
 
 // NewManager returns a manager for cfg that publishes and serves the
@@ -96,18 +103,40 @@ func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 		return nil, fmt.Errorf("creating the manager: %w", err)
 	}
 
+	kinds, err := ResolvePolicyKinds(mgr.GetRESTMapper(), opts.PolicyKinds)
+	if err != nil {
+		return nil, fmt.Errorf("resolving the policy kinds: %w", err)
+	}
+
+	// A change of a policy, also of its status, reconciles its request.
+	owns := []client.Object{&gatewayv1.HTTPRoute{}, &gatewayv1.GRPCRoute{}}
+	for _, gvk := range kinds.sorted() {
+		if !kinds[gvk] {
+			mgr.GetLogger().Info(
+				"Found no CRD for a policy kind, so its requests wait for a restart of the controller",
+				"kind", gvk.String(),
+			)
+			continue
+		}
+
+		kind := &unstructured.Unstructured{}
+		kind.SetGroupVersionKind(gvk)
+		owns = append(owns, kind)
+	}
+
 	plugin := &Plugin{
 		client:                  mgr.GetClient(),
 		reader:                  mgr.GetAPIReader(),
 		reportCertificateExpiry: opts.ReportCertificateExpiry,
 		now:                     time.Now,
+		policyKinds:             kinds,
 	}
 	if err := pluginkit.Setup(mgr, pluginkit.Config{
 		Name:           name,
 		Version:        version.Version(),
 		Registrations:  opts.Registrations,
 		ServiceAccount: opts.ServiceAccount,
-		Owns:           []client.Object{&gatewayv1.HTTPRoute{}, &gatewayv1.GRPCRoute{}},
+		Owns:           owns,
 		Watches:        watches(mgr.GetClient()),
 		Resync:         opts.Resync,
 	}, plugin); err != nil {

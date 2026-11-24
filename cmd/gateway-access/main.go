@@ -76,6 +76,11 @@ func main() {
 		"/etc/plugin/registrations.yaml",
 		"The file of the registrations that the plugin publishes and serves.",
 	)
+	policyKinds := flag.String(
+		"policy-kinds",
+		"",
+		"The policy kinds that the plugin can write, as <apiVersion>/<kind>, separated by commas.",
+	)
 	zapOpts := zap.Options{}
 	zapOpts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -91,6 +96,11 @@ func main() {
 	var err error
 	if opts.Registrations, err = pluginkit.LoadRegistrations(*registrations); err != nil {
 		log.Error(err, "Could not load the registrations")
+		os.Exit(1)
+	}
+
+	if opts.PolicyKinds, err = gatewayaccess.ParsePolicyKinds(*policyKinds); err != nil {
+		log.Error(err, "Could not read the policy kinds")
 		os.Exit(1)
 	}
 

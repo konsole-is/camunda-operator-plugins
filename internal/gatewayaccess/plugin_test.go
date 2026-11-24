@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,4 +76,50 @@ func TestDeleteRoutes_DeletesOnlyTheListedRoute(t *testing.T) {
 	assert.True(t, apierrors.IsConflict(err), err)
 	require.NotNil(t, preconditions)
 	assert.Equal(t, listed.UID, *preconditions.UID)
+}
+
+// policyTargeting returns a policy of the kind gvk named name whose target is
+// the route of kind and route.
+func policyTargeting(gvk schema.GroupVersionKind, name, kind, route string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{
+		"targetRefs": []any{map[string]any{"group": gatewayv1.GroupName, "kind": kind, "name": route}},
+	}}}
+	u.SetGroupVersionKind(gvk)
+	u.SetName(name)
+	return u
+}
+
+func TestStalePolicies_ReturnsPoliciesThatAreNotWanted(t *testing.T) {
+	keep := policyTargeting(examplePolicy, "a-policy-0", "HTTPRoute", "a")
+	drop := policyTargeting(examplePolicy, "a-policy-1", "HTTPRoute", "a")
+
+	got := StalePolicies([]*unstructured.Unstructured{keep, drop}, []*unstructured.Unstructured{keep}, nil)
+
+	assert.Equal(t, []*unstructured.Unstructured{drop}, got)
+}
+
+func TestStalePolicies_KeepsThePolicyOfARouteThatIsStillGoing(t *testing.T) {
+	policy := policyTargeting(examplePolicy, "a-optimize-policy-0", "HTTPRoute", "a-optimize")
+	going := []client.Object{&gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "a-optimize"}}}
+
+	assert.Empty(t, StalePolicies([]*unstructured.Unstructured{policy}, nil, going))
+}
+
+func TestStalePolicies_TheGoingRouteOfAnotherKindDoesNotKeepIt(t *testing.T) {
+	policy := policyTargeting(examplePolicy, "a-policy-0", "HTTPRoute", "a")
+	going := []client.Object{&gatewayv1.GRPCRoute{ObjectMeta: metav1.ObjectMeta{Name: "a"}}}
+
+	got := StalePolicies([]*unstructured.Unstructured{policy}, nil, going)
+
+	assert.Equal(t, []*unstructured.Unstructured{policy}, got)
+}
+
+func TestStalePolicies_SameNameOfAnotherKindIsStale(t *testing.T) {
+	other := schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "OtherPolicy"}
+	live := policyTargeting(examplePolicy, "a-policy-0", "HTTPRoute", "a")
+	desired := policyTargeting(other, "a-policy-0", "HTTPRoute", "a")
+
+	got := StalePolicies([]*unstructured.Unstructured{live}, []*unstructured.Unstructured{desired}, nil)
+
+	assert.Equal(t, []*unstructured.Unstructured{live}, got)
 }

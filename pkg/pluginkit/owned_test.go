@@ -25,7 +25,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
@@ -72,6 +74,22 @@ func TestPrepareOwnedGivesANamespacedObjectAnOwnerReference(t *testing.T) {
 	}}, got.GetOwnerReferences())
 	assert.Equal(t, "ConfigMap", got.GetKind())
 	assert.Empty(t, cm.Labels, "the object of the plugin stays as it was")
+}
+
+func TestPrepareOwnedKeepsTheKindOfAnUnstructuredObjectOutsideTheScheme(t *testing.T) {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "ExamplePolicy"})
+	u.SetName("orders-access-policy-0")
+
+	got, err := prepareOwned(ownedRequest(), u, true, ownedScheme(t))
+
+	require.NoError(t, err)
+	assert.Equal(t, "policies.example.com/v1alpha1", got.GetAPIVersion())
+	assert.Equal(t, "ExamplePolicy", got.GetKind())
+	assert.Equal(t, "team-a", got.GetNamespace())
+	assert.Equal(t, wantLabels(nil), got.GetLabels())
+	require.Len(t, got.GetOwnerReferences(), 1)
+	assert.Equal(t, ownedRequest().UID, got.GetOwnerReferences()[0].UID)
 }
 
 func TestPrepareOwnedGivesAClusterScopedObjectTheLabelsOnly(t *testing.T) {

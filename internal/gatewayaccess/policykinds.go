@@ -19,6 +19,8 @@ package gatewayaccess
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -29,6 +31,14 @@ import (
 // for a kind that the cluster served when the controller started. A kind that
 // is not a key is not allowed.
 type PolicyKinds map[schema.GroupVersionKind]bool
+
+// sorted returns the kinds of k, sorted so that a setup and a list run in the
+// same order each time.
+func (k PolicyKinds) sorted() []schema.GroupVersionKind {
+	return slices.SortedFunc(maps.Keys(k), func(a, b schema.GroupVersionKind) int {
+		return strings.Compare(a.String(), b.String())
+	})
+}
 
 // ParsePolicyKinds reads the value of the flag -policy-kinds: a list of
 // <apiVersion>/<kind>, separated by commas. Each apiVersion needs a group. An

@@ -154,9 +154,11 @@ type Config struct {
 	// ServiceAccount is the ServiceAccount of the plugin controller.
 	ServiceAccount pluginsv1alpha1.ServiceAccountRef
 	// Owns holds one object of each kind that the plugin returns in
-	// Result.Objects. A change to an object of a namespaced kind reconciles
-	// its request again. A request with the deletion policy Orphan releases
-	// the objects of the namespaced kinds.
+	// Result.Objects. A kind outside the scheme of the manager is an
+	// *unstructured.Unstructured with its apiVersion and kind set. A change to
+	// an object of a namespaced kind reconciles its request again. A request
+	// with the deletion policy Orphan releases the objects of the namespaced
+	// kinds.
 	Owns []client.Object
 	// Health checks the plugin, for example its cloud credentials. It sets
 	// Ready of each registration. Nil is always healthy.
