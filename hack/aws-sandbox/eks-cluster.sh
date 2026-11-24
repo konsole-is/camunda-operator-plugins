@@ -18,6 +18,8 @@
 #   AWS_EKS_CLUSTER_ROLE_ARN, AWS_EKS_NODE_ROLE_ARN, AWS_EKS_NODE_PROFILE,
 #   AWS_EKS_CSI_ROLE_ARN, AWS_EKS_SCHEDULER_ROLE_ARN, AWS_EKS_INSTANCE_TYPE
 #   (required), and the credentials of the role cpo-sandbox-eks
+#   AWS_EKS_PUBLIC_CIDR     the one address, as <IPv4>/32, that may reach the
+#                           public endpoint of the cluster (required).
 #   EKS_KUBERNETES_VERSION  the Kubernetes version (optional; empty is the
 #                           default version of EKS)
 #   KUBECONFIG              the kubeconfig file to write (optional)
@@ -43,12 +45,16 @@ if ! [[ ${run} =~ ^cpo-ci-[a-z0-9-]{1,40}$ ]]; then
   exit 2
 fi
 for input in AWS_REGION AWS_EKS_VPC_ID AWS_EKS_SUBNET_IDS AWS_EKS_CLUSTER_ROLE_ARN AWS_EKS_NODE_ROLE_ARN \
-  AWS_EKS_NODE_PROFILE AWS_EKS_CSI_ROLE_ARN AWS_EKS_SCHEDULER_ROLE_ARN AWS_EKS_INSTANCE_TYPE; do
+  AWS_EKS_NODE_PROFILE AWS_EKS_CSI_ROLE_ARN AWS_EKS_SCHEDULER_ROLE_ARN AWS_EKS_INSTANCE_TYPE AWS_EKS_PUBLIC_CIDR; do
   if [ -z "${!input:-}" ]; then
     echo "${input} is not set" >&2
     exit 2
   fi
 done
+if ! [[ ${AWS_EKS_PUBLIC_CIDR} =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/32$ ]]; then
+  echo "AWS_EKS_PUBLIC_CIDR is not one IPv4 address as <address>/32: ${AWS_EKS_PUBLIC_CIDR}" >&2
+  exit 2
+fi
 IFS=, read -r -a subnets <<< "${AWS_EKS_SUBNET_IDS}"
 tags=(--tags "cpo-ci-run=${run}")
 start=$(date +%s)
@@ -91,6 +97,12 @@ cluster_status() {
 
 addon_status() {
   aws eks describe-addon --cluster-name "${run}" --addon-name "$1" --output json | jq -r .addon.status
+}
+
+# node_conditions prints the taints and the conditions of each node, and not
+# its addresses, which hold its public IP.
+node_conditions() {
+  kubectl get nodes -o json | jq '[.items[] | {name: .metadata.name, taints: .spec.taints, conditions: .status.conditions}]'
 }
 
 # node_state prints "schedulable" when a node is Ready and has no taint of a
@@ -146,7 +158,7 @@ schedule "${run}-delete-cluster" "${cluster_end}" eks:deleteCluster "$(jq -cn --
 
 echo "==> Creating the EKS cluster ${run} (Kubernetes ${version})"
 aws eks create-cluster --name "${run}" --kubernetes-version "${version}" --role-arn "${AWS_EKS_CLUSTER_ROLE_ARN}" \
-  --resources-vpc-config "subnetIds=${AWS_EKS_SUBNET_IDS},endpointPublicAccess=true,endpointPrivateAccess=true" \
+  --resources-vpc-config "subnetIds=${AWS_EKS_SUBNET_IDS},endpointPublicAccess=true,endpointPrivateAccess=true,publicAccessCidrs=${AWS_EKS_PUBLIC_CIDR}" \
   --access-config authenticationMode=API,bootstrapClusterCreatorAdminPermissions=true \
   --upgrade-policy supportType=STANDARD "${tags[@]}" > /dev/null
 wait_for "${cluster_wait}" ACTIVE FAILED cluster_status ||
@@ -230,7 +242,7 @@ aws eks update-kubeconfig --name "${run}" --alias "${run}" > /dev/null
 # The node becomes Ready with the VPC CNI and kube-proxy, which EKS installs
 # with the cluster.
 wait_for "${node_wait}" schedulable "" node_state ||
-  fail_with "The node ${instance} did not become Ready:" kubectl describe nodes
+  fail_with "The node ${instance} did not become Ready:" node_conditions
 kubectl rollout status deployment/coredns -n kube-system --timeout="${dns_wait}s" ||
   fail_with "CoreDNS did not become ready:" kubectl describe pods -n kube-system -l k8s-app=kube-dns
 

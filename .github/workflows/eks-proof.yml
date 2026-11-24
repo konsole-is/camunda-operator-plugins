@@ -72,6 +72,12 @@ jobs:
       - name: Point kubectl at a file of the run
         run: echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "${GITHUB_ENV}"
 
+      # The public endpoint of the cluster answers only this runner.
+      - name: Find the address of the runner
+        run: |
+          address=$(curl -fsS --retry 5 --retry-all-errors https://checkip.amazonaws.com)
+          echo "AWS_EKS_PUBLIC_CIDR=${address}/32" >> "${GITHUB_ENV}"
+
       - name: Get the credentials of the EKS role
         id: aws
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -106,7 +112,7 @@ jobs:
         if: ${{ failure() && steps.cluster.outcome != 'skipped' }}
         timeout-minutes: 5
         run: |
-          kubectl get nodes -o wide || true
+          kubectl get nodes || true
           kubectl get pods -A -o wide || true
           kubectl get camundaclusterclaims,pluginrequests,pluginregistrations,grants -A -o yaml || true
           kubectl get camundaclusters,elasticsearchclusters,storageclasses,pvc,pv -A -o yaml || true

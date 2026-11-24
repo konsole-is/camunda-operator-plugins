@@ -82,12 +82,13 @@ echo "kubectl $*" >> "$STUB/calls"
 case $1 in
   get)
     if [ -n "${FAIL_NODE:-}" ]; then
-      echo '{"items": [{"spec": {"taints": [{"key": "node.kubernetes.io/not-ready"}]}, "status": {"conditions": [{"type": "Ready", "status": "False"}]}}]}'
+      echo '{"items": [{"metadata": {"name": "ip-10-0-0-1"}, "spec": {"taints": [{"key": "node.kubernetes.io/not-ready"}]},
+        "status": {"conditions": [{"type": "Ready", "status": "False", "reason": "KubeletNotReady"}],
+        "addresses": [{"type": "ExternalIP", "address": "198.51.100.9"}]}}]}'
     else
       echo '{"items": [{"spec": {}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]}'
     fi
     ;;
-  describe) echo "Ready False KubeletNotReady container runtime network not ready" ;;
 esac
 EOF
 # date +%s reads a clock that the stub aws can move forward.
@@ -110,7 +111,7 @@ export PATH="$stub:$PATH" STUB=$stub AWS_REGION=eu-west-1 AWS_EKS_VPC_ID=vpc-1 \
   AWS_EKS_SUBNET_IDS=subnet-1,subnet-2 AWS_EKS_CLUSTER_ROLE_ARN=arn:aws:iam::1:role/cluster \
   AWS_EKS_NODE_ROLE_ARN=arn:aws:iam::1:role/node AWS_EKS_NODE_PROFILE=node \
   AWS_EKS_CSI_ROLE_ARN=arn:aws:iam::1:role/csi AWS_EKS_SCHEDULER_ROLE_ARN=arn:aws:iam::1:role/scheduler \
-  AWS_EKS_INSTANCE_TYPE=t3.xlarge KUBECONFIG=$stub/kubeconfig
+  AWS_EKS_INSTANCE_TYPE=t3.xlarge AWS_EKS_PUBLIC_CIDR=203.0.113.7/32 KUBECONFIG=$stub/kubeconfig
 
 failed=0
 fail() {
@@ -165,7 +166,8 @@ done
 name="the cluster"
 cluster=$(call "aws eks create-cluster")
 for want in "--name cpo-ci-1-1-1" "--kubernetes-version 1.34" "supportType=STANDARD" "authenticationMode=API" \
-  "bootstrapClusterCreatorAdminPermissions=true" "subnetIds=subnet-1,subnet-2"; do
+  "bootstrapClusterCreatorAdminPermissions=true" "subnetIds=subnet-1,subnet-2" "endpointPrivateAccess=true" \
+  "publicAccessCidrs=203.0.113.7/32"; do
   [[ $cluster == *"$want"* ]] || fail "$name" "'$cluster' lacks '$want'"
 done
 [[ $cluster != *"--logging"* ]] || fail "$name" "'$cluster' turns logs on"
@@ -230,6 +232,13 @@ code=$?
 [ "$code" -eq 2 ] || fail "$name" "exit $code, want 2"
 [ ! -s "$stub/calls" ] || fail "$name" "called: $(cat "$stub/calls")"
 
+name="a public endpoint open to more than one address"
+reset
+AWS_EKS_PUBLIC_CIDR=0.0.0.0/0 "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 2 ] || fail "$name" "exit $code, want 2"
+[ ! -s "$stub/calls" ] || fail "$name" "called: $(cat "$stub/calls")"
+
 # run_states <name> runs the script, with stderr in $stub/stderr.
 run_states() {
   "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2> "$stub/stderr"
@@ -283,6 +292,7 @@ FAIL_NODE=1 "$here/eks-cluster.sh" cpo-ci-1-1-1 > /dev/null 2> "$stub/stderr"
 code=$?
 [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
 grep -q 'KubeletNotReady' "$stub/stderr" || fail "$name" "did not print the node conditions: $(cat "$stub/stderr")"
+! grep -q '198.51.100.9' "$stub/stderr" || fail "$name" "printed the public IP of the node: $(cat "$stub/stderr")"
 ! grep -q 'create-addon --cluster-name cpo-ci-1-1-1 --addon-name aws-ebs-csi-driver' "$stub/calls" || fail "$name" "created the CSI add-on without a node"
 
 # at_of <schedule name> prints the time of the schedule in epoch seconds.
