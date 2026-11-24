@@ -1,9 +1,10 @@
 name: AWS sandbox
 
 # Removes what CI runs left in the AWS sandbox account: every resource with
-# the tag cpo-ci-run that is older than six hours. A cancelled run cannot
-# clean up after itself. A pull request that changes the sweep runs it too.
-# See hack/aws-sandbox/README.md.
+# the tag cpo-ci-run that is older than six hours, and every EKS cluster,
+# node, volume, and image of an EKS run that is older than two hours. A
+# cancelled run cannot clean up after itself. A pull request that changes
+# the sweep runs it too. See hack/aws-sandbox/README.md.
 on:
   pull_request:
     paths:
@@ -49,3 +50,35 @@ jobs:
 
       - name: Remove resources older than six hours
         run: hack/aws-sandbox/sweep.sh --older-than 6
+
+  # The cpo-sandbox-ci role cannot see EC2 or EKS, so the EKS runs have a
+  # sweep with the role of the EKS proof. Two hours is above the job limit of
+  # .github/workflows/eks-proof.yml, so a run in progress stays.
+  sweep-eks:
+    name: Sweep the EKS runs of the AWS sandbox
+    if: >-
+      github.repository == 'konsole-is/camunda-operator-plugins' &&
+      vars.AWS_EKS_SANDBOX == 'true' &&
+      github.actor_id == vars.AWS_SANDBOX_ACTOR_ID &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The role cpo-sandbox-eks trusts only this environment and the actor
+    # AWS_SANDBOX_ACTOR_ID.
+    environment: aws-eks
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_EKS_VPC_ID: ${{ vars.AWS_EKS_VPC_ID }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Get the credentials of the EKS role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_EKS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Remove EKS runs older than two hours
+        run: hack/aws-sandbox/eks-sweep.sh --older-than 2
