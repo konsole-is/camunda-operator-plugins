@@ -17,12 +17,15 @@ limitations under the License.
 package gatewayaccess
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
 
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/validation"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // The outputs of an access request. Every request carries all four.
@@ -59,6 +62,35 @@ type Params struct {
 	GRPCHostnamePattern       string `json:"grpcHostnamePattern"`
 	OptimizeHostnamePattern   string `json:"optimizeHostnamePattern"`
 	ManagementHostnamePattern string `json:"managementHostnamePattern"`
+	// PolicyTemplates are the policies that the plugin applies to each route.
+	PolicyTemplates []PolicyTemplate `json:"policyTemplates,omitempty"`
+	// RouteFilters are the ExtensionRef filters of each rule of each route,
+	// in this order.
+	RouteFilters []gatewayv1.LocalObjectReference `json:"routeFilters,omitempty"`
+
+	// values holds every parameter of the request, also those that Params
+	// has no field for, so that a policy template can name them.
+	values map[string]any
+}
+
+// UnmarshalJSON decodes the fields of p, and keeps every parameter for the
+// references of the policy templates. An integer of a parameter decodes as an
+// int64, as in an object that the API server returns.
+func (p *Params) UnmarshalJSON(data []byte) error {
+	type plain Params
+	var fields plain
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	var values map[string]any
+	if err := utiljson.Unmarshal(data, &values); err != nil {
+		return err
+	}
+
+	*p = Params(fields)
+	p.values = values
+	return nil
 }
 
 func (p Params) scheme() string {
