@@ -541,6 +541,7 @@ data "aws_iam_policy_document" "eks_run" {
       "eks:ListClusters",
       "eks:DescribeAddonVersions",
       "eks:DescribeAddonConfiguration",
+      "eks:DescribeClusterVersions",
       "ec2:Describe*",
       "ecr:GetAuthorizationToken",
       "scheduler:ListSchedules",
