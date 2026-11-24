@@ -59,6 +59,9 @@ VolumeSize,ContextKeyValues=100, explicitDeny
 VolumeIops,ContextKeyValues=16000, explicitDeny
 action-names.(ec2:CreateNatGateway|ec2:AllocateAddress|elasticloadbalancing:CreateLoadBalancer|eks:CreateNodegroup|logs:CreateLogGroup|iam:CreateRole|ec2:CreateSnapshot|ec2:ModifyVolume|kms:PutKeyPolicy) explicitDeny
 action-names.iam:(GetRole|PassRole).--resource-arns.arn:aws:iam::111122223333:role/cpo-sandbox-eks-(ebs-csi|plugins). allowed
+ResourceTag/cpo-ci-run,ContextKeyValues=prod, implicitDeny
+action-names.ec2:DeleteVolume implicitDeny
+action-names.tag:GetResources allowed
 -cpo-ci-run implicitDeny
 EOF
 }

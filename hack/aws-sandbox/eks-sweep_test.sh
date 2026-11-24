@@ -165,11 +165,20 @@ add clusters.json --arg at "$young" '. += [{name: "cpo-ci-1-1-1", status: "CREAT
 
 name="a cluster of the run with another name"
 empty
-add clusters.json --arg at "$young" '. += [{name: "other", status: "ACTIVE", createdAt: $at, tags: {"cpo-ci-run": "cpo-ci-1-1-1"}},
+add clusters.json --arg at "$young" '. += [
+  {name: "in-vpc", status: "ACTIVE", createdAt: $at, tags: {"cpo-ci-run": "cpo-ci-1-1-1"}, resourcesVpcConfig: {vpcId: "vpc-1"}},
+  {name: "elsewhere", status: "ACTIVE", createdAt: $at, tags: {"cpo-ci-run": "cpo-ci-1-1-1"}, resourcesVpcConfig: {vpcId: "vpc-9"}},
   {name: "kept", status: "ACTIVE", createdAt: $at, tags: {}}]'
 "$here/eks-sweep.sh" --run cpo-ci-1-1-1 > /dev/null
-called "eks delete-cluster --name other" || fail "$name" "did not delete the cluster with the run tag"
+called "eks delete-cluster --name in-vpc" || fail "$name" "did not delete the cluster with the run tag in the VPC"
+! called "eks delete-cluster --name elsewhere" || fail "$name" "deleted a cluster with another name outside the VPC"
 ! called "eks delete-cluster --name kept" || fail "$name" "deleted a cluster without the run tag"
+
+name="a cluster whose run tag does not start with cpo-ci-"
+empty
+add clusters.json --arg at "$old" '. += [{name: "cpo-ci-9", status: "ACTIVE", createdAt: $at, tags: {"cpo-ci-run": "prod"}}]'
+"$here/eks-sweep.sh" --older-than 2 > /dev/null
+! called "eks delete-cluster" || fail "$name" "deleted a cluster with a run tag of another shape"
 
 name="interfaces while another run's cluster is up"
 empty
@@ -198,7 +207,7 @@ empty
 add volumes.json '.Volumes += [{VolumeId: "vol-2", State: "available", CreateTime: "2026-11-24T00:00:00Z",
   Tags: [{Key: "ebs.csi.aws.com/cluster", Value: "true"}]}]'
 "$here/eks-sweep.sh" --run cpo-ci-1-1-1 > /dev/null
-called "ec2 delete-volume --volume-id vol-2" || fail "$name" "did not delete the volume"
+! called "ec2 delete-volume --volume-id vol-2" || fail "$name" "deleted a volume without the run tag"
 
 name="a listing that fails"
 empty

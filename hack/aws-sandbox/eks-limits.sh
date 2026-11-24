@@ -72,6 +72,9 @@ expect "${role}" eks:CreateCluster "*" explicitDeny eks:supportType=string:STAND
 cluster=arn:aws:eks:${AWS_REGION}:${account}:cluster/other
 expect "${role}" eks:DeleteCluster "${cluster}" allowed aws:ResourceTag/cpo-ci-run=string:cpo-ci-limits
 expect "${role}" eks:DeleteCluster "${cluster}" explicitDeny
+expect "${role}" eks:DeleteCluster "${cluster}" explicitDeny aws:ResourceTag/cpo-ci-run=string:prod
+expect "${role}" ec2:DeleteVolume "${ec2}:volume/vol-1" explicitDeny aws:ResourceTag/ebs.csi.aws.com/cluster=string:true
+expect "${role}" tag:GetResources "*" allowed
 # A Pod Identity association reads and passes its role: only the two roles
 # of the pods of a run.
 for action in iam:GetRole iam:PassRole; do

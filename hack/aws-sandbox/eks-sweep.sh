@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016 # $run and $vpc are variables of jq, not of the shell
+# shellcheck disable=SC2016 # $at is a variable of jq, not of the shell
 # Removes what EKS runs left in the sandbox account: the EC2 instances and
 # EKS clusters with the tag cpo-ci-run, their EBS volumes and images, the
 # schedules and log groups of their runs, and the network interfaces and
@@ -8,9 +8,10 @@
 #   eks-sweep.sh --run <run-id>          what that run created, at any age
 #   eks-sweep.sh --older-than <hours>    what any run created that many hours ago
 #
-# A volume of the EBS CSI driver without a run tag belongs to every run: the
-# sweep deletes it when it is available, or with --older-than when it is
-# that old. sweep.sh removes the IAM roles and the KMS keys of a run.
+# It deletes a cluster only when its run tag starts with cpo-ci- and the
+# cluster has a cpo-ci- name or runs in the VPC AWS_EKS_VPC_ID. leftovers.sh
+# still reports another cluster with the run tag. sweep.sh removes the IAM
+# roles and the KMS keys of a run.
 #
 # Needs AWS_REGION, AWS_EKS_VPC_ID, and the credentials of the role
 # cpo-sandbox-eks or of an administrator. It tries every kind, and exits 1
@@ -115,8 +116,8 @@ if [ ${#ids[@]} -gt 0 ]; then
   step aws ec2 wait instance-terminated --instance-ids "${ids[@]}"
 fi
 
-# 2. The clusters, by the run tag, whatever their name. A cluster in CREATING
-# cannot be deleted yet, and a cluster in DELETING is only waited for.
+# 2. The clusters. A cluster in CREATING cannot be deleted yet, and a
+# cluster in DELETING is only waited for.
 listing clusters "EKS clusters" eks list-clusters
 deleted=()
 for name in $(jq -r '(.clusters // [])[]' <<< "${clusters:-null}"); do
@@ -128,7 +129,11 @@ for name in $(jq -r '(.clusters // [])[]' <<< "${clusters:-null}"); do
     continue
   fi
   rm -f "${err}"
-  IFS='|' read -r status created tag <<< "$(jq -r '.cluster | [.status, .createdAt, (.tags["cpo-ci-run"] // "None")] | join("|")' <<< "${cluster}")"
+  IFS='|' read -r status created tag cluster_vpc <<< "$(jq -r '.cluster |
+    [.status, .createdAt, (.tags["cpo-ci-run"] // "None"), (.resourcesVpcConfig.vpcId // "")] | join("|")' <<< "${cluster}")"
+  if [[ ${tag} != cpo-ci-* ]] || { [[ ${name} != cpo-ci-* ]] && [ "${cluster_vpc}" != "${vpc}" ]; }; then
+    continue
+  fi
   matches "${tag}" "${created}" || continue
   echo "EKS cluster ${name} (${tag}, ${status})"
   case ${status} in
@@ -145,22 +150,13 @@ for name in "${deleted[@]}"; do
   step aws eks wait cluster-deleted --name "${name}"
 done
 
-# 3. The volumes. A volume names its run by the run tag, or by the cluster tag
-# of the EBS CSI driver.
-listing volumes "EBS volumes" ec2 describe-volumes \
-  --filters "Name=tag-key,Values=cpo-ci-run,ebs.csi.aws.com/cluster,kubernetes.io/cluster/cpo-ci-*"
+# 3. The volumes, by the run tag: the role of the EBS CSI driver creates no
+# volume without it.
+listing volumes "EBS volumes" ec2 describe-volumes --filters "Name=tag-key,Values=cpo-ci-run"
 deadline=$(($(date +%s) + settle_seconds))
-while IFS='|' read -r id state created tag driver; do
+while IFS='|' read -r id state created tag; do
   [ -n "${id}" ] || continue
-  if [ "${tag}" = None ] && [ "${driver}" = true ]; then
-    if [ -n "${run}" ]; then
-      [ "${state}" = available ] || continue
-    else
-      older "${created}" || continue
-    fi
-  else
-    matches "${tag}" "${created}" || continue
-  fi
+  matches "${tag}" "${created}" || continue
   echo "EBS volume ${id} (${tag}, ${state})"
   while [ "${state}" = in-use ] || [ "${state}" = creating ]; do
     [ "$(date +%s)" -lt "${deadline}" ] || break
@@ -169,10 +165,7 @@ while IFS='|' read -r id state created tag driver; do
   done
   [ "${state}" != deleting ] || continue
   step aws ec2 delete-volume --volume-id "${id}"
-done < <(jq -r "(.Volumes // [])[] | [.VolumeId, .State, .CreateTime,
-  (${run_tag} as \$t | if \$t != \"None\" then \$t else
-    ([(.Tags // [])[] | .Key | select(startswith(\"kubernetes.io/cluster/cpo-ci-\")) | ltrimstr(\"kubernetes.io/cluster/\")][0] // \"None\") end),
-  (any((.Tags // [])[]; .Key == \"ebs.csi.aws.com/cluster\") | tostring)] | join(\"|\")" <<< "${volumes:-null}")
+done < <(jq -r "(.Volumes // [])[] | [.VolumeId, .State, .CreateTime, ${run_tag}] | join(\"|\")" <<< "${volumes:-null}")
 
 # The clusters and the nodes that are left decide what of the VPC goes.
 remaining=""

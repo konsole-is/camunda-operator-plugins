@@ -51,6 +51,7 @@ case "$1 $2" in
     ;;
   "scheduler list-schedules") answer schedules.json '{"Schedules": []}' ;;
   "kms list-keys") answer keys.json '{"Keys": []}' ;;
+  "resourcegroupstaggingapi get-resources") answer tagging.json '{"ResourceTagMappingList": []}' ;;
   "kms list-resource-tags")
     key=$(arg --key-id "$@")
     cat "$dir/tags-$key.json" 2> /dev/null || { echo "An error occurred (AccessDeniedException)" >&2; exit 254; }
@@ -144,6 +145,9 @@ add_key() {
   jq --arg k "$1" '.Keys += [{KeyId: $k}]' "$dir/keys.json" > "$stub/x" && mv "$stub/x" "$dir/keys.json"
   jq -n --arg run "$2" '{Tags: [{TagKey: "cpo-ci-run", TagValue: $run}]}' > "$dir/tags-$1.json"
   jq -n --arg state "$3" '{KeyMetadata: {KeyState: $state}}' > "$dir/key-$1.json"
+  [ -f "$dir/tagging.json" ] || echo '{"ResourceTagMappingList": []}' > "$dir/tagging.json"
+  jq --arg k "$1" --arg run "$2" '.ResourceTagMappingList += [{ResourceARN: ("arn:aws:kms:eu-west-1:1:key/" + $k),
+    Tags: [{Key: "cpo-ci-run", Value: $run}]}]' "$dir/tagging.json" > "$stub/x" && mv "$stub/x" "$dir/tagging.json"
 }
 export AWS_EKS_VPC_ID=vpc-1
 
@@ -191,14 +195,19 @@ code=$?
 name="--eks a volume of the driver without the run tag"
 eks_account
 add_volume vol-2 '[{"Key": "ebs.csi.aws.com/cluster", "Value": "true"}]'
-add_volume vol-3 '[{"Key": "kubernetes.io/cluster/cpo-ci-1-1-1", "Value": "owned"}]'
-add_volume vol-4 "$(jq -c '. + [{"Key": "ebs.csi.aws.com/cluster", "Value": "true"}]' <<< "$(tagged cpo-ci-1-1-10)")"
 out=$("$here/leftovers.sh" --eks cpo-ci-1-1-1)
 code=$?
-[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
-want="left: EBS volume vol-2
-left: EBS volume vol-3"
-[ "$out" = "$want" ] || fail "$name" "printed '$out', want '$want'"
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
+[ -z "$out" ] || fail "$name" "printed '$out', want nothing: no volume of a run lacks the run tag"
+
+name="--eks a key listing that fails"
+eks_account
+echo 'not json' > "$stub/tagging.json"
+rm -f "$stub/keys.json"
+echo 'not json' > "$stub/keys.json"
+"$here/leftovers.sh" --eks cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1: a failed read is no empty list"
 
 name="--eks a NAT gateway in the region"
 eks_account

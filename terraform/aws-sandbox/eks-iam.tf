@@ -511,18 +511,18 @@ data "aws_iam_policy_document" "eks_scheduler" {
     actions   = ["eks:DeleteCluster"]
     resources = ["${local.eks}:cluster/cpo-ci-*"]
     condition {
-      test     = "Null"
+      test     = "StringLike"
       variable = "aws:ResourceTag/cpo-ci-run"
-      values   = ["false"]
+      values   = ["cpo-ci-?*"]
     }
   }
   statement {
     actions   = ["ec2:TerminateInstances"]
     resources = ["${local.ec2}:instance/*"]
     condition {
-      test     = "Null"
+      test     = "StringLike"
       variable = "aws:ResourceTag/cpo-ci-run"
-      values   = ["false"]
+      values   = ["cpo-ci-?*"]
     }
   }
 }
@@ -697,9 +697,9 @@ data "aws_iam_policy_document" "eks_run" {
     actions   = ["eks:DeleteCluster"]
     resources = ["${local.eks}:cluster/*"]
     condition {
-      test     = "Null"
+      test     = "StringLike"
       variable = "aws:ResourceTag/cpo-ci-run"
-      values   = ["false"]
+      values   = ["cpo-ci-?*"]
     }
   }
   statement {
@@ -709,9 +709,9 @@ data "aws_iam_policy_document" "eks_run" {
     ]
     resources = local.eks_parts
     condition {
-      test     = "Null"
+      test     = "StringLike"
       variable = "aws:ResourceTag/cpo-ci-run"
-      values   = ["false"]
+      values   = ["cpo-ci-?*"]
     }
   }
   statement {
@@ -855,21 +855,9 @@ data "aws_iam_policy_document" "eks_run_node" {
     actions   = ["ec2:TerminateInstances", "ec2:GetConsoleOutput", "ec2:DeleteVolume"]
     resources = ["${local.ec2}:instance/*", "${local.ec2}:volume/*"]
     condition {
-      test     = "Null"
+      test     = "StringLike"
       variable = "aws:ResourceTag/cpo-ci-run"
-      values   = ["false"]
-    }
-  }
-  # A volume that the EBS CSI driver made carries this tag, also when it
-  # lacks the run tag.
-  statement {
-    sid       = "DeleteDriverVolumes"
-    actions   = ["ec2:DeleteVolume"]
-    resources = ["${local.ec2}:volume/*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:ResourceTag/ebs.csi.aws.com/cluster"
-      values   = ["true"]
+      values   = ["cpo-ci-?*"]
     }
   }
   # The sandbox VPC holds only runs.
@@ -912,7 +900,7 @@ data "aws_iam_policy_document" "eks_cleanup" {
     sid = "Lists"
     actions = [
       "iam:ListRoles", "iam:ListPolicies", "iam:ListOpenIDConnectProviders",
-      "s3:ListAllMyBuckets", "kms:ListKeys", "kms:ListAliases",
+      "s3:ListAllMyBuckets", "kms:ListKeys", "kms:ListAliases", "tag:GetResources",
     ]
     resources = ["*"]
   }

@@ -202,14 +202,15 @@ while read -r bucket created; do
   fi
 done <<<"${buckets}"
 
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 for region in "${AWS_REGION}" ${AWS_KMS_REPLICA_REGION:-}; do
-  if ! keys=$(aws kms list-keys --region "${region}" --query 'Keys[].KeyId' --output text); then
+  if ! keys=$("${here}/run-keys.sh" "${region}"); then
     echo "failed to list: keys in ${region}" >&2
     failed=1
+    keys=""
   fi
-  for key in ${keys}; do
-    # The boundary allows reads only of tagged keys; others answer AccessDenied.
-    tag=$(aws kms list-resource-tags --region "${region}" --key-id "${key}" --output json 2>/dev/null | run_tag) || continue
+  while read -r key tag; do
+    [ -n "${key}" ] || continue
     if ! metadata=$(aws kms describe-key --region "${region}" --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text); then
       failed=1
       continue
@@ -221,7 +222,7 @@ for region in "${AWS_REGION}" ${AWS_KMS_REPLICA_REGION:-}; do
       echo "KMS key ${key} in ${region} (${tag})"
       step delete_key "${region}" "${key}"
     fi
-  done
+  done <<<"${keys}"
 done
 
 exit ${failed}
