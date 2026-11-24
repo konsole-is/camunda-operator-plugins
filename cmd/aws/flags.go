@@ -61,7 +61,12 @@ type flags struct {
 func bindFlags(fs *flag.FlagSet) *flags {
 	f := &flags{}
 	fs.BoolVar(&f.version, "version", false, "Print the version of the build and exit.")
-	fs.StringVar(&f.manager.HealthProbeAddress, "health-probe-bind-address", ":8081", "The address of /healthz and /readyz.")
+	fs.StringVar(
+		&f.manager.HealthProbeAddress,
+		"health-probe-bind-address",
+		":8081",
+		"The address of /healthz and /readyz.",
+	)
 	fs.StringVar(
 		&f.manager.MetricsAddress,
 		"metrics-bind-address",
