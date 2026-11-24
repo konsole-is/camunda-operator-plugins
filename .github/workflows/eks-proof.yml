@@ -22,10 +22,13 @@ permissions:
 jobs:
   eks:
     name: Prove the AWS plugins on EKS
+    # A re-run keeps github.actor, so the user who starts or restarts the run
+    # must be that actor too.
     if: >-
       github.repository == 'konsole-is/camunda-operator-plugins' &&
       vars.AWS_EKS_SANDBOX == 'true' &&
       github.actor_id == vars.AWS_SANDBOX_ACTOR_ID &&
+      github.triggering_actor == github.actor &&
       (github.event_name == 'workflow_dispatch' ||
       (github.event.label.name == 'eks-proof' &&
       github.event.pull_request.head.repo.full_name == github.repository))
@@ -133,8 +136,8 @@ jobs:
           role-to-assume: ${{ vars.AWS_EKS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      # Runs on pass, fail, and cancel, once the cluster step started. It
-      # fails when leftovers.sh still finds anything of the run.
+      # On a cancel, GitHub gives it only a few minutes. It fails when
+      # leftovers.sh still finds anything of the run.
       - name: Remove what the run created
         if: ${{ always() && steps.cluster.outcome != 'skipped' }}
         timeout-minutes: 30

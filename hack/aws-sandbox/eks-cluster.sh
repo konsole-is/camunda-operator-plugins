@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Creates the EKS cluster of one run in the sandbox account, with one node,
-# the EKS Pod Identity Agent, and the EBS CSI driver. Every object carries the
-# tag cpo-ci-run=<run-id>. It writes the kubeconfig context <run-id> and
+# the EKS Pod Identity Agent, and the EBS CSI driver. Every object except the
+# two schedules carries the tag cpo-ci-run=<run-id>, and the name of each
+# schedule starts with <run-id>. It writes the kubeconfig context <run-id> and
 # prints cluster=<run-id> when the node is Ready.
 #
 # Usage: eks-cluster.sh <run-id>
 #
 # Before its first create, it arms a one-time schedule that deletes the
 # cluster 160 minutes after the start of the script. After the node, a second
-# one terminates the node 150 minutes after the start, and the node shuts
-# itself down a few minutes before that. So the node and then the cluster go
-# also when no cleanup of the run runs. Remove the run with eks-teardown.sh,
-# also when this script fails half way.
+# one terminates the node 150 minutes after the start. So the node and then
+# the cluster go also when no cleanup of the run runs. Remove the run with
+# eks-teardown.sh, also when this script fails half way.
 #
 # Inputs (the environment aws-eks sets each AWS_EKS_* variable):
 #   AWS_REGION, AWS_EKS_VPC_ID, AWS_EKS_SUBNET_IDS (comma-separated),
@@ -22,7 +22,7 @@
 #                           default version of EKS)
 #   KUBECONFIG              the kubeconfig file to write (optional)
 # It exits 2 on a wrong run ID or a missing input, before any AWS call, and
-# 1 when a check or a create fails.
+# with another non-zero status when a check or a create fails.
 set -euo pipefail
 
 readonly nodes=1 max_nodes=2 lifetime_minutes=150
@@ -121,10 +121,10 @@ aws eks create-addon --cluster-name "${run}" --addon-name aws-ebs-csi-driver --a
     '{controller: {env: [{name: "AWS_REGION", value: $region}], extraVolumeTags: {"cpo-ci-run": $run}}}')" \
   "${tags[@]}" > /dev/null
 
-# The script part arms the end of the node first. nodeadm reads the
-# NodeConfig part, and Elasticsearch needs the kernel limit.
 shutdown_minutes=$(((node_end - $(date +%s)) / 60 - boot_minutes))
 [ "${shutdown_minutes}" -ge 1 ] || shutdown_minutes=1
+# The script part arms the end of the node first. nodeadm reads the
+# NodeConfig part, and Elasticsearch needs the kernel limit.
 cat > "${work}/user-data" << EOF
 MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary="BOUNDARY"
