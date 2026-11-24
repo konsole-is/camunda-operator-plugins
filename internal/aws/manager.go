@@ -22,6 +22,8 @@ package aws
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -60,13 +62,19 @@ type Options struct {
 }
 
 // NewManager returns one manager for cfg that runs each controller of opts
-// that is not nil. It refuses Options without a controller, and returns the
+// that is not nil. It refuses Options without a controller, and Identity and
+// a ConnectorsRole that serves awsconnectorsrole.RegistrationRole with role
+// name prefixes that are equal without regard to case. It returns the
 // refusal of a controller with the controller name in front. /healthz and
 // /readyz answer while it runs.
 func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 	setups := controllers(opts)
 	if len(setups) == 0 {
 		return nil, errors.New("no controller is on: set at least one of Identity, ConnectorsRole, KMS, EBS, and S3")
+	}
+
+	if err := checkRolePrefixes(opts); err != nil {
+		return nil, err
 	}
 
 	scheme := runtime.NewScheme()
@@ -109,6 +117,33 @@ func NewManager(cfg *rest.Config, opts Options) (ctrl.Manager, error) {
 	}
 
 	return mgr, nil
+}
+
+// checkRolePrefixes refuses one role name prefix for Identity and for a
+// ConnectorsRole that creates roles.
+func checkRolePrefixes(opts Options) error {
+	identity, connectors := opts.Identity, opts.ConnectorsRole
+	if identity == nil || connectors == nil || !servesRole(connectors.Registrations) {
+		return nil
+	}
+
+	// IAM role names are unique without regard to case. In IRSA mode both
+	// controllers hash the same OIDC issuer, so one prefix gives one role name.
+	if strings.EqualFold(identity.RoleNamePrefix, connectors.RoleNamePrefix) {
+		return fmt.Errorf(
+			"role name prefix %q: aws-identity and aws-connectors-role both use it, "+
+				"so in IRSA mode both would write one role for a claim",
+			connectors.RoleNamePrefix,
+		)
+	}
+
+	return nil
+}
+
+func servesRole(registrations []pluginsv1alpha1.PluginRegistration) bool {
+	return slices.ContainsFunc(registrations, func(r pluginsv1alpha1.PluginRegistration) bool {
+		return r.Name == awsconnectorsrole.RegistrationRole
+	})
 }
 
 // setup adds one controller to a manager.
