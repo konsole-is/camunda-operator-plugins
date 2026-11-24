@@ -20,7 +20,7 @@ A route counts as accepted only when the controller of the GatewayClass of that 
 
 When an endpoint leaves `status.endpoints`, or the Optimize is deleted, the plugin deletes the route at the next reconcile.
 
-For each item of `policyTemplates` and each route, the plugin also writes one policy `<route>-policy-<n>` in the namespace of the claim, where `<n>` is the index of the template. See [Route policies](#route-policies). The plugin applies the policies before the routes, so a route never serves traffic without its policies.
+For each item of `policyTemplates` and each route, the plugin also writes one policy `<route>-policy-<n>` in the namespace of the claim, where `<n>` is the index of the template. See [Route policies](#route-policies). The plugin applies the policies before the routes, and deletes them after the routes.
 
 The plugin also writes:
 
@@ -119,7 +119,7 @@ Each host must be a DNS name and not an IP address. Each label is at most 63 cha
 
 ## Route policies
 
-A route policy adds a rule of the Gateway implementation to the routes of a claim, such as an IP allowlist. The Gateway API has no such rule. Each implementation has its own policy kind that names its route in `spec.targetRefs`, for example `SecurityPolicy` of Envoy Gateway or `AuthorizationPolicy` of Istio.
+A route policy adds a rule of the Gateway implementation to the routes of a claim, such as an IP allowlist. The Gateway API has no such rule. Some implementations have a policy kind that names its route in `spec.targetRefs`, for example `SecurityPolicy` of Envoy Gateway.
 
 This example gives each claim an IP allowlist with an Envoy Gateway `SecurityPolicy`, and lets each claim pick the networks. First, the chart values allow the kind and add the parameter `allowedCIDRs` to the registration:
 
@@ -179,7 +179,7 @@ The claim stores the names of its choices, such as `[office, vpn]`, and the requ
 The rules of a template:
 
 - A string of the `spec` that is exactly `{<parameter>}` takes the value of that parameter of the request, of any type. A string with other text, such as `zone-{allowedCIDRs}`, stays as it is. The parameter must have a value, and it cannot be `policyTemplates` or `routeFilters`.
-- The plugin sets `spec.targetRefs` to the route, so the template must not set it. A kind that names its target in another field, such as `targetRef` of `GCPBackendPolicy` of GKE, does not work.
+- The plugin sets `spec.targetRefs` to the route, so the template must not set it. The kind must take a route in `spec.targetRefs` and report `status.ancestors`. `AuthorizationPolicy` of Istio and `GCPBackendPolicy` of GKE do not take a route, so they do not work.
 - The kind must be in `policyKinds`. A CRD that you install after the controller started is used after a restart of the controller.
 
 A policy counts as accepted when the controller of the GatewayClass reports `Accepted=True` in `status.ancestors`, for the Gateway or for the route, for its current generation. Until then, the request is not `Ready`. When that controller refuses a policy, the routes stay, and `Ready` gives the reason and the message of the controller. When the plugin or the API server refuses a template, the plugin writes no new route and changes no route that is there.
@@ -205,7 +205,7 @@ The plugin writes no grants.
 
 The registrations offer the deletion policies `Delete` and `Orphan`. Both delete every route of the request when a claim is deleted, because a route sends traffic to Services that go with the cluster. The routes belong to the request and go with it. `Orphan` keeps no route. The registrations offer `Orphan` so that a claim can keep the resources of its other plugins. A route to a Service that is gone never stays.
 
-The policies go after their routes: the policy of a deleted route at the next reconcile after the route is gone, and every policy of a deleted request after every route of the request is gone. When the parameters no longer have a template, its policies go at once. When a template changes its kind or its index, the old policy of a route stays until the new one is applied.
+The policies go after their routes: the policy of a deleted route at the next reconcile after the route is gone, and every policy of a deleted request after every route of the request is gone. When the parameters no longer have a template, its policies go at once. When a template changes its kind or its index, the old policy of a route stays until the new one is applied. A delete of the request with foreground propagation lets the garbage collector delete the routes and the policies at the same time.
 
 ## Troubleshooting
 
