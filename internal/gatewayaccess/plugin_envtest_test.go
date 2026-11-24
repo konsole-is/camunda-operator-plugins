@@ -664,6 +664,51 @@ var _ = Describe("the gateway-access plugin", func() {
 		}, timeout).Should(Succeed())
 	})
 
+	It("keeps the policy of a going route until the route is gone", func() {
+		const finalizer = "example.com/hold"
+		ns := newNamespace()
+		ordersCluster(ns)
+		request := policyRequest(ns, "orders-access", policyParams(examplePolicyTemplate()), "10.0.0.0/8")
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+		optimize := newOptimize(ns, "analytics", "orders")
+		Expect(k8s.Create(ctx, optimize)).To(Succeed())
+		Expect(publishEndpoints(ctx, k8s, optimize, []v1.Endpoint{
+			httpEndpoint("optimize", "analytics-optimize-webapp", 8090, "/"),
+		})).To(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(policyExists(g, ns, "orders-access-optimize-policy-0")).To(BeTrue())
+		}, timeout).Should(Succeed())
+
+		var route gatewayv1.HTTPRoute
+		key := client.ObjectKey{Namespace: ns, Name: "orders-access-optimize"}
+		Eventually(func(g Gomega) {
+			g.Expect(k8s.Get(ctx, key, &route)).To(Succeed())
+			route.Finalizers = append(route.Finalizers, finalizer)
+			g.Expect(k8s.Update(ctx, &route)).To(Succeed())
+		}, timeout).Should(Succeed())
+
+		Expect(k8s.Delete(ctx, optimize)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(mgr.GetAPIReader().Get(ctx, key, &route)).To(Succeed())
+			g.Expect(route.DeletionTimestamp).NotTo(BeNil())
+		}, timeout).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(policyExists(g, ns, "orders-access-optimize-policy-0")).To(BeTrue())
+		}, 3*time.Second).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(k8s.Get(ctx, key, &route)).To(Succeed())
+			route.Finalizers = nil
+			g.Expect(k8s.Update(ctx, &route)).To(Succeed())
+		}, timeout).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			g.Expect(policyExists(g, ns, "orders-access-optimize-policy-0")).To(BeFalse())
+			g.Expect(policiesOf(g, request)).To(HaveLen(2))
+		}, timeout).Should(Succeed())
+	})
+
 	It("deletes the policies of a template that the parameters drop", func() {
 		ns := newNamespace()
 		ordersCluster(ns)
