@@ -1,5 +1,5 @@
 # The run of plugin-conformance against the registration aws-connectors-role.
-# The case policy is the one that setup.sh creates. The case runs once with
+# The case policy is the one that sandbox-setup.sh creates. The case runs once with
 # Delete and once with Orphan.
 registration: aws-connectors-role
 namespace: conformance-aws-connectors-role

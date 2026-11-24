@@ -11,7 +11,7 @@ timeouts:
 cases:
   - name: basic
     parameters:
-      roleArn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-aws-connectors-role
+      roleArn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-aws
     target:
       kind: CamundaCluster
       name: orders

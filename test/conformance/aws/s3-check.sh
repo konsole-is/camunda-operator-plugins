@@ -6,9 +6,9 @@
 #   - steady: no request records DriftCorrected after the writes of the
 #     plugin, over two resyncs, and a change by hand gets DriftCorrected
 #
-# values.yaml sets deleteBudget to 1ms, so one pass deletes one batch of
-# 1,000 objects, and resync to 30s. Needs RUN_ID, AWS_ACCOUNT_ID, AWS_REGION,
-# RUN_VARS, and the credentials of the CI role.
+# The values of the run set s3.deleteBudget to 1ms, so one pass deletes one
+# batch of 1,000 objects, and s3.resync to 30s. Needs RUN_ID, AWS_ACCOUNT_ID,
+# AWS_REGION, RUN_VARS, and the credentials of the CI role.
 set -euo pipefail
 
 : "${RUN_ID:?RUN_ID is not set}"
@@ -48,11 +48,14 @@ bucket_gone() {
   return 1
 }
 
-# drift_events [<namespace> <request>] prints the DriftCorrected events, of
-# every namespace or of one request.
+# drift_events [<namespace> <request>] prints the DriftCorrected events of
+# the requests of aws-s3, or of one request. The other controllers of the
+# release record their own DriftCorrected events in other namespaces.
 drift_events() {
   if [ $# -eq 0 ]; then
-    kubectl get events -A --field-selector reason=DriftCorrected -o name
+    for n in conformance-aws-s3 "$ns"; do
+      kubectl get events -n "$n" --field-selector reason=DriftCorrected -o name
+    done
   else
     kubectl get events -n "$1" --field-selector "reason=DriftCorrected,involvedObject.name=$2" -o name
   fi
@@ -160,9 +163,10 @@ check_steady() {
 }
 
 kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
-"$repo/test/conformance/render.sh" "$here/requests.yaml" | kubectl apply -f -
-# No identity extension marks the Grants of the requests Ready, so Ready
-# stays False with WaitingForGrants.
+"$repo/test/conformance/render.sh" "$here/s3-requests.yaml" | kubectl apply -f -
+# No request of aws-irsa names the clusters of these requests, so no
+# identity hub marks their Grants Ready, and Ready stays False with
+# WaitingForGrants.
 for r in many-objects versioned steady; do
   kubectl wait -n "$ns" "pluginrequest/$r" --for=condition=OutputsReady --timeout=6m
 done

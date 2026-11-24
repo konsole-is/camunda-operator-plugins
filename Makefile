@@ -177,8 +177,11 @@ KIND_CLUSTER ?= camunda-operator-plugins
 # the operator built from it, so it matches the api module of go.mod.
 OPERATOR_DIR ?= $(LOCALBIN)/camunda-operator
 OPERATOR_REPO ?= https://github.com/konsole-is/camunda-operator.git
+# CONFORMANCE_SET is the set of PLUGIN that conformance-kind runs, a directory
+# of test/conformance/<plugin>/. Empty runs test/conformance/<plugin>/ itself.
+CONFORMANCE_SET ?=
 # CONFORMANCE_REPORT is the JUnit report of conformance-kind.
-CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
+CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN)$(if $(CONFORMANCE_SET),-$(CONFORMANCE_SET)).xml
 # renovate: datasource=github-releases depName=envoyproxy/gateway
 ENVOY_GATEWAY_VERSION ?= v1.10.0
 # renovate: datasource=docker depName=rustfs/rustfs
@@ -213,13 +216,13 @@ operator-source: ## Check out the operator at API_REF into OPERATOR_DIR.
 	API_REF="$(API_REF)" OPERATOR_REPO="$(OPERATOR_REPO)" test/kind/operator-source.sh "$(OPERATOR_DIR)"
 
 .PHONY: conformance-kind
-conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run the conformance suite against PLUGIN. CI only.
+conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run the conformance suite of CONFORMANCE_SET against PLUGIN. CI only.
 	KIND_CLUSTER="$(KIND_CLUSTER)" OPERATOR_DIR="$(OPERATOR_DIR)" CHART_NAMESPACE="$(CHART_NAMESPACE)" \
 	REPORT="$(CONFORMANCE_REPORT)" GATEWAY_API_VERSION="$(GATEWAY_API_VERSION)" \
 	ENVOY_GATEWAY_VERSION="$(ENVOY_GATEWAY_VERSION)" RUSTFS_VERSION="$(RUSTFS_VERSION)" \
 	CERT_MANAGER_VERSION="$(CERT_MANAGER_VERSION)" POD_IDENTITY_WEBHOOK_VERSION="$(POD_IDENTITY_WEBHOOK_VERSION)" \
 	AWS_CLI_IMAGE="amazon/aws-cli:$(AWS_CLI_VERSION)" \
-		test/conformance/run.sh "$(PLUGIN)"
+		test/conformance/run.sh "$(PLUGIN)" $(CONFORMANCE_SET)
 
 .PHONY: journey-kind
 journey-kind: ## Create a kind cluster with the operator, ECK, and the plugins of JOURNEY, and run the journey. CI only.

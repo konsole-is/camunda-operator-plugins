@@ -7,8 +7,9 @@
 #     same role annotation gets none
 #   - role-prefix.sh, the change of the role name prefix
 #
-# Needs RUN_ID, AWS_ACCOUNT_ID, AWS_REGION, AWS_CLI_IMAGE, CHART_NAMESPACE,
-# and the credentials of the CI role.
+# The release aws of the run must serve aws-irsa. Needs RUN_ID,
+# AWS_ACCOUNT_ID, AWS_REGION, AWS_CLI_IMAGE, CHART_NAMESPACE, and the
+# credentials of the CI role.
 set -euo pipefail
 
 : "${RUN_ID:?RUN_ID is not set}"
@@ -61,7 +62,7 @@ YAML
 
 echo "==> Checking that STS gives the role of a request only to its ServiceAccount"
 kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -f "$here/request.yaml"
+kubectl apply -f "$here/identity-request.yaml"
 kubectl wait -n "$ns" pluginrequest/sts-check --for=condition=Ready --timeout=5m
 principal=$(kubectl get -n "$ns" pluginrequest/sts-check -o jsonpath='{.status.outputs.principal}')
 # The webhook gives both pods the role ARN and a token. Only the role trusts
@@ -98,6 +99,6 @@ fi
 kubectl delete -n "$ns" pluginrequest/sts-check --timeout=3m
 kubectl delete namespace "$ns" --timeout=3m
 
-"$repo/test/conformance/role-prefix.sh" aws-identity cloud-identity aws-irsa camunda "$RUN_ID-hub-b" ||
-  failed=1
+"$repo/test/conformance/role-prefix.sh" aws identity.roleNamePrefix cloud-identity aws-irsa camunda \
+  "$RUN_ID-hub-b" || failed=1
 exit "$failed"

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Prints true when a change can affect the conformance run of a plugin, and
 # false when it cannot. Only the docs, Markdown files, and the files of the
-# other plugins cannot affect it.
+# other plugins cannot affect it. The Go packages of a plugin are the
+# directories of internal/ whose name starts with the plugin name without
+# hyphens, so internal/aws and internal/awskms are both of aws.
 #
 # Usage: scope.sh <plugin> <base commit> <head commit>
 set -euo pipefail
@@ -15,7 +17,7 @@ plugins=$(make -s -C "$repo" list-plugins | jq -r '.[]')
 others=()
 for p in $plugins; do
   [ "$p" = "$plugin" ] && continue
-  others+=("cmd/$p/" "internal/${p//-/}/" "charts/$p/" "test/conformance/$p/")
+  others+=("cmd/$p/" "internal/${p//-/}" "charts/$p/" "test/conformance/$p/")
 done
 
 # Both paths of a rename count: the old path can be of this plugin.
