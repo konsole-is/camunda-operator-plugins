@@ -22,6 +22,18 @@ locals {
     { test = "Null", variable = "aws:RequestTag/cpo-ci-run", values = ["false"] },
     { test = "StringLike", variable = "aws:RequestTag/cpo-ci-run", values = ["cpo-ci-?*"] },
   ]
+  # A Pod Identity session has the tag eks-cluster-name, and the cluster of a
+  # run has the name of the run.
+  own_run = "$${aws:PrincipalTag/eks-cluster-name}"
+  own_run_tag_request = [
+    { test = "Null", variable = "aws:RequestTag/cpo-ci-run", values = ["false"] },
+    { test = "StringEquals", variable = "aws:RequestTag/cpo-ci-run", values = [local.own_run] },
+  ]
+  own_hub_roles = "${local.iam}:role/${local.own_run}-hub-*"
+  own_eks_parts = [
+    "${local.eks}:cluster/${local.own_run}",
+    "${local.eks}:podidentityassociation/${local.own_run}/*",
+  ]
 }
 
 # EKS creates this role at the first cluster, and no role of a run can create
@@ -115,6 +127,116 @@ data "aws_iam_policy_document" "eks_limits" {
       values   = ["cpo-ci-run"]
     }
   }
+  # The sweeps skip a run tag whose value does not start with cpo-ci-.
+  statement {
+    sid    = "RunTagValue"
+    effect = "Deny"
+    actions = [
+      "ec2:CreateTags", "ec2:RunInstances", "ec2:CreateVolume", "ec2:CopyVolumes",
+      "eks:TagResource", "eks:CreateCluster", "eks:CreateAddon", "eks:CreateAccessEntry",
+      "eks:CreatePodIdentityAssociation", "kms:TagResource", "kms:CreateKey", "iam:TagRole", "iam:CreateRole",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "Null"
+      variable = "aws:RequestTag/cpo-ci-run"
+      values   = ["false"]
+    }
+    condition {
+      test     = "StringNotLike"
+      variable = "aws:RequestTag/cpo-ci-run"
+      values   = ["cpo-ci-?*"]
+    }
+  }
+  # EC2 tags a resource at its create with ec2:CreateAction set. A later
+  # write of the run tag can move a resource to another run.
+  statement {
+    sid       = "RunTagOnCreate"
+    effect    = "Deny"
+    actions   = ["ec2:CreateTags"]
+    resources = ["*"]
+    condition {
+      test     = "ForAnyValue:StringEqualsIgnoreCase"
+      variable = "aws:TagKeys"
+      values   = ["cpo-ci-run"]
+    }
+    condition {
+      test     = "Null"
+      variable = "ec2:CreateAction"
+      values   = ["true"]
+    }
+  }
+  # A volume of a run is a small gp3 volume at the free baseline of IOPS and
+  # throughput. The managed policies of the EBS CSI controller and of the
+  # control plane can both create volumes. CopyVolumes makes a volume as
+  # CreateVolume does, and a ModifyVolume or a fast snapshot restore costs
+  # more after the create. StringNotLike also holds when the tag is missing.
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
+    resources = ["${local.ec2}:volume/*"]
+    condition {
+      test     = "StringNotLike"
+      variable = "aws:RequestTag/cpo-ci-run"
+      values   = ["cpo-ci-?*"]
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
+    resources = ["${local.ec2}:volume/*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "ec2:VolumeType"
+      values   = ["gp3"]
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
+    resources = ["${local.ec2}:volume/*"]
+    condition {
+      test     = "NumericGreaterThan"
+      variable = "ec2:VolumeSize"
+      values   = ["10"]
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
+    resources = ["${local.ec2}:volume/*"]
+    condition {
+      test     = "NumericGreaterThan"
+      variable = "ec2:VolumeIops"
+      values   = ["3000"]
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
+    resources = ["${local.ec2}:volume/*"]
+    condition {
+      test     = "NumericGreaterThan"
+      variable = "ec2:VolumeThroughput"
+      values   = ["125"]
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:ModifyVolume", "ec2:EnableFastSnapshotRestores"]
+    resources = ["*"]
+  }
+  # A provisioned rate to initialize a volume from a snapshot costs by the GiB.
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes", "ec2:RunInstances"]
+    resources = ["${local.ec2}:volume/*"]
+    condition {
+      test     = "NumericGreaterThan"
+      variable = "ec2:VolumeInitializationRate"
+      values   = ["0"]
+    }
+  }
 }
 
 resource "aws_iam_policy" "eks_limits" {
@@ -195,6 +317,11 @@ data "aws_iam_policy_document" "eks_pod_trust" {
     }
     condition {
       test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account]
+    }
+    condition {
+      test     = "StringEquals"
       variable = "aws:RequestTag/kubernetes-namespace"
       values   = [each.value.namespace]
     }
@@ -237,63 +364,16 @@ data "aws_iam_policy_document" "eks_ebs_csi" {
       values   = ["false"]
     }
   }
-  # A volume of a run is a small gp3 volume at the free baseline of IOPS and
-  # throughput. CopyVolumes makes a volume as CreateVolume does, and a
-  # ModifyVolume or a fast snapshot restore costs more after the create.
   statement {
-    effect    = "Deny"
-    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
-    resources = ["${local.ec2}:volume/*"]
-    condition {
-      test     = "Null"
-      variable = "aws:RequestTag/cpo-ci-run"
-      values   = ["true"]
-    }
-  }
-  statement {
+    sid       = "OwnRunVolumes"
     effect    = "Deny"
     actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
     resources = ["${local.ec2}:volume/*"]
     condition {
       test     = "StringNotEquals"
-      variable = "ec2:VolumeType"
-      values   = ["gp3"]
+      variable = "aws:RequestTag/cpo-ci-run"
+      values   = [local.own_run]
     }
-  }
-  statement {
-    effect    = "Deny"
-    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
-    resources = ["${local.ec2}:volume/*"]
-    condition {
-      test     = "NumericGreaterThan"
-      variable = "ec2:VolumeSize"
-      values   = ["10"]
-    }
-  }
-  statement {
-    effect    = "Deny"
-    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
-    resources = ["${local.ec2}:volume/*"]
-    condition {
-      test     = "NumericGreaterThan"
-      variable = "ec2:VolumeIops"
-      values   = ["3000"]
-    }
-  }
-  statement {
-    effect    = "Deny"
-    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
-    resources = ["${local.ec2}:volume/*"]
-    condition {
-      test     = "NumericGreaterThan"
-      variable = "ec2:VolumeThroughput"
-      values   = ["125"]
-    }
-  }
-  statement {
-    effect    = "Deny"
-    actions   = ["ec2:ModifyVolume", "ec2:EnableFastSnapshotRestores"]
-    resources = ["*"]
   }
 }
 
@@ -312,19 +392,20 @@ resource "aws_iam_role" "eks_ebs_csi" {
 # The controllers aws-identity and aws-kms of the release aws of a run run as
 # this role. It is the policy of docs/plugins/aws-identity.md and of
 # test/conformance/aws/controller-policy-kms.json, held to the names and the
-# tag of a run.
+# tag of a run. A run cannot change a role, a key, or an association of
+# another run.
 data "aws_iam_policy_document" "eks_plugins" {
   statement {
     sid       = "CreateRolesWithTheBoundary"
     actions   = ["iam:CreateRole"]
-    resources = ["${local.iam}:role/cpo-ci-*-hub-*"]
+    resources = [local.own_hub_roles]
     condition {
       test     = "StringEquals"
       variable = "iam:PermissionsBoundary"
       values   = [local.boundary_arn]
     }
     dynamic "condition" {
-      for_each = local.run_tag_request
+      for_each = local.own_run_tag_request
       content {
         test     = condition.value.test
         variable = condition.value.variable
@@ -335,21 +416,51 @@ data "aws_iam_policy_document" "eks_plugins" {
   statement {
     sid       = "RolesWithTheBoundary"
     actions   = ["iam:PutRolePermissionsBoundary", "iam:PutRolePolicy"]
-    resources = ["${local.iam}:role/cpo-ci-*-hub-*"]
+    resources = [local.own_hub_roles]
     condition {
       test     = "StringEquals"
       variable = "iam:PermissionsBoundary"
       values   = [local.boundary_arn]
     }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/cpo-ci-run"
+      values   = [local.own_run]
+    }
+  }
+  # Reads carry no tag condition: a read of a role that does not exist must
+  # answer NoSuchEntity, not AccessDenied.
+  statement {
+    sid       = "ReadRoles"
+    actions   = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"]
+    resources = [local.own_hub_roles]
   }
   statement {
     sid = "Roles"
     actions = [
-      "iam:GetRole", "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:DeleteRole",
-      "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:DeleteRolePolicy",
-      "iam:ListAttachedRolePolicies", "iam:DetachRolePolicy", "iam:PassRole",
+      "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy",
     ]
-    resources = ["${local.iam}:role/cpo-ci-*-hub-*"]
+    resources = [local.own_hub_roles]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/cpo-ci-run"
+      values   = [local.own_run]
+    }
+  }
+  statement {
+    sid       = "PassRoles"
+    actions   = ["iam:PassRole"]
+    resources = [local.own_hub_roles]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/cpo-ci-run"
+      values   = [local.own_run]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["pods.eks.amazonaws.com"]
+    }
   }
   statement {
     sid       = "Health"
@@ -364,9 +475,9 @@ data "aws_iam_policy_document" "eks_plugins" {
   statement {
     sid       = "CreatePodIdentityAssociations"
     actions   = ["eks:CreatePodIdentityAssociation", "eks:TagResource"]
-    resources = ["${local.eks}:cluster/cpo-ci-*", "${local.eks}:podidentityassociation/cpo-ci-*/*"]
+    resources = local.own_eks_parts
     dynamic "condition" {
-      for_each = local.run_tag_request
+      for_each = local.own_run_tag_request
       content {
         test     = condition.value.test
         variable = condition.value.variable
@@ -380,7 +491,7 @@ data "aws_iam_policy_document" "eks_plugins" {
       "eks:ListPodIdentityAssociations", "eks:DescribePodIdentityAssociation",
       "eks:UpdatePodIdentityAssociation", "eks:DeletePodIdentityAssociation",
     ]
-    resources = ["${local.eks}:cluster/cpo-ci-*", "${local.eks}:podidentityassociation/cpo-ci-*/*"]
+    resources = local.own_eks_parts
   }
   # A key in a custom key store costs by the hour, and a multi-Region key
   # needs a replica region, which an EKS run does not use.
@@ -399,7 +510,7 @@ data "aws_iam_policy_document" "eks_plugins" {
       values   = ["false"]
     }
     dynamic "condition" {
-      for_each = local.run_tag_request
+      for_each = local.own_run_tag_request
       content {
         test     = condition.value.test
         variable = condition.value.variable
@@ -413,18 +524,34 @@ data "aws_iam_policy_document" "eks_plugins" {
     actions   = ["kms:TagResource"]
     resources = [local.eks_keys]
     dynamic "condition" {
-      for_each = local.run_tag_request
+      for_each = local.own_run_tag_request
       content {
         test     = condition.value.test
         variable = condition.value.variable
         values   = condition.value.values
       }
     }
+    condition {
+      test     = "StringEqualsIfExists"
+      variable = "aws:ResourceTag/cpo-ci-run"
+      values   = [local.own_run]
+    }
   }
+  # CreateAlias and DeleteAlias check the alias and its key each on its own.
   statement {
     sid       = "Aliases"
     actions   = ["kms:CreateAlias", "kms:DeleteAlias"]
-    resources = ["arn:${local.partition}:kms:${var.region}:${local.account}:alias/cpo-ci-*/*", local.eks_keys]
+    resources = ["arn:${local.partition}:kms:${var.region}:${local.account}:alias/${local.own_run}/*"]
+  }
+  statement {
+    sid       = "AliasKeys"
+    actions   = ["kms:CreateAlias", "kms:DeleteAlias"]
+    resources = [local.eks_keys]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/cpo-ci-run"
+      values   = [local.own_run]
+    }
   }
   statement {
     sid = "Keys"
@@ -434,9 +561,27 @@ data "aws_iam_policy_document" "eks_plugins" {
     ]
     resources = [local.eks_keys]
     condition {
-      test     = "Null"
+      test     = "StringEquals"
       variable = "aws:ResourceTag/cpo-ci-run"
+      values   = [local.own_run]
+    }
+  }
+  # Roles and Keys allow a tag write on a resource of the run, so a write
+  # could give the run tag the value of another run.
+  statement {
+    sid       = "OwnRunTag"
+    effect    = "Deny"
+    actions   = ["iam:TagRole", "kms:TagResource", "eks:TagResource"]
+    resources = ["*"]
+    condition {
+      test     = "Null"
+      variable = "aws:RequestTag/cpo-ci-run"
       values   = ["false"]
+    }
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:RequestTag/cpo-ci-run"
+      values   = [local.own_run]
     }
   }
   statement {
@@ -502,6 +647,11 @@ data "aws_iam_policy_document" "eks_scheduler_trust" {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
       values   = [local.account]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [aws_scheduler_schedule_group.eks.arn]
     }
   }
 }
@@ -664,7 +814,7 @@ data "aws_iam_policy_document" "eks_run" {
   }
   statement {
     sid       = "CreateParts"
-    actions   = ["eks:CreateAddon", "eks:CreateAccessEntry", "eks:CreatePodIdentityAssociation", "eks:TagResource"]
+    actions   = ["eks:CreateAddon", "eks:CreatePodIdentityAssociation", "eks:TagResource"]
     resources = local.eks_parts
     dynamic "condition" {
       for_each = local.run_tag_request
@@ -673,6 +823,30 @@ data "aws_iam_policy_document" "eks_run" {
         variable = condition.value.variable
         values   = condition.value.values
       }
+    }
+  }
+  # The one access entry of a run lets the node join.
+  statement {
+    sid       = "CreateNodeAccessEntry"
+    actions   = ["eks:CreateAccessEntry"]
+    resources = ["${local.eks}:cluster/cpo-ci-*"]
+    dynamic "condition" {
+      for_each = local.run_tag_request
+      content {
+        test     = condition.value.test
+        variable = condition.value.variable
+        values   = condition.value.values
+      }
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "eks:principalArn"
+      values   = [aws_iam_role.eks_node.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "eks:accessEntryType"
+      values   = ["EC2_LINUX"]
     }
   }
   # Reads carry no tag condition: a read of a cluster that is gone must
@@ -738,9 +912,19 @@ data "aws_iam_policy_document" "eks_run" {
   # CreatePodIdentityAssociation also refuses a caller without iam:GetRole on
   # the role.
   statement {
-    sid       = "PassPodRoles"
-    actions   = ["iam:PassRole", "iam:GetRole"]
+    sid       = "ReadPodRoles"
+    actions   = ["iam:GetRole"]
     resources = [aws_iam_role.eks_ebs_csi.arn, aws_iam_role.eks_plugins.arn]
+  }
+  statement {
+    sid       = "PassPodRoles"
+    actions   = ["iam:PassRole"]
+    resources = [aws_iam_role.eks_ebs_csi.arn, aws_iam_role.eks_plugins.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["pods.eks.amazonaws.com"]
+    }
   }
   statement {
     sid       = "PassSchedulerRole"
@@ -783,6 +967,12 @@ data "aws_iam_policy_document" "eks_run_node" {
       variable = "ec2:MetadataHttpTokens"
       values   = ["required"]
     }
+    # A dedicated instance costs more by the hour.
+    condition {
+      test     = "StringEqualsIfExists"
+      variable = "ec2:Tenancy"
+      values   = ["default"]
+    }
   }
   statement {
     sid       = "RunNodeVolume"
@@ -805,6 +995,17 @@ data "aws_iam_policy_document" "eks_run_node" {
       test     = "StringEquals"
       variable = "ec2:VolumeType"
       values   = ["gp3"]
+    }
+    # The free baseline of gp3. A volume without a value gets the baseline.
+    condition {
+      test     = "NumericLessThanEqualsIfExists"
+      variable = "ec2:VolumeIops"
+      values   = ["3000"]
+    }
+    condition {
+      test     = "NumericLessThanEqualsIfExists"
+      variable = "ec2:VolumeThroughput"
+      values   = ["125"]
     }
   }
   statement {

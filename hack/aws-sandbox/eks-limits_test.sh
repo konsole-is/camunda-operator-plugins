@@ -49,6 +49,12 @@ fail() {
 # denied by the absence of an allow.
 limits() {
   cat << 'EOF'
+cpo-ci-other explicitDeny
+ContextKeyValues=ec2\.amazonaws\.com, explicitDeny
+VolumeInitializationRate explicitDeny
+aws:TagKeys explicitDeny
+principalArn,ContextKeyValues=arn:aws:iam::111122223333:role/cpo-sandbox-eks, explicitDeny
+accessEntryType,ContextKeyValues=STANDARD, explicitDeny
 m5\.4xlarge explicitDeny
 HopLimit,ContextKeyValues=2, explicitDeny
 us-east-1 explicitDeny
@@ -57,6 +63,9 @@ loggingType/api explicitDeny
 io2 explicitDeny
 VolumeSize,ContextKeyValues=100, explicitDeny
 VolumeIops,ContextKeyValues=16000, explicitDeny
+VolumeThroughput,ContextKeyValues=1000, explicitDeny
+Tenancy,ContextKeyValues=dedicated, explicitDeny
+ContextKeyValues=None, explicitDeny
 action-names.(ec2:CreateNatGateway|ec2:AllocateAddress|elasticloadbalancing:CreateLoadBalancer|eks:CreateNodegroup|logs:CreateLogGroup|iam:CreateRole|ec2:CreateSnapshot|ec2:ModifyVolume|kms:PutKeyPolicy) explicitDeny
 action-names.iam:(GetRole|PassRole).--resource-arns.arn:aws:iam::111122223333:role/cpo-sandbox-eks-(ebs-csi|plugins). allowed
 ResourceTag/cpo-ci-run,ContextKeyValues=prod, implicitDeny
@@ -81,6 +90,31 @@ grep -q -- '--policy-source-arn arn:aws:iam::111122223333:role/cpo-sandbox-eks '
   fail "$name" "no call for the role cpo-sandbox-eks"
 grep -q -- 'ContextKeyName=aws:RequestedRegion,ContextKeyValues=eu-west-1,ContextKeyType=string' "$stub/calls" ||
   fail "$name" "no call in the region of the sandbox"
+
+name="a sandbox in us-east-1"
+limits | sed 's/^us-east-1 /us-west-2 /' > "$stub/decisions"
+rm -f "$stub/calls"
+out=$(AWS_REGION=us-east-1 "$here/eks-limits.sh")
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0: $out"
+grep -q -- 'ContextKeyName=aws:RequestedRegion,ContextKeyValues=us-west-2,ContextKeyType=string' "$stub/calls" ||
+  fail "$name" "no call in a region other than the region of the sandbox"
+
+name="a run tag that the controllers can overwrite with None"
+{ echo 'kms:TagResource.*ContextKeyValues=None, allowed'; limits; } > "$stub/decisions"
+out=$("$here/eks-limits.sh")
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+grep -q '^FAIL kms:TagResource by cpo-sandbox-eks-plugins on key/x with .*string:None.*: allowed, want explicitDeny$' <<< "$out" ||
+  fail "$name" "no FAIL line for the tag write in: $out"
+
+name="a node volume with paid throughput"
+{ echo 'ec2:RunInstances.*VolumeThroughput allowed'; limits; } > "$stub/decisions"
+out=$("$here/eks-limits.sh")
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+grep -q '^FAIL ec2:RunInstances by cpo-sandbox-eks on volume/\* with .*VolumeThroughput=numeric:1000.*: allowed, want explicitDeny$' <<< "$out" ||
+  fail "$name" "no FAIL line for the node volume in: $out"
 
 name="a NAT gateway that the role can create"
 { echo 'role/cpo-sandbox-eks.--action-names.ec2:CreateNatGateway allowed'; limits; } > "$stub/decisions"

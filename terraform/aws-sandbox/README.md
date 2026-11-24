@@ -70,9 +70,16 @@ The policy `cpo-sandbox-eks-limits` is on each role of an EKS run. With it, a ro
 - Use a region other than the region of the sandbox.
 - Start an instance of a type other than `eks_instance_types` (`t3.xlarge` or `t3a.xlarge`), or with an instance metadata hop limit above 1.
 - Create a NAT gateway, an Elastic IP, a load balancer, a node group, an Auto Scaling group, a launch template, a snapshot, a log group, a VPC, or a CloudFormation stack.
-- Remove the tag `cpo-ci-run`.
+- Create a volume other than a gp3 volume of at most 10 GiB at the free baseline of IOPS and throughput, with a tag `cpo-ci-run` that starts with `cpo-ci-`. This limit holds for the control plane and the EBS CSI controller, whose managed policies can create volumes. The root volume of a node has its own limit, below.
+- Change a volume after its create.
+- Remove the tag `cpo-ci-run`, or give it a value that does not start with `cpo-ci-`. The sweeps skip such a value.
+- Write the tag `cpo-ci-run` on an EC2 resource after its create.
 
-The run role can create a cluster, an instance, or a volume only with the tag `cpo-ci-run`. It can create only a cluster of standard support, without control plane logs. The EBS CSI controller can create only gp3 volumes of at most 10 GiB, at the free baseline of IOPS and throughput, with the tag of the run. It cannot change a volume after its create.
+The run role can create a cluster, an instance, or a volume only with the tag `cpo-ci-run`. It can create only a cluster of standard support, without control plane logs. It can start a node only with default tenancy and a gp3 root volume of at most 30 GiB, at the free baseline of IOPS and throughput. It can create only the access entry of the node, and pass the two pod roles only to EKS Pod Identity.
+
+The EBS CSI controller and the release `aws` get their credentials from EKS Pod Identity, whose session names the cluster of the run. With it, they write only the run tag of their own run. The release changes only the roles, keys, aliases, and Pod Identity associations of its own run.
+
+IAM cannot limit what a trust policy holds, and a role of a run can change the trust of a role of a run. So the sweep removes each `cpo-ci-*` role, at any age, that trusts a principal that no run trusts: anyone, another account, an identity provider of GitHub or of another account, or a service other than EKS Pod Identity. `leftovers.sh` reports such a role.
 
 A cluster and a node that every removal missed cost about 6.90 USD a day: 2.40 USD for the cluster, 4.38 USD for the `t3.xlarge` node, and 0.12 USD for its public IPv4 address. The daily budget sends an email when a day costs more than `daily_budget_limit_usd` (2 USD by default). It stops nothing, and AWS updates its cost data up to three times a day, typically 8 to 12 hours apart.
 
