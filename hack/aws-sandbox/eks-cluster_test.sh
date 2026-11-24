@@ -13,6 +13,14 @@ echo "aws $*" >> "$STUB/calls"
 for a in "$@"; do
   [[ $a != file://* ]] || cp "${a#file://}" "$STUB/user-data"
 done
+arg() {
+  local name=$1
+  shift
+  while [ $# -gt 1 ]; do
+    [ "$1" != "$name" ] || { echo "$2"; return; }
+    shift
+  done
+}
 case "$1 $2" in
   "eks describe-cluster-versions") echo '{"clusterVersions": [{"clusterVersion": "1.34"}]}' ;;
   "eks describe-addon-versions")
@@ -28,7 +36,22 @@ case "$1 $2" in
   "ec2 describe-instances") cat "$STUB/instances.json" ;;
   "ssm get-parameter") echo '{"Parameter": {"Value": "ami-1"}}' ;;
   "ec2 run-instances") echo '{"Instances": [{"InstanceId": "i-1"}]}' ;;
-  "scheduler create-schedule" | "eks create-cluster" | "eks create-access-entry" | \
+  # EventBridge Scheduler refuses a universal target whose input lacks a
+  # member of the request of the API action, with the name of that member.
+  "scheduler create-schedule")
+    target=$(arg --target "$@")
+    case $(jq -r .Arn <<< "$target") in
+      *:eks:deleteCluster) member=Name ;;
+      *:ec2:terminateInstances) member=InstanceIds ;;
+      *) member="" ;;
+    esac
+    if [ -n "$member" ] && ! jq -e --arg m "$member" '.Input | fromjson | has($m)' <<< "$target" > /dev/null; then
+      echo "An error occurred (ValidationException) when calling the CreateSchedule operation: Invalid RequestJson provided. Reason Request payload is missing the following field(s): $member." >&2
+      exit 254
+    fi
+    echo '{}'
+    ;;
+  "eks create-cluster" | "eks create-access-entry" | \
     "eks create-pod-identity-association" | "eks create-addon") echo '{}' ;;
   # The cluster takes ELAPSED seconds of the clock of the stub date.
   "eks wait") [ "$3" != cluster-active ] || echo "${ELAPSED:-0}" > "$STUB/offset" ;;
@@ -89,7 +112,7 @@ grep -qx 'cluster=cpo-ci-1-1-1' <<< "$out" || fail "a cluster" "printed '$out', 
 name="the delete schedule comes first"
 schedule=$(call "aws scheduler create-schedule")
 for want in "--name cpo-ci-1-1-1-delete-cluster" "--group-name cpo-sandbox-eks" "at(" \
-  "--action-after-completion DELETE" "aws-sdk:eks:deleteCluster" '\"name\":\"cpo-ci-1-1-1\"'; do
+  "--action-after-completion DELETE" "aws-sdk:eks:deleteCluster" '\"Name\":\"cpo-ci-1-1-1\"'; do
   [[ $schedule == *"$want"* ]] || fail "$name" "the first schedule '$schedule' lacks '$want'"
 done
 first_create=$(grep -n -m1 -E 'aws [a-z0-9]+ (create-|run-instances)' "$stub/calls" | cut -d: -f1)

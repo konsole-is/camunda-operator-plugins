@@ -95,7 +95,7 @@ ami=$(aws ssm get-parameter --output json \
   jq -r .Parameter.Value)
 
 echo "==> Arming the delete of the cluster ${run} in ${cluster_lifetime_minutes} minutes"
-schedule "${run}-delete-cluster" "${cluster_end}" eks:deleteCluster "$(jq -cn --arg n "${run}" '{name: $n}')"
+schedule "${run}-delete-cluster" "${cluster_end}" eks:deleteCluster "$(jq -cn --arg n "${run}" '{Name: $n}')"
 
 echo "==> Creating the EKS cluster ${run} (Kubernetes ${version})"
 aws eks create-cluster --name "${run}" --kubernetes-version "${version}" --role-arn "${AWS_EKS_CLUSTER_ROLE_ARN}" \
