@@ -237,9 +237,12 @@ data "aws_iam_policy_document" "eks_ebs_csi" {
       values   = ["false"]
     }
   }
+  # A volume of a run is a small gp3 volume at the free baseline of IOPS and
+  # throughput. CopyVolumes makes a volume as CreateVolume does, and a
+  # ModifyVolume or a fast snapshot restore costs more after the create.
   statement {
     effect    = "Deny"
-    actions   = ["ec2:CreateVolume"]
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
     resources = ["${local.ec2}:volume/*"]
     condition {
       test     = "Null"
@@ -249,7 +252,7 @@ data "aws_iam_policy_document" "eks_ebs_csi" {
   }
   statement {
     effect    = "Deny"
-    actions   = ["ec2:CreateVolume"]
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
     resources = ["${local.ec2}:volume/*"]
     condition {
       test     = "StringNotEquals"
@@ -259,13 +262,38 @@ data "aws_iam_policy_document" "eks_ebs_csi" {
   }
   statement {
     effect    = "Deny"
-    actions   = ["ec2:CreateVolume"]
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
     resources = ["${local.ec2}:volume/*"]
     condition {
       test     = "NumericGreaterThan"
       variable = "ec2:VolumeSize"
       values   = ["10"]
     }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
+    resources = ["${local.ec2}:volume/*"]
+    condition {
+      test     = "NumericGreaterThan"
+      variable = "ec2:VolumeIops"
+      values   = ["3000"]
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:CreateVolume", "ec2:CopyVolumes"]
+    resources = ["${local.ec2}:volume/*"]
+    condition {
+      test     = "NumericGreaterThan"
+      variable = "ec2:VolumeThroughput"
+      values   = ["125"]
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:ModifyVolume", "ec2:EnableFastSnapshotRestores"]
+    resources = ["*"]
   }
 }
 

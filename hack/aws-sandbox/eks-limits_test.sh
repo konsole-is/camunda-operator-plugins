@@ -56,7 +56,8 @@ EXTENDED explicitDeny
 loggingType/api explicitDeny
 io2 explicitDeny
 VolumeSize,ContextKeyValues=100, explicitDeny
-action-names.(ec2:CreateNatGateway|ec2:AllocateAddress|elasticloadbalancing:CreateLoadBalancer|eks:CreateNodegroup|logs:CreateLogGroup|iam:CreateRole|ec2:CreateSnapshot|kms:PutKeyPolicy) explicitDeny
+VolumeIops,ContextKeyValues=16000, explicitDeny
+action-names.(ec2:CreateNatGateway|ec2:AllocateAddress|elasticloadbalancing:CreateLoadBalancer|eks:CreateNodegroup|logs:CreateLogGroup|iam:CreateRole|ec2:CreateSnapshot|ec2:ModifyVolume|kms:PutKeyPolicy) explicitDeny
 -cpo-ci-run implicitDeny
 EOF
 }

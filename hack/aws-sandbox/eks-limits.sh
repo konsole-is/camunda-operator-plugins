@@ -85,6 +85,10 @@ expect "${role}" ec2:CreateVolume "${ec2}:volume/*" explicitDeny ec2:VolumeType=
 expect "${role}" ec2:CreateVolume "${ec2}:volume/*" explicitDeny ec2:VolumeType=string:io2 ec2:VolumeSize=numeric:1 "${driver}" "${tag}"
 expect "${role}" ec2:CreateVolume "${ec2}:volume/*" explicitDeny ec2:VolumeType=string:gp3 ec2:VolumeSize=numeric:100 "${driver}" "${tag}"
 expect "${role}" ec2:CreateSnapshot "${ec2}:volume/*" explicitDeny "${driver}" "${tag}"
+expect "${role}" ec2:CreateVolume "${ec2}:volume/*" explicitDeny ec2:VolumeType=string:gp3 ec2:VolumeSize=numeric:1 \
+  ec2:VolumeIops=numeric:16000 "${driver}" "${tag}"
+expect "${role}" ec2:CopyVolumes "${ec2}:volume/*" explicitDeny ec2:VolumeType=string:gp3 ec2:VolumeSize=numeric:100 "${driver}" "${tag}"
+expect "${role}" ec2:ModifyVolume "${ec2}:volume/*" explicitDeny aws:ResourceTag/ebs.csi.aws.com/cluster=string:true
 
 # The controllers of the release aws.
 role=cpo-sandbox-eks-plugins
