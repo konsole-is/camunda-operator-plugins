@@ -122,7 +122,11 @@ func httpRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 }
 
 func httpFilters(p Params) []gatewayv1.HTTPRouteFilter {
-	var filters []gatewayv1.HTTPRouteFilter
+	if len(p.RouteFilters) == 0 {
+		return nil
+	}
+
+	filters := make([]gatewayv1.HTTPRouteFilter, 0, len(p.RouteFilters))
 	for _, ref := range p.RouteFilters {
 		filters = append(
 			filters,
@@ -158,7 +162,11 @@ func grpcRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 }
 
 func grpcFilters(p Params) []gatewayv1.GRPCRouteFilter {
-	var filters []gatewayv1.GRPCRouteFilter
+	if len(p.RouteFilters) == 0 {
+		return nil
+	}
+
+	filters := make([]gatewayv1.GRPCRouteFilter, 0, len(p.RouteFilters))
 	for _, ref := range p.RouteFilters {
 		filters = append(
 			filters,

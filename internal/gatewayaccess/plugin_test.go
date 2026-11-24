@@ -79,10 +79,10 @@ func TestDeleteRoutes_DeletesOnlyTheListedRoute(t *testing.T) {
 }
 
 // policyTargeting returns a policy of the kind gvk named name whose target is
-// the route of kind and route.
-func policyTargeting(gvk schema.GroupVersionKind, name, kind, route string) *unstructured.Unstructured {
+// the HTTPRoute route.
+func policyTargeting(gvk schema.GroupVersionKind, name, route string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{
-		"targetRefs": []any{map[string]any{"group": gatewayv1.GroupName, "kind": kind, "name": route}},
+		"targetRefs": []any{map[string]any{"group": gatewayv1.GroupName, "kind": "HTTPRoute", "name": route}},
 	}}}
 	u.SetGroupVersionKind(gvk)
 	u.SetName(name)
@@ -90,8 +90,8 @@ func policyTargeting(gvk schema.GroupVersionKind, name, kind, route string) *uns
 }
 
 func TestStalePolicies_ReturnsPoliciesThatAreNotWanted(t *testing.T) {
-	keep := policyTargeting(examplePolicy, "a-policy-0", "HTTPRoute", "a")
-	drop := policyTargeting(examplePolicy, "a-policy-1", "HTTPRoute", "a")
+	keep := policyTargeting(examplePolicy, "a-policy-0", "a")
+	drop := policyTargeting(examplePolicy, "a-policy-1", "a")
 
 	got := StalePolicies([]*unstructured.Unstructured{keep, drop}, []*unstructured.Unstructured{keep}, nil)
 
@@ -99,14 +99,14 @@ func TestStalePolicies_ReturnsPoliciesThatAreNotWanted(t *testing.T) {
 }
 
 func TestStalePolicies_KeepsThePolicyOfARouteThatIsStillGoing(t *testing.T) {
-	policy := policyTargeting(examplePolicy, "a-optimize-policy-0", "HTTPRoute", "a-optimize")
+	policy := policyTargeting(examplePolicy, "a-optimize-policy-0", "a-optimize")
 	going := []client.Object{&gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "a-optimize"}}}
 
 	assert.Empty(t, StalePolicies([]*unstructured.Unstructured{policy}, nil, going))
 }
 
 func TestStalePolicies_TheGoingRouteOfAnotherKindDoesNotKeepIt(t *testing.T) {
-	policy := policyTargeting(examplePolicy, "a-policy-0", "HTTPRoute", "a")
+	policy := policyTargeting(examplePolicy, "a-policy-0", "a")
 	going := []client.Object{&gatewayv1.GRPCRoute{ObjectMeta: metav1.ObjectMeta{Name: "a"}}}
 
 	got := StalePolicies([]*unstructured.Unstructured{policy}, nil, going)
@@ -116,8 +116,8 @@ func TestStalePolicies_TheGoingRouteOfAnotherKindDoesNotKeepIt(t *testing.T) {
 
 func TestStalePolicies_SameNameOfAnotherKindIsStale(t *testing.T) {
 	other := schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "OtherPolicy"}
-	live := policyTargeting(examplePolicy, "a-policy-0", "HTTPRoute", "a")
-	desired := policyTargeting(other, "a-policy-0", "HTTPRoute", "a")
+	live := policyTargeting(examplePolicy, "a-policy-0", "a")
+	desired := policyTargeting(other, "a-policy-0", "a")
 
 	got := StalePolicies([]*unstructured.Unstructured{live}, []*unstructured.Unstructured{desired}, nil)
 

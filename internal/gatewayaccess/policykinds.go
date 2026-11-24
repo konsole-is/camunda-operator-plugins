@@ -49,17 +49,16 @@ func ParsePolicyKinds(value string) ([]schema.GroupVersionKind, error) {
 
 	var kinds []schema.GroupVersionKind
 	for entry := range strings.SplitSeq(value, ",") {
-		i := strings.LastIndex(entry, "/")
-		if i < 0 {
+		apiVersion, kind, ok := strings.CutLast(entry, "/")
+		if !ok {
 			return nil, fmt.Errorf("the policy kind %q is not <apiVersion>/<kind>", entry)
 		}
 
-		gv, err := schema.ParseGroupVersion(entry[:i])
+		gv, err := schema.ParseGroupVersion(apiVersion)
 		if err != nil {
 			return nil, fmt.Errorf("the policy kind %q has a bad apiVersion: %w", entry, err)
 		}
 
-		kind := entry[i+1:]
 		if kind == "" || gv.Group == "" || gv.Version == "" {
 			return nil, fmt.Errorf("the policy kind %q needs a group, a version, and a kind", entry)
 		}

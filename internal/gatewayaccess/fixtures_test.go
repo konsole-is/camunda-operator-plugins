@@ -25,6 +25,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -323,9 +324,7 @@ func rawParamsWith(p gatewayaccess.Params, extra map[string]any) *apiextensionsv
 	if len(extra) > 0 {
 		var values map[string]any
 		_ = json.Unmarshal(raw, &values)
-		for k, v := range extra {
-			values[k] = v
-		}
+		maps.Copy(values, extra)
 		raw, _ = json.Marshal(values)
 	}
 	return &apiextensionsv1.JSON{Raw: raw}

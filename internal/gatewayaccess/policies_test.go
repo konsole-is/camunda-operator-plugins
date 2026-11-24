@@ -18,6 +18,7 @@ package gatewayaccess
 
 import (
 	"encoding/json"
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,9 +46,7 @@ func templateParams(t *testing.T, templates string, extra map[string]any) Params
 	var values map[string]any
 	require.NoError(t, json.Unmarshal(raw, &values))
 	values["policyTemplates"] = json.RawMessage(templates)
-	for k, v := range extra {
-		values[k] = v
-	}
+	maps.Copy(values, extra)
 
 	raw, err = json.Marshal(values)
 	require.NoError(t, err)
