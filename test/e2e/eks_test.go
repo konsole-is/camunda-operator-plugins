@@ -123,7 +123,17 @@ var _ = Describe("the EKS proof", Ordered, Label(labelEKS), func() {
 		// EKS can take a while before a new association gives credentials, so
 		// each try starts a new pod.
 		Eventually(func(g Gomega) {
-			out, err := awsCLI(eksSet, serviceAccount, regionEnv(), "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
+			out, err := awsCLI(
+				eksSet,
+				serviceAccount,
+				regionEnv(),
+				"sts",
+				"get-caller-identity",
+				"--query",
+				"Arn",
+				"--output",
+				"text",
+			)
 			g.Expect(err).NotTo(HaveOccurred(), out)
 			g.Expect(strings.TrimSpace(out)).To(HavePrefix(
 				"arn:aws:sts::" + requiredEnv("AWS_ACCOUNT_ID") + ":assumed-role/" + path.Base(role) + "/",
@@ -138,7 +148,9 @@ var _ = Describe("the EKS proof", Ordered, Label(labelEKS), func() {
 		target := identity.Spec.Target
 		Expect(append([]string{target.ServiceAccountName}, target.AdditionalServiceAccounts...)).
 			NotTo(ContainElement(untrustedServiceAccount))
-		createAll(&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: untrustedServiceAccount, Namespace: eksSet}})
+		createAll(
+			&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: untrustedServiceAccount, Namespace: eksSet}},
+		)
 
 		out, err := awsCLI(eksSet, untrustedServiceAccount, regionEnv(), "sts", "get-caller-identity")
 		Expect(err).To(HaveOccurred(), "the pod got credentials:\n%s", out)
@@ -218,7 +230,12 @@ func brokerVolumeIDs(namespace, storageClass string) ([]string, error) {
 			continue
 		}
 		if pvc.Status.Phase != corev1.ClaimBound {
-			return nil, fmt.Errorf("the PersistentVolumeClaim %s/%s is %s, not Bound", namespace, pvc.Name, pvc.Status.Phase)
+			return nil, fmt.Errorf(
+				"the PersistentVolumeClaim %s/%s is %s, not Bound",
+				namespace,
+				pvc.Name,
+				pvc.Status.Phase,
+			)
 		}
 
 		var volume corev1.PersistentVolume
