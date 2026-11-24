@@ -56,7 +56,7 @@ Give each run an ID that starts with `cpo-ci-`, for example `cpo-ci-${{ github.r
 
 The workflow `.github/workflows/eks-proof.yml` proves volume encryption and Pod Identity of the AWS plugins on a real EKS cluster. A maintainer starts it by hand: with `workflow_dispatch` on `main`, or by adding the label `eks-proof` to a pull request of this repository. Only the trusted user can start it, and only one EKS run runs at a time.
 
-A run creates one EKS cluster with one `t3.xlarge` node, the volumes of one Camunda cluster, one KMS key, one hub role, and two images. `hack/aws-sandbox/eks-cluster.sh` creates the cluster, and `make journey-eks` runs the journey `eks` on it. Three layers remove what the run created:
+A run creates one EKS cluster with one `t3.xlarge` node, the volumes of one Camunda cluster, one KMS key, one hub role, and two images. `hack/aws-sandbox/eks-cluster.sh` creates the cluster, and `make journey-eks` runs the journey `eks` on it. A run takes about 50 minutes and costs about 0.10 USD: the cluster lives about 25 minutes and the node about 15. Three layers remove what the run created:
 
 - The last step of the job runs `eks-teardown.sh` when the job passes or fails. It fails when `leftovers.sh --eks` still finds anything of the run.
 - AWS ends the node and the cluster also when the job is gone. A schedule terminates the node 150 minutes after the start of the run, and the node shuts itself down a few minutes before that. A second schedule deletes the cluster after 160 minutes. Each image expires one day after its push.
