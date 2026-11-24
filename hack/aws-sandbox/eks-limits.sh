@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Checks the cost limits of the roles of an EKS run with the IAM policy
 # simulator, after an apply of terraform/aws-sandbox. It prints one line for
-# each case: "ok <case>", or "FAIL <case>: <decision>, want <decision>". It
-# exits 1 when a case fails or a simulator call fails.
+# each case that starts with "ok" or "FAIL", and a last line
+# "eks-limits: <n> ok, <m> failed". It exits 1 when a case fails or a
+# simulator call fails.
 #
 # Usage: eks-limits.sh
 #
@@ -13,6 +14,7 @@ set -euo pipefail
 account=$(aws sts get-caller-identity --query Account --output text)
 ec2=arn:aws:ec2:${AWS_REGION}:${account}
 failed=0
+passed=0
 
 # expect <role> <action> <resource> <want> [<key>=<type>:<value>...] runs one
 # case. want is allowed or explicitDeny; an implicitDeny counts as denied.
@@ -37,14 +39,15 @@ expect() {
     --context-entries "${entries[@]}" \
     --query 'EvaluationResults[0].EvalDecision' --output text); then
     echo "FAIL ${name}: the simulator call failed"
-    failed=1
+    failed=$((failed + 1))
     return
   fi
   if [ "${decision}" = "${want}" ] || { [ "${want}" = explicitDeny ] && [ "${decision}" = implicitDeny ]; }; then
     echo "ok ${name}"
+    passed=$((passed + 1))
   else
     echo "FAIL ${name}: ${decision}, want ${want}"
-    failed=1
+    failed=$((failed + 1))
   fi
 }
 
@@ -60,11 +63,14 @@ expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceT
 expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceType=string:t3.xlarge "${node[@]}"
 expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceType=string:t3.xlarge "${node[@]}" "${tag}" \
   aws:RequestedRegion=string:us-east-1
-cluster=arn:aws:eks:${AWS_REGION}:${account}:cluster/cpo-ci-limits
-expect "${role}" eks:CreateCluster "${cluster}" allowed eks:supportType=string:STANDARD "${tag}"
-expect "${role}" eks:CreateCluster "${cluster}" explicitDeny eks:supportType=string:EXTENDED "${tag}"
-expect "${role}" eks:CreateCluster "${cluster}" explicitDeny eks:supportType=string:STANDARD eks:loggingType/api=boolean:true "${tag}"
-expect "${role}" eks:CreateCluster "${cluster}" explicitDeny eks:supportType=string:STANDARD
+# CreateCluster takes no resource, so a real call is checked against "*".
+expect "${role}" eks:CreateCluster "*" allowed eks:supportType=string:STANDARD "${tag}"
+expect "${role}" eks:CreateCluster "*" explicitDeny eks:supportType=string:EXTENDED "${tag}"
+expect "${role}" eks:CreateCluster "*" explicitDeny eks:supportType=string:STANDARD eks:loggingType/api=boolean:true "${tag}"
+expect "${role}" eks:CreateCluster "*" explicitDeny eks:supportType=string:STANDARD
+cluster=arn:aws:eks:${AWS_REGION}:${account}:cluster/other
+expect "${role}" eks:DeleteCluster "${cluster}" allowed aws:ResourceTag/cpo-ci-run=string:cpo-ci-limits
+expect "${role}" eks:DeleteCluster "${cluster}" explicitDeny
 for action in ec2:CreateNatGateway ec2:AllocateAddress elasticloadbalancing:CreateLoadBalancer eks:CreateNodegroup \
   logs:CreateLogGroup iam:CreateRole; do
   expect "${role}" "${action}" "*" explicitDeny
@@ -97,4 +103,5 @@ expect "${role}" kms:CreateKey "*" explicitDeny kms:KeyOrigin=string:AWS_KMS
 expect "${role}" iam:CreateRole "arn:aws:iam::${account}:role/cpo-ci-limits-hub-x" explicitDeny "${tag}"
 expect "${role}" kms:PutKeyPolicy "arn:aws:kms:${AWS_REGION}:${account}:key/x" explicitDeny
 
-exit "${failed}"
+echo "eks-limits: ${passed} ok, ${failed} failed"
+[ "${failed}" -eq 0 ]

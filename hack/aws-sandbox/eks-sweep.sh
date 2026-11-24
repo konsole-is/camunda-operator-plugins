@@ -92,10 +92,10 @@ live_runs() {
     jq -r ".Reservations[].Instances[] | select(.State.Name != \"terminated\") | ${run_tag}"
 }
 
-# cluster_names prints the cpo-ci-* clusters of the region, and fails when the
+# cluster_names prints the clusters of the region, and fails when the
 # listing fails.
 cluster_names() {
-  aws eks list-clusters --output json | jq -r '.clusters[] | select(startswith("cpo-ci-"))'
+  aws eks list-clusters --output json | jq -r '.clusters[]'
 }
 
 # 1. The nodes first, so that no volume stays in use and no pod writes again.
@@ -115,11 +115,11 @@ if [ ${#ids[@]} -gt 0 ]; then
   step aws ec2 wait instance-terminated --instance-ids "${ids[@]}"
 fi
 
-# 2. The clusters. A cluster in CREATING cannot be deleted yet, and a cluster
-# in DELETING is only waited for.
+# 2. The clusters, by the run tag, whatever their name. A cluster in CREATING
+# cannot be deleted yet, and a cluster in DELETING is only waited for.
 listing clusters "EKS clusters" eks list-clusters
 deleted=()
-for name in $(jq -r '.clusters[] | select(startswith("cpo-ci-"))' <<< "${clusters:-null}"); do
+for name in $(jq -r '(.clusters // [])[]' <<< "${clusters:-null}"); do
   err=$(mktemp)
   if ! cluster=$(aws eks describe-cluster --name "${name}" --output json 2> "${err}"); then
     # The sweep of another run can delete it at the same time.

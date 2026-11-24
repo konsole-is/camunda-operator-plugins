@@ -163,6 +163,14 @@ add clusters.json --arg at "$young" '. += [{name: "cpo-ci-1-1-1", status: "CREAT
   [ "$(line_of 'eks wait cluster-active')" -lt "$(line_of 'eks delete-cluster --name cpo-ci-1-1-1')" ] ||
   fail "$name" "did not wait for the cluster before its delete"
 
+name="a cluster of the run with another name"
+empty
+add clusters.json --arg at "$young" '. += [{name: "other", status: "ACTIVE", createdAt: $at, tags: {"cpo-ci-run": "cpo-ci-1-1-1"}},
+  {name: "kept", status: "ACTIVE", createdAt: $at, tags: {}}]'
+"$here/eks-sweep.sh" --run cpo-ci-1-1-1 > /dev/null
+called "eks delete-cluster --name other" || fail "$name" "did not delete the cluster with the run tag"
+! called "eks delete-cluster --name kept" || fail "$name" "deleted a cluster without the run tag"
+
 name="interfaces while another run's cluster is up"
 empty
 echo '{"NetworkInterfaces": [{"NetworkInterfaceId": "eni-1", "Status": "available"}]}' > "$stub/interfaces.json"

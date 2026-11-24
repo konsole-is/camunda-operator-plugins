@@ -73,6 +73,32 @@ volumes_filter=".Volumes[] | select(${run_tag} as \$tag | \$tag == \$run or
   any((.Tags // [])[]; .Key == \"kubernetes.io/cluster/\" + \$run) or
   (\$tag == null and any((.Tags // [])[]; .Key == \"ebs.csi.aws.com/cluster\"))) | .VolumeId"
 
+# clusters_left <region> <kind> prints each EKS cluster of the run in region:
+# the cluster with the name of the run, and each cluster with its run tag.
+clusters_left() {
+  local region=$1 kind=$2 names name tag err
+  if ! names=$(aws eks list-clusters --region "${region}" --output json | jq -r '.clusters[]'); then
+    echo "failed to list: ${kind}" >&2
+    failed=1
+    return
+  fi
+  err=$(mktemp)
+  for name in ${names}; do
+    if [ "${name}" != "${run}" ]; then
+      if ! tag=$(aws eks describe-cluster --region "${region}" --name "${name}" --output json 2> "${err}" |
+        jq -r '.cluster.tags["cpo-ci-run"] // ""'); then
+        # A cluster that is gone since the listing is no leftover.
+        grep -q ResourceNotFoundException "${err}" || { echo "failed to read: ${kind} ${name}" >&2; failed=1; }
+        continue
+      fi
+      [ "${tag}" = "${run}" ] || continue
+    fi
+    echo "left: ${kind} ${name}"
+    failed=1
+  done
+  rm -f "${err}"
+}
+
 # keys_left <region> <kind> prints each KMS key of the run in region that is
 # not pending deletion. A key whose tags the role cannot read belongs to no
 # run.
@@ -106,7 +132,7 @@ left "OIDC provider" '.OpenIDConnectProviderList[].Arn | select(endswith("/" + $
 left bucket '.Buckets[].Name | select(startswith($run + "-"))' s3api list-buckets
 
 if ${eks}; then
-  left "EKS cluster" '.clusters[] | select(. == $run)' eks list-clusters
+  clusters_left "${AWS_REGION}" "EKS cluster"
   left "EC2 instance" "${instances_filter}" ec2 describe-instances --filters "Name=tag-key,Values=cpo-ci-run"
   left "EBS volume" "${volumes_filter}" ec2 describe-volumes \
     --filters "Name=tag-key,Values=cpo-ci-run,ebs.csi.aws.com/cluster,kubernetes.io/cluster/${run}"
@@ -139,7 +165,7 @@ if ${all_regions}; then
   fi
   for region in ${regions:-}; do
     [ "${region}" != "${AWS_REGION}" ] || continue
-    left "EKS cluster in ${region}" '.clusters[] | select(. == $run)' eks list-clusters --region "${region}"
+    clusters_left "${region}" "EKS cluster in ${region}"
     left "EC2 instance in ${region}" "${instances_filter}" \
       ec2 describe-instances --region "${region}" --filters "Name=tag-key,Values=cpo-ci-run"
     left "EBS volume in ${region}" "${volumes_filter}" ec2 describe-volumes --region "${region}" \

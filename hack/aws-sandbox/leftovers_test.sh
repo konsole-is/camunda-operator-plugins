@@ -31,6 +31,10 @@ case "$1 $2" in
   "iam list-open-id-connect-providers") cat "$STUB/providers.json" ;;
   "s3api list-buckets") cat "$STUB/buckets.json" ;;
   "eks list-clusters") answer clusters.json '{"clusters": []}' ;;
+  "eks describe-cluster")
+    cat "$dir/cluster-$(arg --name "$@").json" 2> /dev/null ||
+      { echo "An error occurred (ResourceNotFoundException)" >&2; exit 254; }
+    ;;
   "ec2 describe-instances") answer instances.json '{"Reservations": []}' ;;
   "ec2 describe-volumes") answer volumes.json '{"Volumes": []}' ;;
   "ec2 describe-network-interfaces") answer interfaces.json '{"NetworkInterfaces": []}' ;;
@@ -172,6 +176,17 @@ left: EBS volume vol-1
 left: image cpo-sandbox-eks/aws:cpo-ci-1-1-1
 left: schedule cpo-ci-1-1-1-delete-cluster"
 [ "$(sort <<< "$out")" = "$(sort <<< "$want")" ] || fail "$name" "printed '$out', want '$want'"
+
+name="--eks a cluster of the run with another name"
+eks_account
+add_cluster other
+add_cluster cpo-ci-1-1-10
+echo '{"cluster": {"name": "other", "tags": {"cpo-ci-run": "cpo-ci-1-1-1"}}}' > "$stub/cluster-other.json"
+echo '{"cluster": {"name": "cpo-ci-1-1-10", "tags": {"cpo-ci-run": "cpo-ci-1-1-10"}}}' > "$stub/cluster-cpo-ci-1-1-10.json"
+out=$("$here/leftovers.sh" --eks cpo-ci-1-1-1)
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+[ "$out" = "left: EKS cluster other" ] || fail "$name" "printed '$out'"
 
 name="--eks a volume of the driver without the run tag"
 eks_account

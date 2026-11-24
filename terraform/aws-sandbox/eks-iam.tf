@@ -585,11 +585,12 @@ data "aws_iam_policy_document" "eks_run" {
   }
   # Standard support only: extended support costs six times as much. No
   # control plane logs, no Auto Mode, no secrets encryption, and no
-  # provisioned control plane.
+  # provisioned control plane. CreateCluster takes no resource, so IAM cannot
+  # limit the name of a cluster to cpo-ci-*.
   statement {
     sid       = "CreateCluster"
     actions   = ["eks:CreateCluster"]
-    resources = ["${local.eks}:cluster/cpo-ci-*"]
+    resources = ["*"]
     dynamic "condition" {
       for_each = local.run_tag_request
       content {
@@ -653,10 +654,12 @@ data "aws_iam_policy_document" "eks_run" {
       variable = "eks:encryptionConfigProviderKeyArns"
       values   = ["true"]
     }
+    # New clusters run the standard tier by default. Each other tier adds an
+    # hourly charge.
     condition {
-      test     = "Null"
+      test     = "StringEqualsIfExists"
       variable = "eks:controlPlaneScalingTier"
-      values   = ["true"]
+      values   = ["standard"]
     }
   }
   statement {
@@ -681,6 +684,23 @@ data "aws_iam_policy_document" "eks_run" {
       "eks:ListPodIdentityAssociations", "eks:DescribePodIdentityAssociation",
     ]
     resources = local.eks_parts
+  }
+  # The sweep reads each cluster of the region, and deletes one with a run
+  # tag whatever its name.
+  statement {
+    sid       = "AnyRunCluster"
+    actions   = ["eks:DescribeCluster"]
+    resources = ["${local.eks}:cluster/*"]
+  }
+  statement {
+    sid       = "DeleteAnyRunCluster"
+    actions   = ["eks:DeleteCluster"]
+    resources = ["${local.eks}:cluster/*"]
+    condition {
+      test     = "Null"
+      variable = "aws:ResourceTag/cpo-ci-run"
+      values   = ["false"]
+    }
   }
   statement {
     sid = "DeleteParts"

@@ -69,20 +69,23 @@ out=$("$here/eks-limits.sh")
 code=$?
 [ "$code" -eq 0 ] || fail "$name" "exit $code, want 0: $out"
 [ -n "$out" ] || fail "$name" "printed nothing"
-bad=$(grep -v '^ok ' <<< "$out")
+bad=$(sed '$d' <<< "$out" | grep -v '^ok ')
 [ -z "$bad" ] || fail "$name" "lines that are not ok: $bad"
+cases=$(sed '$d' <<< "$out" | wc -l)
+[ "$(tail -1 <<< "$out")" = "eks-limits: $cases ok, 0 failed" ] || fail "$name" "the last line is '$(tail -1 <<< "$out")'"
 grep -q -- '--policy-source-arn arn:aws:iam::111122223333:role/cpo-sandbox-eks ' "$stub/calls" ||
   fail "$name" "no call for the role cpo-sandbox-eks"
 grep -q -- 'ContextKeyName=aws:RequestedRegion,ContextKeyValues=eu-west-1,ContextKeyType=string' "$stub/calls" ||
   fail "$name" "no call in the region of the sandbox"
 
 name="a NAT gateway that the role can create"
-{ echo 'ec2:CreateNatGateway allowed'; limits; } > "$stub/decisions"
+{ echo 'role/cpo-sandbox-eks.--action-names.ec2:CreateNatGateway allowed'; limits; } > "$stub/decisions"
 out=$("$here/eks-limits.sh")
 code=$?
 [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
 grep -qxF "FAIL ec2:CreateNatGateway by cpo-sandbox-eks: allowed, want explicitDeny" <<< "$out" ||
   fail "$name" "no FAIL line for the NAT gateway in: $out"
+[[ $(tail -1 <<< "$out") =~ ^eks-limits:\ [0-9]+\ ok,\ 1\ failed$ ]] || fail "$name" "the last line is '$(tail -1 <<< "$out")'"
 
 name="an allowed case that is denied"
 { echo 'eks:CreateCluster.*STANDARD.*cpo-ci-run explicitDeny'; limits; } > "$stub/decisions"
