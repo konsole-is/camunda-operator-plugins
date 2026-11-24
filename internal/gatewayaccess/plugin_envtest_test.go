@@ -113,6 +113,18 @@ func ordersCluster(namespace string) {
 	Expect(publishEndpoints(ctx, k8s, cluster, standaloneEndpoints("orders"))).To(Succeed())
 }
 
+// ordersOptimize creates the CamundaOptimize analytics of the cluster orders
+// with its endpoint.
+func ordersOptimize(namespace string) *v1.CamundaOptimize {
+	GinkgoHelper()
+	optimize := newOptimize(namespace, "analytics", "orders")
+	Expect(k8s.Create(ctx, optimize)).To(Succeed())
+	Expect(publishEndpoints(ctx, k8s, optimize, []v1.Endpoint{
+		httpEndpoint("optimize", "analytics-optimize-webapp", 8090, "/"),
+	})).To(Succeed())
+	return optimize
+}
+
 // policyParams are gatewayParams with templates as the policy templates.
 func policyParams(templates ...gatewayaccess.PolicyTemplate) gatewayaccess.Params {
 	p := gatewayParams()
@@ -642,11 +654,7 @@ var _ = Describe("the gateway-access plugin", func() {
 		ordersCluster(ns)
 		request := policyRequest(ns, "orders-access", policyParams(examplePolicyTemplate()), "10.0.0.0/8")
 		Expect(k8s.Create(ctx, request)).To(Succeed())
-		optimize := newOptimize(ns, "analytics", "orders")
-		Expect(k8s.Create(ctx, optimize)).To(Succeed())
-		Expect(publishEndpoints(ctx, k8s, optimize, []v1.Endpoint{
-			httpEndpoint("optimize", "analytics-optimize-webapp", 8090, "/"),
-		})).To(Succeed())
+		optimize := ordersOptimize(ns)
 
 		Eventually(func(g Gomega) {
 			g.Expect(policiesOf(g, request)).To(HaveLen(3))
@@ -670,11 +678,7 @@ var _ = Describe("the gateway-access plugin", func() {
 		ordersCluster(ns)
 		request := policyRequest(ns, "orders-access", policyParams(examplePolicyTemplate()), "10.0.0.0/8")
 		Expect(k8s.Create(ctx, request)).To(Succeed())
-		optimize := newOptimize(ns, "analytics", "orders")
-		Expect(k8s.Create(ctx, optimize)).To(Succeed())
-		Expect(publishEndpoints(ctx, k8s, optimize, []v1.Endpoint{
-			httpEndpoint("optimize", "analytics-optimize-webapp", 8090, "/"),
-		})).To(Succeed())
+		optimize := ordersOptimize(ns)
 		Eventually(func(g Gomega) {
 			g.Expect(policyExists(g, ns, "orders-access-optimize-policy-0")).To(BeTrue())
 		}, timeout).Should(Succeed())
