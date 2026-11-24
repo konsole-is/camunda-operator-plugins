@@ -28,7 +28,7 @@ resource "aws_budgets_budget" "monthly" {
 }
 
 # A cluster and a node that every removal of an EKS run missed cost about
-# 2.40 USD a day, so this alert comes on the first day.
+# 6.90 USD a day.
 resource "aws_budgets_budget" "daily" {
   count = length(var.alert_emails) > 0 ? 1 : 0
 
@@ -39,6 +39,8 @@ resource "aws_budgets_budget" "daily" {
   limit_unit   = "USD"
 
   notification {
+    # AWS updates the cost data of a budget up to three times a day,
+    # typically 8 to 12 hours apart.
     notification_type          = "ACTUAL"
     comparison_operator        = "GREATER_THAN"
     threshold                  = 100

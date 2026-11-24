@@ -72,9 +72,9 @@ The policy `cpo-sandbox-eks-limits` is on each role of an EKS run. With it, a ro
 - Create a NAT gateway, an Elastic IP, a load balancer, a node group, an Auto Scaling group, a launch template, a snapshot, a log group, a VPC, or a CloudFormation stack.
 - Remove the tag `cpo-ci-run`.
 
-The run role can create a cluster, an instance, or a volume only with the tag `cpo-ci-run`. It can create only a cluster of standard support, without control plane logs. The EBS CSI controller can create only gp3 volumes of at most 10 GiB, with the tag of the run.
+The run role can create a cluster, an instance, or a volume only with the tag `cpo-ci-run`. It can create only a cluster of standard support, without control plane logs. The EBS CSI controller can create only gp3 volumes of at most 10 GiB, at the free baseline of IOPS and throughput, with the tag of the run. It cannot change a volume after its create.
 
-A cluster and a node that every removal missed cost about 2.40 USD a day. The daily budget alerts when a day costs more than `daily_budget_limit_usd` (2 USD by default).
+A cluster and a node that every removal missed cost about 6.90 USD a day: 2.40 USD for the cluster, 4.38 USD for the `t3.xlarge` node, and 0.12 USD for its public IPv4 address. The daily budget sends an email when a day costs more than `daily_budget_limit_usd` (2 USD by default). It stops nothing, and AWS updates its cost data up to three times a day, typically 8 to 12 hours apart.
 
 After an apply, check the limits with administrator credentials:
 

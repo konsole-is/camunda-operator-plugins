@@ -58,9 +58,11 @@ The workflow `.github/workflows/eks-proof.yml` proves volume encryption and Pod 
 
 A run creates one EKS cluster with one `t3.xlarge` node, the volumes of one Camunda cluster, one KMS key, one hub role, and two images. `hack/aws-sandbox/eks-cluster.sh` creates the cluster, and `make journey-eks` runs the journey `eks` on it. Three layers remove what the run created:
 
-- The last step of the job runs `eks-teardown.sh` on pass, fail, and cancel. It fails when `leftovers.sh --eks` still finds anything of the run.
-- AWS ends the run also when the job is gone. The node shuts itself down after 150 minutes, a schedule terminates it at the same time, and a second schedule deletes the cluster after 160 minutes. Each image expires one day after its push.
-- The hourly sweep removes each EKS run that is older than two hours.
+- The last step of the job runs `eks-teardown.sh` when the job passes or fails. It fails when `leftovers.sh --eks` still finds anything of the run.
+- AWS ends the node and the cluster also when the job is gone. A schedule terminates the node 150 minutes after the start of the run, and the node shuts itself down a few minutes before that. A second schedule deletes the cluster after 160 minutes. Each image expires one day after its push.
+- The scheduled sweep removes each EKS run that is older than two hours. GitHub can skip scheduled runs, so the next sweep can come about 12 hours later. Until then, the volumes, the KMS key, and the hub role of a run can stay. They cost a few cents.
+
+Do not cancel a run. On a cancel, GitHub gives the cleanup step only five minutes, which can be too short for the teardown. A step that hangs fails at its time limit, and the cleanup then gets its full 30 minutes. If a run was cancelled, remove it by hand at once.
 
 To remove a run whose cleanup did not finish, use administrator credentials and the outputs of `terraform/aws-sandbox`. Run it again until it exits 0:
 
@@ -77,7 +79,7 @@ hack/aws-sandbox/leftovers.sh --eks --all-regions <run ID>
 
 ## The sweep
 
-A cancelled job cannot remove its resources. The workflow `.github/workflows/aws-sandbox.yml` runs each hour. It removes each role, managed policy, OIDC provider, and bucket with the tag `cpo-ci-run` that is older than six hours. It schedules each such KMS key for deletion after 7 days, the shortest window, in the region of the sandbox and in the replica region of `AWS_KMS_REPLICA_REGION`. The issuer documents expire after one day.
+A cancelled job cannot remove its resources. The workflow `.github/workflows/aws-sandbox.yml` is scheduled each hour, but GitHub skips scheduled runs when it is busy: runs came 5 to 12 hours apart. It removes each role, managed policy, OIDC provider, and bucket with the tag `cpo-ci-run` that is older than six hours. It schedules each such KMS key for deletion after 7 days, the shortest window, in the region of the sandbox and in the replica region of `AWS_KMS_REPLICA_REGION`. The issuer documents expire after one day.
 
 To do a sweep from your machine, use administrator credentials:
 
