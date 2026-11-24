@@ -62,13 +62,15 @@ const (
 	// take before the pods of its ServiceAccount get credentials.
 	credentialsTimeout = 3 * time.Minute
 
-	// The bounds of the specs add up to 25 minutes, the suite timeout of the
-	// eks journey in test/e2e/run.sh: 3 for the requests, 10 for the claim,
-	// credentialsTimeout and a last pod of up to podTimeout, podTimeout for
-	// the pod without credentials, and 3 and 2 for the delete. So a slow spec
-	// fails with its own message and the specs after it still run.
+	// The bounds of the specs add up to 24 minutes, one less than the suite
+	// timeout of the eks journey in test/e2e/run.sh, which leaves a minute for
+	// BeforeAll, AfterEach, and the calls without a bound: 3 for the
+	// requests, 9 for the claim, credentialsTimeout and a last pod of up to
+	// podTimeout, podTimeout for the pod without credentials, and 3 and 2 for
+	// the delete. So a slow spec fails with its own message and the specs
+	// after it still run.
 	eksRequestsTimeout     = 3 * time.Minute
-	eksClaimReadyTimeout   = 10 * time.Minute
+	eksClaimReadyTimeout   = 9 * time.Minute
 	eksDeletionTimeout     = 3 * time.Minute
 	eksStorageClassTimeout = 2 * time.Minute
 )
