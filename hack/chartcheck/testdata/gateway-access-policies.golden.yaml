@@ -1,0 +1,45 @@
+---
+# Source: gateway-access/templates/policies.yaml
+# The controller writes, watches, and deletes the policies of the routes, of
+# the kinds of policyKinds only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: camunda-operator-plugins-verify-b4b2b940-policies
+  labels:
+    app.kubernetes.io/name: gateway-access
+    app.kubernetes.io/instance: verify
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: gateway-access-0.0.0-dev
+rules:
+  - apiGroups: ["gateway.envoyproxy.io"]
+    resources: ["securitypolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["security.istio.io"]
+    resources: ["authorizationpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+
+---
+# Source: gateway-access/templates/policies.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: camunda-operator-plugins-verify-b4b2b940-policies
+  labels:
+    app.kubernetes.io/name: gateway-access
+    app.kubernetes.io/instance: verify
+    app.kubernetes.io/version: "0.0.0-dev"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: gateway-access-0.0.0-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: camunda-operator-plugins-verify-b4b2b940-policies
+subjects:
+  - kind: ServiceAccount
+    name: verify
+    namespace: camunda-operator-plugins
+
+

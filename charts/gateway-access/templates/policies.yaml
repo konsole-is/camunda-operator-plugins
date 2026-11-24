@@ -1,0 +1,32 @@
+{{- if .Values.policyKinds }}
+{{- $_ := include "gateway-access.policyKinds" . }}
+# The controller writes, watches, and deletes the policies of the routes, of
+# the kinds of policyKinds only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "gateway-access.clusterName" . }}-policies
+  labels:
+    {{- include "gateway-access.labels" . | nindent 4 }}
+rules:
+  {{- range .Values.policyKinds }}
+  - apiGroups: [{{ splitList "/" .apiVersion | first | quote }}]
+    resources: [{{ .resource | quote }}]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "gateway-access.clusterName" . }}-policies
+  labels:
+    {{- include "gateway-access.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "gateway-access.clusterName" . }}-policies
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "gateway-access.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

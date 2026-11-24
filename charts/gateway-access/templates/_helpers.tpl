@@ -26,3 +26,22 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end -}}
+
+{{/*
+gateway-access.policyKinds is the value of the flag -policy-kinds: each item of
+policyKinds as <apiVersion>/<kind>, separated by commas. It fails on an item
+that the controller or the policy role cannot use.
+*/}}
+{{- define "gateway-access.policyKinds" -}}
+{{- $kinds := list -}}
+{{- range .Values.policyKinds -}}
+{{- $apiVersion := required "each policy kind needs an apiVersion" .apiVersion -}}
+{{- $kind := required "each policy kind needs a kind" .kind -}}
+{{- $_ := required "each policy kind needs a resource" .resource -}}
+{{- if not (contains "/" $apiVersion) -}}
+{{- fail (printf "the policy kind %s needs an apiVersion with a group" $kind) -}}
+{{- end -}}
+{{- $kinds = append $kinds (printf "%s/%s" $apiVersion $kind) -}}
+{{- end -}}
+{{- join "," $kinds -}}
+{{- end -}}

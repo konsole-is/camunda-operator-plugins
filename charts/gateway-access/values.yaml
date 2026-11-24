@@ -13,7 +13,8 @@ imagePullSecrets: []
 # one.
 #
 # The admin sets gatewayRef and the hostname patterns of parameterValues for
-# the cluster. An environment can override each of them.
+# the cluster. An environment can override each of them. The admin adds each
+# parameter that a policy template names to the parameters schema.
 registrations:
   - name: gateway-public
     sections: [access]
@@ -50,6 +51,24 @@ registrations:
         grpcHostnamePattern: *pattern
         optimizeHostnamePattern: *pattern
         managementHostnamePattern: *pattern
+        policyTemplates:
+          type: array
+          items:
+            type: object
+            required: [apiVersion, kind, spec]
+            properties:
+              apiVersion: {type: string, minLength: 1}
+              kind: {type: string, minLength: 1}
+              spec: {type: object, x-kubernetes-preserve-unknown-fields: true}
+        routeFilters:
+          type: array
+          items:
+            type: object
+            required: [group, kind, name]
+            properties:
+              group: {type: string, maxLength: 253}
+              kind: {type: string, minLength: 1, maxLength: 63}
+              name: {type: string, minLength: 1, maxLength: 253}
     parameterValues:
       gatewayRef: {namespace: gateway-system, name: public}
       scheme: https
@@ -90,6 +109,17 @@ resync: 1h
 certificateSecrets: []
 #  - namespace: gateway-system
 #    name: public-tls
+
+# policyKinds lists the policy kinds that the controller can write from the
+# parameter policyTemplates, such as SecurityPolicy of Envoy Gateway. Each
+# item is the apiVersion and the kind, and resource, the plural that RBAC
+# names. The chart grants the controller the verbs on these kinds only. A
+# template of another kind is refused. A kind whose CRD the cluster does not
+# serve when the controller starts is used after a restart.
+policyKinds: []
+#  - apiVersion: gateway.envoyproxy.io/v1alpha1
+#    kind: SecurityPolicy
+#    resource: securitypolicies
 
 resources:
   requests:

@@ -61,7 +61,7 @@ test-api-ref: ## Check that a pseudo-version and a tag of the api module map to 
 		[ "$$got" = api/v0.3.0-rc.1 ] || { echo "prerelease tag maps to '$$got', want api/v0.3.0-rc.1" >&2; exit 1; }
 
 .PHONY: chart-verify
-chart-verify: ## Lint and render the chart of each plugin, and check the serve rule of CONTRIBUTING.md.
+chart-verify: chart-verify-policy-kinds ## Lint and render the chart of each plugin, and check the serve rule of CONTRIBUTING.md.
 	@for p in $(PLUGINS); do \
 		test -f "charts/$$p/Chart.yaml" || { echo "cmd/$$p has no chart charts/$$p" >&2; exit 1; }; \
 		$(HELM) lint "charts/$$p" || exit 1; \
@@ -90,6 +90,32 @@ chart-names-differ:
 		echo "$(CHART): the releases '$(A)' and '$(B)' share a cluster-scoped name: $$a" >&2; exit 1; \
 	fi; \
 	echo "  $(CHART): '$(A)' and '$(B)' render different cluster-scoped names"
+
+# chart-verify-policy-kinds checks that the gateway-access chart grants the
+# verbs on the policy kinds of its values and on no other kind, and passes
+# them to the controller.
+.PHONY: chart-verify-policy-kinds
+chart-verify-policy-kinds:
+	@$(HELM) template verify charts/gateway-access --namespace $(CHART_NAMESPACE) \
+		-f hack/chartcheck/testdata/gateway-access-policy-kinds.yaml --show-only templates/policies.yaml \
+		| diff -u hack/chartcheck/testdata/gateway-access-policies.golden.yaml - \
+		|| { echo "charts/gateway-access: the policy role differs from gateway-access-policies.golden.yaml" >&2; exit 1; }
+	@$(HELM) template verify charts/gateway-access --namespace $(CHART_NAMESPACE) \
+		-f hack/chartcheck/testdata/gateway-access-policy-kinds.yaml --show-only templates/deployment.yaml \
+		| grep -qxF -- '            - -policy-kinds=gateway.envoyproxy.io/v1alpha1/SecurityPolicy,security.istio.io/v1/AuthorizationPolicy' \
+		|| { echo "charts/gateway-access: the controller does not get the policy kinds" >&2; exit 1; }
+	@out="$$($(HELM) template verify charts/gateway-access --namespace $(CHART_NAMESPACE) 2>&1)"; \
+		case "$$out" in *policy-kinds*|*-policies*) \
+			echo "charts/gateway-access grants policy kinds without policyKinds" >&2; exit 1 ;; esac
+	@err="$$($(HELM) template verify charts/gateway-access --set 'policyKinds[0].apiVersion=gateway.envoyproxy.io/v1alpha1' \
+		--set 'policyKinds[0].kind=SecurityPolicy' 2>&1 >/dev/null || true)"; \
+		case "$$err" in *"each policy kind needs a resource"*) ;; *) \
+			echo "charts/gateway-access renders a policy kind without a resource" >&2; exit 1 ;; esac
+	@err="$$($(HELM) template verify charts/gateway-access --set 'policyKinds[0].apiVersion=v1' \
+		--set 'policyKinds[0].kind=ConfigMap' --set 'policyKinds[0].resource=configmaps' 2>&1 >/dev/null || true)"; \
+		case "$$err" in *"needs an apiVersion with a group"*) ;; *) \
+			echo "charts/gateway-access renders a policy kind without a group" >&2; exit 1 ;; esac
+	@echo "  charts/gateway-access grants the verbs on the listed policy kinds only"
 
 # GOMOD_FILE is the go.mod that check-published-api reads. test-published-api
 # sets it to a copy that requires the root module of the operator.
