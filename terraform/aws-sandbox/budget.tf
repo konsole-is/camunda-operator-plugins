@@ -26,3 +26,23 @@ resource "aws_budgets_budget" "monthly" {
     subscriber_email_addresses = var.alert_emails
   }
 }
+
+# A cluster and a node that every removal of an EKS run missed cost about
+# 2.40 USD a day, so this alert comes on the first day.
+resource "aws_budgets_budget" "daily" {
+  count = length(var.alert_emails) > 0 ? 1 : 0
+
+  name         = "cpo-sandbox-daily"
+  budget_type  = "COST"
+  time_unit    = "DAILY"
+  limit_amount = tostring(var.daily_budget_limit_usd)
+  limit_unit   = "USD"
+
+  notification {
+    notification_type          = "ACTUAL"
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    subscriber_email_addresses = var.alert_emails
+  }
+}
