@@ -218,7 +218,7 @@ func (p *Plugin) Reconcile(
 	}
 
 	accepted, waiting := RouteWaiting(a.routes, liveByKey, ParentRef(req.Parameters), controller)
-	policiesAccepted, policyWaiting := PolicyWaiting(policies, livePolicyByKey, controller)
+	policiesAccepted, policyWaiting := PolicyWaiting(policies, livePolicyByKey, ParentRef(req.Parameters), controller)
 	notReady := cmp.Or(a.notReady, noGateway, waiting, policyWaiting)
 
 	res := pluginkit.Result{
@@ -454,25 +454,36 @@ func listPolicies(
 }
 
 // StalePolicies returns the policies of live whose kind and name are not in
-// desired, except a policy whose target is a route of goingRoutes: it stays
-// until that route is gone.
+// desired. A policy of a route stays while that route is in goingRoutes, and
+// while a policy of desired for that route has no live copy that holds its
+// spec and is not deleting.
 func StalePolicies(
 	live, desired []*unstructured.Unstructured,
 	goingRoutes []client.Object,
 ) []*unstructured.Unstructured {
-	wanted := make(map[PolicyKey]bool, len(desired))
-	for _, obj := range desired {
-		wanted[KeyOfPolicy(obj)] = true
+	liveByKey := make(map[PolicyKey]*unstructured.Unstructured, len(live))
+	for _, obj := range live {
+		liveByKey[KeyOfPolicy(obj)] = obj
 	}
 
-	going := make(map[RouteKey]bool, len(goingRoutes))
+	wanted := make(map[PolicyKey]bool, len(desired))
+	keep := make(map[RouteKey]bool, len(desired)+len(goingRoutes))
+	for _, obj := range desired {
+		wanted[KeyOfPolicy(obj)] = true
+		current := liveByKey[KeyOfPolicy(obj)]
+		// A route keeps its old policies until their replacement is applied.
+		if current == nil || !current.GetDeletionTimestamp().IsZero() ||
+			!containsJSON(obj.Object["spec"], current.Object["spec"]) {
+			keep[policyTarget(obj)] = true
+		}
+	}
 	for _, obj := range goingRoutes {
-		going[KeyOf(obj)] = true
+		keep[KeyOf(obj)] = true
 	}
 
 	var stale []*unstructured.Unstructured
 	for _, obj := range live {
-		if !wanted[KeyOfPolicy(obj)] && !going[policyTarget(obj)] {
+		if !wanted[KeyOfPolicy(obj)] && !keep[policyTarget(obj)] {
 			stale = append(stale, obj)
 		}
 	}

@@ -182,7 +182,7 @@ The rules of a template:
 - The plugin sets `spec.targetRefs` to the route, so the template must not set it. A kind that names its target in another field, such as `targetRef` of `GCPBackendPolicy` of GKE, does not work.
 - The kind must be in `policyKinds`. A CRD that you install after the controller started is used after a restart of the controller.
 
-A policy counts as accepted when the controller of the GatewayClass reports `Accepted=True` in `status.ancestors` for its current generation. Until then, the request is not `Ready`. When that controller refuses a policy, the routes stay, and `Ready` gives the reason and the message of the controller. When the plugin or the API server refuses a template, the plugin writes no new route and changes no route that is there.
+A policy counts as accepted when the controller of the GatewayClass reports `Accepted=True` in `status.ancestors`, for the Gateway or for the route, for its current generation. Until then, the request is not `Ready`. When that controller refuses a policy, the routes stay, and `Ready` gives the reason and the message of the controller. When the plugin or the API server refuses a template, the plugin writes no new route and changes no route that is there.
 
 ## Outputs
 
@@ -205,7 +205,7 @@ The plugin writes no grants.
 
 The registrations offer the deletion policies `Delete` and `Orphan`. Both delete every route of the request when a claim is deleted, because a route sends traffic to Services that go with the cluster. The routes belong to the request and go with it. `Orphan` keeps no route. The registrations offer `Orphan` so that a claim can keep the resources of its other plugins. A route to a Service that is gone never stays.
 
-The policies go after their routes: the policy of a deleted route at the next reconcile after the route is gone, and every policy of a deleted request after every route of the request is gone. When the parameters no longer have a template, its policies go at once.
+The policies go after their routes: the policy of a deleted route at the next reconcile after the route is gone, and every policy of a deleted request after every route of the request is gone. When the parameters no longer have a template, its policies go at once. When a template changes its kind or its index, the old policy of a route stays until the new one is applied.
 
 ## Troubleshooting
 
@@ -234,4 +234,4 @@ Add the Secret to `certificateSecrets`, set `listenerName` to the HTTPS listener
 
 The plugin has no health check, so its registration is never `Unhealthy`.
 
-When the controller Pod does not get ready, read its log. The controller stops when it cannot read the file of its registrations, when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set, when it cannot read the flag `-policy-kinds`, or when a kind of `policyKinds` is cluster-scoped.
+When the controller Pod does not get ready, read its log. The controller stops when it cannot read the file of its registrations, when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set, when it cannot read the flag `-policy-kinds`, or when `policyKinds` lists a cluster-scoped kind or two versions of one kind.

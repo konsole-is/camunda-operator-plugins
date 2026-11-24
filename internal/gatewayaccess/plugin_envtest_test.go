@@ -17,6 +17,7 @@ limitations under the License.
 package gatewayaccess_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -599,6 +600,41 @@ var _ = Describe("the gateway-access plugin", func() {
 			g.Expect(http).To(BeEmpty())
 			g.Expect(grpc).To(BeEmpty())
 		}, 2*time.Second).Should(Succeed())
+	})
+
+	It("keeps a policy of a route until its replacement is applied", func() {
+		ns := newNamespace()
+		ordersCluster(ns)
+		deny := examplePolicyTemplate()
+		deny.Spec = json.RawMessage(`{"mode":"Deny"}`)
+		allowlist := examplePolicyTemplate()
+		request := policyRequest(ns, "orders-access", policyParams(deny, allowlist), "10.0.0.0/8")
+		Expect(k8s.Create(ctx, request)).To(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(condition(readRequest(g, request), v1.ConditionReady).Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(policiesOf(g, request)).To(HaveLen(4))
+		}, timeout).Should(Succeed())
+
+		// The allowlist moves to index 0, and the API server refuses its
+		// three items there, so orders-access-policy-0 keeps its old spec.
+		Eventually(func(g Gomega) {
+			var current pluginsv1alpha1.PluginRequest
+			g.Expect(k8s.Get(ctx, client.ObjectKeyFromObject(request), &current)).To(Succeed())
+			current.Spec.Parameters = rawParamsWith(policyParams(allowlist), map[string]any{
+				"allowedCIDRs": []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
+			})
+			g.Expect(k8s.Update(ctx, &current)).To(Succeed())
+		}, timeout).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			ready := condition(readRequest(g, request), v1.ConditionReady)
+			g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(ready.Message).To(ContainSubstring("must have at most 2 items"))
+		}, timeout).Should(Succeed())
+
+		Consistently(func(g Gomega) {
+			g.Expect(policyExists(g, ns, "orders-access-policy-1")).To(BeTrue())
+		}, 3*time.Second).Should(Succeed())
 	})
 
 	It("deletes the policy of a route that goes", func() {

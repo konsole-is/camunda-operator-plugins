@@ -92,7 +92,7 @@ func TestPolicyWaiting_AcceptedByTheGatewayAncestorCounts(t *testing.T) {
 		livePolicy(t, desired[1], 3, ancestor(testController, metav1.ConditionTrue, "Accepted", 3)),
 	)
 
-	accepted, waiting := PolicyWaiting(desired, live, testController)
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
 
 	assert.Equal(t, 2, accepted)
 	assert.Nil(t, waiting)
@@ -107,7 +107,7 @@ func TestPolicyWaiting_AcceptedByTheRouteAncestorCounts(t *testing.T) {
 		livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)),
 	)
 
-	accepted, waiting := PolicyWaiting(desired, live, testController)
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
 
 	assert.Equal(t, 2, accepted)
 	assert.Nil(t, waiting)
@@ -122,7 +122,7 @@ func TestPolicyWaiting_RejectedPolicyGivesTheReasonOfTheController(t *testing.T)
 		livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)),
 	)
 
-	accepted, waiting := PolicyWaiting(desired, live, testController)
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
 
 	assert.Equal(t, 1, accepted)
 	require.NotNil(t, waiting)
@@ -143,7 +143,7 @@ func onlyFirstWaiting(
 		live[KeyOfPolicy(first)] = first
 	}
 
-	accepted, waiting := PolicyWaiting(desired, live, testController)
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
 	require.NotNil(t, waiting)
 	return accepted, waiting.Reason, waiting.Message
 }
@@ -197,7 +197,7 @@ func TestPolicyWaiting_RejectionOfAnotherControllerDoesNotCount(t *testing.T) {
 		livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)),
 	)
 
-	accepted, waiting := PolicyWaiting(desired, live, testController)
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
 
 	assert.Equal(t, 2, accepted)
 	assert.Nil(t, waiting)
@@ -236,7 +236,7 @@ func TestPolicyWaiting_DefaultedFieldsOfTheLiveCopyDoNotCount(t *testing.T) {
 		livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)),
 	)
 
-	accepted, waiting := PolicyWaiting(desired, live, testController)
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
 
 	assert.Equal(t, 2, accepted)
 	assert.Nil(t, waiting)
@@ -253,7 +253,7 @@ func TestPolicyWaiting_NumbersCompareByValue(t *testing.T) {
 	)
 	require.NoError(t, unstructured.SetNestedField(live[KeyOfPolicy(desired[0])].Object, float64(3), "spec", "limit"))
 
-	accepted, waiting := PolicyWaiting(desired, live, testController)
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
 
 	assert.Equal(t, 2, accepted)
 	assert.Nil(t, waiting)
@@ -270,9 +270,59 @@ func TestPolicyWaiting_TerminatingPolicyIsPending(t *testing.T) {
 }
 
 func TestPolicyWaiting_NamesTheFirstPolicyByKindThenName(t *testing.T) {
-	accepted, waiting := PolicyWaiting(desiredPolicies(t), nil, testController)
+	accepted, waiting := PolicyWaiting(desiredPolicies(t), nil, ParentRef(validParams()), testController)
 
 	assert.Equal(t, 0, accepted)
 	require.NotNil(t, waiting)
 	assert.Contains(t, waiting.Message, "ExamplePolicy orders-access-grpc-policy-0 ")
+}
+
+func TestPolicyWaiting_AcceptanceForAnotherGatewayDoesNotCount(t *testing.T) {
+	desired := desiredPolicies(t)
+	elsewhere := ancestor(testController, metav1.ConditionTrue, "Accepted", 1)
+	elsewhere.AncestorRef.Name = "internal"
+
+	_, reason, _ := onlyFirstWaiting(t, desired, livePolicy(t, desired[0], 1, elsewhere))
+
+	assert.Equal(t, "Pending", reason)
+}
+
+func TestPolicyWaiting_RejectionForAnotherGatewayDoesNotCount(t *testing.T) {
+	desired := desiredPolicies(t)
+	elsewhere := ancestor(testController, metav1.ConditionFalse, "Invalid", 1)
+	elsewhere.AncestorRef.Name = "internal"
+	live := livePolicies(
+		livePolicy(t, desired[0], 1, elsewhere, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)),
+		livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)),
+	)
+
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
+
+	assert.Equal(t, 2, accepted)
+	assert.Nil(t, waiting)
+}
+
+func TestPolicyWaiting_AcceptanceForAnotherRouteDoesNotCount(t *testing.T) {
+	desired := desiredPolicies(t)
+	byRoute := ancestor(testController, metav1.ConditionTrue, "Accepted", 1)
+	byRoute.AncestorRef = gatewayv1.ParentReference{Kind: new(gatewayv1.Kind("HTTPRoute")), Name: "other-access"}
+
+	_, reason, _ := onlyFirstWaiting(t, desired, livePolicy(t, desired[0], 1, byRoute))
+
+	assert.Equal(t, "Pending", reason)
+}
+
+func TestPolicyWaiting_AcceptanceForAListenerOfTheGatewayCounts(t *testing.T) {
+	desired := desiredPolicies(t)
+	byListener := ancestor(testController, metav1.ConditionTrue, "Accepted", 1)
+	byListener.AncestorRef.SectionName = new(gatewayv1.SectionName("https"))
+	live := livePolicies(
+		livePolicy(t, desired[0], 1, byListener),
+		livePolicy(t, desired[1], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1)),
+	)
+
+	accepted, waiting := PolicyWaiting(desired, live, ParentRef(validParams()), testController)
+
+	assert.Equal(t, 2, accepted)
+	assert.Nil(t, waiting)
 }

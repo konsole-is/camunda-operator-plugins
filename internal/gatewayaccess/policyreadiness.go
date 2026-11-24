@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/konsole-is/camunda-operator-plugins/pkg/pluginkit"
@@ -33,16 +34,17 @@ import (
 // PolicyWaiting returns how many policies of desired controller accepted,
 // and why the others are not. A policy counts when its live copy is not
 // deleting, holds the spec of desired, has a status.ancestors entry of
-// controller, and each entry of controller reports Accepted=True for the
-// current generation. The live copy can hold more fields than desired: the
-// API server defaults them. The ancestor of an entry does not matter, and the
-// entries of another controller do not count. waiting is nil when every
-// policy counts. Otherwise it describes the first policy, by kind and then by
+// controller for the Gateway of parent or for the route of the policy, and
+// each such entry reports Accepted=True for the current generation. The live
+// copy can hold more fields than desired: the API server defaults them. The
+// entries for another ancestor or of another controller do not count. waiting
+// is nil when every policy counts. Otherwise it describes the first policy, by kind and then by
 // name, that does not: the reason Pending until controller reports on it, or
 // the reason and the message of its False condition.
 func PolicyWaiting(
 	desired []*unstructured.Unstructured,
 	live map[PolicyKey]*unstructured.Unstructured,
+	parent gatewayv1.ParentReference,
 	controller gatewayv1.GatewayController,
 ) (accepted int, waiting *pluginkit.Waiting) {
 	sorted := slices.Clone(desired)
@@ -51,7 +53,7 @@ func PolicyWaiting(
 	})
 
 	for _, obj := range sorted {
-		w := policyWaiting(obj, live[KeyOfPolicy(obj)], controller)
+		w := policyWaiting(obj, live[KeyOfPolicy(obj)], parent, controller)
 		if w == nil {
 			accepted++
 		} else if waiting == nil {
@@ -62,7 +64,11 @@ func PolicyWaiting(
 	return accepted, waiting
 }
 
-func policyWaiting(desired, obj *unstructured.Unstructured, controller gatewayv1.GatewayController) *pluginkit.Waiting {
+func policyWaiting(
+	desired, obj *unstructured.Unstructured,
+	parent gatewayv1.ParentReference,
+	controller gatewayv1.GatewayController,
+) *pluginkit.Waiting {
 	pending := &pluginkit.Waiting{
 		Reason: string(gatewayv1.RouteReasonPending),
 		Message: fmt.Sprintf(
@@ -100,9 +106,11 @@ func policyWaiting(desired, obj *unstructured.Unstructured, controller gatewayv1
 		}
 	}
 
+	route := policyTarget(desired)
 	var conds []*metav1.Condition
 	for i := range status.Ancestors {
-		if status.Ancestors[i].ControllerName != controller {
+		entry := status.Ancestors[i]
+		if entry.ControllerName != controller || !reportsOn(entry.AncestorRef, parent, route, obj.GetNamespace()) {
 			continue
 		}
 
@@ -126,6 +134,21 @@ func policyWaiting(desired, obj *unstructured.Unstructured, controller gatewayv1
 	}
 
 	return nil
+}
+
+// reportsOn reports whether an ancestor ref of a policy in namespace names the
+// Gateway of parent, on any listener, or route. An implementation can report
+// either one as the ancestor of a policy of a route.
+func reportsOn(ref, parent gatewayv1.ParentReference, route RouteKey, namespace string) bool {
+	ref.SectionName, parent.SectionName = nil, nil
+	if sameParent(ref, parent, namespace) {
+		return true
+	}
+
+	return ptr.Deref(ref.Group, gatewayv1.GroupName) == gatewayv1.GroupName &&
+		string(ptr.Deref(ref.Kind, "Gateway")) == route.Kind &&
+		ptr.Deref(ref.Namespace, gatewayv1.Namespace(namespace)) == gatewayv1.Namespace(namespace) &&
+		string(ref.Name) == route.Name
 }
 
 // containsJSON reports whether got holds want: each key of a map with a value

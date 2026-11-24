@@ -114,12 +114,44 @@ func TestStalePolicies_TheGoingRouteOfAnotherKindDoesNotKeepIt(t *testing.T) {
 	assert.Equal(t, []*unstructured.Unstructured{policy}, got)
 }
 
-func TestStalePolicies_SameNameOfAnotherKindIsStale(t *testing.T) {
+func TestStalePolicies_SameNameOfAnotherKindIsStaleOnceTheReplacementIsApplied(t *testing.T) {
 	other := schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "OtherPolicy"}
-	live := policyTargeting(examplePolicy, "a-policy-0", "a")
-	desired := policyTargeting(other, "a-policy-0", "a")
+	old := policyTargeting(examplePolicy, "a-policy-0", "a")
+	replacement := policyTargeting(other, "a-policy-0", "a")
 
-	got := StalePolicies([]*unstructured.Unstructured{live}, []*unstructured.Unstructured{desired}, nil)
+	got := StalePolicies(
+		[]*unstructured.Unstructured{old, replacement.DeepCopy()},
+		[]*unstructured.Unstructured{replacement},
+		nil,
+	)
 
-	assert.Equal(t, []*unstructured.Unstructured{live}, got)
+	assert.Equal(t, []*unstructured.Unstructured{old}, got)
+}
+
+func TestStalePolicies_KeepsThePolicyOfARouteUntilItsReplacementIsApplied(t *testing.T) {
+	other := schema.GroupVersionKind{Group: "policies.example.com", Version: "v1alpha1", Kind: "OtherPolicy"}
+	old := policyTargeting(examplePolicy, "a-policy-0", "a")
+	replacement := policyTargeting(other, "a-policy-0", "a")
+
+	assert.Empty(t, StalePolicies([]*unstructured.Unstructured{old}, []*unstructured.Unstructured{replacement}, nil))
+}
+
+func TestStalePolicies_KeepsThePolicyOfARouteWhileAnotherPolicyHoldsAnOldSpec(t *testing.T) {
+	kept := policyTargeting(examplePolicy, "a-policy-0", "a")
+	require.NoError(t, unstructured.SetNestedField(kept.Object, "Log", "spec", "mode"))
+	shifted := policyTargeting(examplePolicy, "a-policy-1", "a")
+	desired := policyTargeting(examplePolicy, "a-policy-0", "a")
+	require.NoError(t, unstructured.SetNestedField(desired.Object, "Deny", "spec", "mode"))
+
+	got := StalePolicies([]*unstructured.Unstructured{kept, shifted}, []*unstructured.Unstructured{desired}, nil)
+
+	assert.Empty(t, got)
+}
+
+func TestStalePolicies_PolicyOfARouteWithoutTemplatesIsStale(t *testing.T) {
+	policy := policyTargeting(examplePolicy, "a-policy-0", "a")
+
+	got := StalePolicies([]*unstructured.Unstructured{policy}, nil, nil)
+
+	assert.Equal(t, []*unstructured.Unstructured{policy}, got)
 }

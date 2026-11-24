@@ -68,11 +68,26 @@ func ParsePolicyKinds(value string) ([]schema.GroupVersionKind, error) {
 }
 
 // ResolvePolicyKinds looks up each kind in mapper, in its own version only.
-// A kind that mapper does not know is in the result with false. A
-// cluster-scoped kind, and any other failed lookup, is an error.
+// A kind that mapper does not know is in the result with false. Two versions
+// of one kind, a cluster-scoped kind, and any other failed lookup are an
+// error.
 func ResolvePolicyKinds(mapper meta.RESTMapper, kinds []schema.GroupVersionKind) (PolicyKinds, error) {
 	resolved := make(PolicyKinds, len(kinds))
+	versions := make(map[schema.GroupKind]string, len(kinds))
 	for _, gvk := range kinds {
+		// A list of two versions would read each policy twice, and the view
+		// in the other version would look stale.
+		if version, ok := versions[gvk.GroupKind()]; ok && version != gvk.Version {
+			return nil, fmt.Errorf(
+				"the policy kinds list %s of %s in the versions %s and %s: list one version of each kind",
+				gvk.Kind,
+				gvk.Group,
+				version,
+				gvk.Version,
+			)
+		}
+		versions[gvk.GroupKind()] = gvk.Version
+
 		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 		switch {
 		case meta.IsNoMatchError(err):

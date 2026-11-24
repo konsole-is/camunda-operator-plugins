@@ -111,3 +111,15 @@ func TestResolvePolicyKinds_ReturnsAFailedLookup(t *testing.T) {
 	_, err := ResolvePolicyKinds(failingMapper{}, []schema.GroupVersionKind{securityPolicy})
 	assert.ErrorContains(t, err, "discovery is down")
 }
+
+func TestResolvePolicyKinds_RefusesTwoVersionsOfOneKind(t *testing.T) {
+	v1 := schema.GroupVersionKind{Group: securityPolicy.Group, Version: "v1", Kind: securityPolicy.Kind}
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(securityPolicy, meta.RESTScopeNamespace)
+	mapper.Add(v1, meta.RESTScopeNamespace)
+
+	_, err := ResolvePolicyKinds(mapper, []schema.GroupVersionKind{securityPolicy, v1})
+
+	assert.ErrorContains(t, err, "SecurityPolicy")
+	assert.ErrorContains(t, err, "one version")
+}
