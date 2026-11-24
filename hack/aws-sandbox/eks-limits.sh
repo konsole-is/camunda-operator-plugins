@@ -32,6 +32,7 @@ expect() {
   ${region_set} || entries+=("ContextKeyName=aws:RequestedRegion,ContextKeyValues=${AWS_REGION},ContextKeyType=string")
 
   name="${action} by ${role}"
+  [ "${resource}" = "*" ] || name+=" on ${resource##*:}"
   [ $# -eq 0 ] || name+=" with $*"
   if ! decision=$(aws iam simulate-principal-policy \
     --policy-source-arn "arn:aws:iam::${account}:role/${role}" \
@@ -71,6 +72,14 @@ expect "${role}" eks:CreateCluster "*" explicitDeny eks:supportType=string:STAND
 cluster=arn:aws:eks:${AWS_REGION}:${account}:cluster/other
 expect "${role}" eks:DeleteCluster "${cluster}" allowed aws:ResourceTag/cpo-ci-run=string:cpo-ci-limits
 expect "${role}" eks:DeleteCluster "${cluster}" explicitDeny
+# A Pod Identity association reads and passes its role: only the two roles
+# of the pods of a run.
+for action in iam:GetRole iam:PassRole; do
+  for pod_role in cpo-sandbox-eks-ebs-csi cpo-sandbox-eks-plugins; do
+    expect "${role}" "${action}" "arn:aws:iam::${account}:role/${pod_role}" allowed
+  done
+  expect "${role}" "${action}" "arn:aws:iam::${account}:role/cpo-sandbox-eks" explicitDeny
+done
 for action in ec2:CreateNatGateway ec2:AllocateAddress elasticloadbalancing:CreateLoadBalancer eks:CreateNodegroup \
   logs:CreateLogGroup iam:CreateRole; do
   expect "${role}" "${action}" "*" explicitDeny

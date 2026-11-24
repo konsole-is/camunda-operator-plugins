@@ -735,9 +735,11 @@ data "aws_iam_policy_document" "eks_run" {
     }
   }
   # The trust of each of these roles holds only pods.eks.amazonaws.com.
+  # CreatePodIdentityAssociation also refuses a caller without iam:GetRole on
+  # the role.
   statement {
     sid       = "PassPodRoles"
-    actions   = ["iam:PassRole"]
+    actions   = ["iam:PassRole", "iam:GetRole"]
     resources = [aws_iam_role.eks_ebs_csi.arn, aws_iam_role.eks_plugins.arn]
   }
   statement {

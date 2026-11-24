@@ -58,6 +58,7 @@ io2 explicitDeny
 VolumeSize,ContextKeyValues=100, explicitDeny
 VolumeIops,ContextKeyValues=16000, explicitDeny
 action-names.(ec2:CreateNatGateway|ec2:AllocateAddress|elasticloadbalancing:CreateLoadBalancer|eks:CreateNodegroup|logs:CreateLogGroup|iam:CreateRole|ec2:CreateSnapshot|ec2:ModifyVolume|kms:PutKeyPolicy) explicitDeny
+action-names.iam:(GetRole|PassRole).--resource-arns.arn:aws:iam::111122223333:role/cpo-sandbox-eks-(ebs-csi|plugins). allowed
 -cpo-ci-run implicitDeny
 EOF
 }
@@ -100,7 +101,7 @@ limits > "$stub/decisions"
 out=$(FAIL_ACTION=kms:PutKeyPolicy "$here/eks-limits.sh" 2> /dev/null)
 code=$?
 [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
-grep -q '^FAIL kms:PutKeyPolicy by cpo-sandbox-eks-plugins: the simulator call failed$' <<< "$out" ||
+grep -q '^FAIL kms:PutKeyPolicy by cpo-sandbox-eks-plugins on key/x: the simulator call failed$' <<< "$out" ||
   fail "$name" "no FAIL line for the failed call in: $out"
 
 exit "$failed"
