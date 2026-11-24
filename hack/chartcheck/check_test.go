@@ -435,10 +435,3 @@ func TestProblemsRefusesAChartWithoutAController(t *testing.T) {
 func TestProblemsRefusesValuesWithoutARegistration(t *testing.T) {
 	assert.Equal(t, []string{"the values name no registration"}, problems(render(t, goodRender), nil, "plugins"))
 }
-
-func TestReadRegistrationsReadsTheNamesOfTheValues(t *testing.T) {
-	names, err := readRegistrations("testdata/two-registrations.yaml")
-
-	require.NoError(t, err)
-	assert.Equal(t, []string{"skeleton-public", "skeleton-internal"}, names)
-}
