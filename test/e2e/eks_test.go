@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -58,19 +59,37 @@ const (
 	// credentialsTimeout is the time that a new Pod Identity association can
 	// take before the pods of its ServiceAccount get credentials.
 	credentialsTimeout = 3 * time.Minute
+
+	// The bounds of the specs add up to 23 minutes, the suite timeout of the
+	// eks journey in test/e2e/run.sh, so a slow spec fails with its own
+	// message and the specs after it still run.
+	eksRequestsTimeout   = 4 * time.Minute
+	eksClaimReadyTimeout = 10 * time.Minute
+	eksDeletionTimeout   = 4 * time.Minute
 )
 
-var _ = Describe("the EKS proof", Ordered, Label(labelEKS), func() {
+// eksBrokerStorage is the size of the broker volume. An EBS volume has its
+// real size, unlike a volume on kind: the broker refused a volume of 1Gi
+// with "Not enough space to allocate a new journal segment. Required:
+// 1073741824, Available: 1003864064". The EBS CSI role allows at most 10 GiB.
+var eksBrokerStorage = resource.MustParse("8Gi")
+
+var _ = Describe("the EKS proof", Ordered, ContinueOnFailure, Label(labelEKS), func() {
 	var (
 		claim    fleetv1alpha1.CamundaClusterClaim
 		identity *pluginsv1alpha1.PluginRequest
+		key      string
 		class    string
 	)
+	claimKey := client.ObjectKey{Namespace: eksSet, Name: claimName}
+
 	BeforeAll(func() {
+		preset := clusterPreset(fixtureName)
+		preset.Spec.Cluster.Zeebe.StorageSize = &eksBrokerStorage
 		createAll(
 			basicPlatform(fixtureName),
 			release(fixtureName),
-			clusterPreset(fixtureName),
+			preset,
 			elasticsearchPreset(fixtureName),
 			eksEnvironment(),
 			environmentNamespace(eksSet, eksSet),
@@ -78,24 +97,44 @@ var _ = Describe("the EKS proof", Ordered, Label(labelEKS), func() {
 		)
 	})
 
-	It("makes the claim Ready with a broker volume that EBS encrypts with the key of the claim", func() {
-		claimKey := client.ObjectKey{Namespace: eksSet, Name: claimName}
-		Eventually(
-			func(g Gomega) { expectClaimReady(g, claimKey) },
-			claimReadyTimeout,
-			10*time.Second,
-		).Should(Succeed())
+	// The pods, their containers, and the events of the namespace show why a
+	// claim did not become Ready, such as a volume that does not provision or
+	// a broker that crashes.
+	AfterEach(func() {
+		if CurrentSpecReport().Failed() {
+			GinkgoWriter.Print(describeNamespace(eksSet))
+		}
+	})
+
+	It("gives the claim an identity, a key, and a StorageClass with that key", func() {
+		Eventually(func(g Gomega) {
+			expectSectionsReady(g, claimKey, sectionCloudIdentity, sectionEncryptionKey, sectionVolumeEncryption)
+		}, eksRequestsTimeout, 10*time.Second).Should(Succeed())
 
 		Expect(k8s.Get(ctx, claimKey, &claim)).To(Succeed())
 		requests, err := claimRequests(&claim)
 		Expect(err).NotTo(HaveOccurred())
 		identity = requestOf(requests, &claim, sectionCloudIdentity)
-		Expect(identity).NotTo(BeNil())
-		key := requestOf(requests, &claim, sectionEncryptionKey).Status.Outputs[outputKeyRef]
+		key = requestOf(requests, &claim, sectionEncryptionKey).Status.Outputs[outputKeyRef]
 		class = requestOf(requests, &claim, sectionVolumeEncryption).Status.Outputs[outputStorageClassName]
 		Expect(key).NotTo(BeEmpty())
 		Expect(class).NotTo(BeEmpty())
 
+		var storageClass storagev1.StorageClass
+		Expect(k8s.Get(ctx, client.ObjectKey{Name: class}, &storageClass)).To(Succeed())
+		Expect(storageClass.Provisioner).To(Equal(ebsDriver))
+		Expect(storageClass.Parameters).To(HaveKeyWithValue("kmsKeyId", key))
+	})
+
+	It("makes the claim Ready with a broker volume that EBS encrypts with the key of the claim", func() {
+		Expect(class).NotTo(BeEmpty(), "the claim has no StorageClass")
+		Eventually(
+			func(g Gomega) { expectClaimReady(g, claimKey) },
+			eksClaimReadyTimeout,
+			10*time.Second,
+		).Should(Succeed())
+
+		Expect(k8s.Get(ctx, claimKey, &claim)).To(Succeed())
 		var cluster v1.CamundaCluster
 		Expect(claim.Status.Cluster).NotTo(BeNil())
 		Expect(k8s.Get(ctx, client.ObjectKey{Namespace: eksSet, Name: claim.Status.Cluster.Name}, &cluster)).
@@ -159,14 +198,16 @@ var _ = Describe("the EKS proof", Ordered, Label(labelEKS), func() {
 
 	It("removes the StorageClass of the claim when the claim is deleted with Delete", func() {
 		Expect(class).NotTo(BeEmpty(), "the claim has no StorageClass")
-		Expect(k8s.Delete(ctx, &claim)).To(Succeed())
-		Eventually(func(g Gomega) { expectClaimGone(g, client.ObjectKeyFromObject(&claim)) },
-			deletionTimeout, 10*time.Second).Should(Succeed())
+		Expect(k8s.Delete(ctx, &fleetv1alpha1.CamundaClusterClaim{
+			ObjectMeta: metav1.ObjectMeta{Namespace: eksSet, Name: claimName},
+		})).To(Succeed())
+		Eventually(func(g Gomega) { expectClaimGone(g, claimKey) },
+			eksDeletionTimeout, 10*time.Second).Should(Succeed())
 
 		Eventually(func(g Gomega) {
 			err := k8s.Get(ctx, client.ObjectKey{Name: class}, &storagev1.StorageClass{})
 			g.Expect(err).To(Satisfy(apierrors.IsNotFound), "the StorageClass %s is still there", class)
-		}, deletionTimeout, 10*time.Second).Should(Succeed())
+		}, eksDeletionTimeout, 10*time.Second).Should(Succeed())
 	})
 })
 
@@ -271,4 +312,50 @@ func awsOnRunner(args ...string) (string, error) {
 	}
 
 	return string(out), nil
+}
+
+// describeNamespace returns a report of the pods of namespace and of its
+// events: each container that waits or restarts with its reason, and each
+// event with its object and message. A failed read is a line of the report.
+func describeNamespace(namespace string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Pods and events of the namespace %s\n", namespace)
+
+	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		fmt.Fprintf(&b, "  listing the pods: %v\n", err)
+	} else {
+		for _, pod := range pods.Items {
+			fmt.Fprintf(&b, "Pod %s %s\n", pod.Name, pod.Status.Phase)
+			for _, c := range pod.Status.ContainerStatuses {
+				fmt.Fprintf(&b, "  %s ready=%t restarts=%d", c.Name, c.Ready, c.RestartCount)
+				if c.State.Waiting != nil {
+					fmt.Fprintf(&b, " waiting %s: %s", c.State.Waiting.Reason, c.State.Waiting.Message)
+				}
+				if t := c.LastTerminationState.Terminated; t != nil {
+					fmt.Fprintf(&b, " last ended %s (exit %d)", t.Reason, t.ExitCode)
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
+
+	events, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		fmt.Fprintf(&b, "  listing the events: %v\n", err)
+		return b.String()
+	}
+	for _, e := range events.Items {
+		fmt.Fprintf(
+			&b,
+			"Event %s %s %s/%s: %s\n",
+			e.Type,
+			e.Reason,
+			e.InvolvedObject.Kind,
+			e.InvolvedObject.Name,
+			e.Message,
+		)
+	}
+
+	return b.String()
 }
