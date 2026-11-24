@@ -96,7 +96,9 @@ chart-names-differ:
 # them to the controller.
 .PHONY: chart-verify-policy-kinds
 chart-verify-policy-kinds:
-	@$(HELM) template verify charts/gateway-access --namespace $(CHART_NAMESPACE) \
+	@# The golden file names the namespace camunda-operator-plugins, and the role
+	@# names hash it.
+	@$(HELM) template verify charts/gateway-access --namespace camunda-operator-plugins \
 		-f hack/chartcheck/testdata/gateway-access-policy-kinds.yaml --show-only templates/policies.yaml \
 		| diff -u hack/chartcheck/testdata/gateway-access-policies.golden.yaml - \
 		|| { echo "charts/gateway-access: the policy role differs from gateway-access-policies.golden.yaml" >&2; exit 1; }
@@ -111,10 +113,12 @@ chart-verify-policy-kinds:
 		--set 'policyKinds[0].kind=SecurityPolicy' 2>&1 >/dev/null || true)"; \
 		case "$$err" in *"each policy kind needs a resource"*) ;; *) \
 			echo "charts/gateway-access renders a policy kind without a resource" >&2; exit 1 ;; esac
-	@err="$$($(HELM) template verify charts/gateway-access --set 'policyKinds[0].apiVersion=v1' \
-		--set 'policyKinds[0].kind=ConfigMap' --set 'policyKinds[0].resource=configmaps' 2>&1 >/dev/null || true)"; \
-		case "$$err" in *"needs an apiVersion with a group"*) ;; *) \
-			echo "charts/gateway-access renders a policy kind without a group" >&2; exit 1 ;; esac
+	@for v in v1 /v1 gateway.envoyproxy.io/ a/b/c; do \
+		err="$$($(HELM) template verify charts/gateway-access --set "policyKinds[0].apiVersion=$$v" \
+			--set 'policyKinds[0].kind=SecurityPolicy' --set 'policyKinds[0].resource=securitypolicies' 2>&1 >/dev/null || true)"; \
+		case "$$err" in *"needs an apiVersion <group>/<version>"*) ;; *) \
+			echo "charts/gateway-access renders a policy kind with the apiVersion '$$v'" >&2; exit 1 ;; esac; \
+	done
 	@echo "  charts/gateway-access grants the verbs on the listed policy kinds only"
 
 # GOMOD_FILE is the go.mod that check-published-api reads. test-published-api

@@ -364,3 +364,19 @@ func TestPolicies_SetTheHashOfTheirSpec(t *testing.T) {
 	again, _ := Policies(p, clusterRoutes(t, p), PolicyKinds{examplePolicy: true})
 	assert.Equal(t, got[0].GetAnnotations(), again[0].GetAnnotations())
 }
+
+func TestPolicyWaiting_LargeIntegersCompareExactly(t *testing.T) {
+	p := templateParams(
+		t,
+		`[{"apiVersion":"policies.example.com/v1alpha1","kind":"ExamplePolicy","spec":{"limit":9007199254740992}}]`,
+		nil,
+	)
+	desired, refused := Policies(p, clusterRoutes(t, p), PolicyKinds{examplePolicy: true})
+	require.Nil(t, refused)
+	changed := livePolicy(t, desired[0], 1, ancestor(testController, metav1.ConditionTrue, "Accepted", 1))
+	require.NoError(t, unstructured.SetNestedField(changed.Object, int64(9007199254740993), "spec", "limit"))
+
+	_, reason, _ := onlyFirstWaiting(t, desired, changed)
+
+	assert.Equal(t, "Pending", reason)
+}

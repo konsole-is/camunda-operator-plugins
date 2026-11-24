@@ -38,8 +38,9 @@ that the controller or the policy role cannot use.
 {{- $apiVersion := required "each policy kind needs an apiVersion" .apiVersion -}}
 {{- $kind := required "each policy kind needs a kind" .kind -}}
 {{- $_ := required "each policy kind needs a resource" .resource -}}
-{{- if not (contains "/" $apiVersion) -}}
-{{- fail (printf "the policy kind %s needs an apiVersion with a group" $kind) -}}
+{{- $parts := splitList "/" $apiVersion -}}
+{{- if or (ne (len $parts) 2) (not (first $parts)) (not (last $parts)) -}}
+{{- fail (printf "the policy kind %s needs an apiVersion <group>/<version>" $kind) -}}
 {{- end -}}
 {{- $kinds = append $kinds (printf "%s/%s" $apiVersion $kind) -}}
 {{- end -}}

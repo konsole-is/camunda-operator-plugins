@@ -19,6 +19,7 @@ package gatewayaccess
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -186,20 +187,33 @@ func containsJSON(want, got any) bool {
 			}
 		}
 		return true
-	case int64:
-		return sameNumber(float64(w), got)
-	case float64:
+	case int64, float64:
 		return sameNumber(w, got)
 	}
 	return want == got
 }
 
-func sameNumber(want float64, got any) bool {
-	switch g := got.(type) {
-	case int64:
-		return float64(g) == want
-	case float64:
-		return g == want
+// sameNumber reports whether a and b, each an int64 or a float64, are the
+// same number. An int64 above 2^53 has no exact float64, so two of them never
+// compare as floats.
+func sameNumber(a, b any) bool {
+	ai, aInt := a.(int64)
+	bi, bInt := b.(int64)
+	af, aFloat := a.(float64)
+	bf, bFloat := b.(float64)
+	switch {
+	case aInt && bInt:
+		return ai == bi
+	case aFloat && bFloat:
+		return af == bf
+	case aInt && bFloat:
+		return isInt(bf, ai)
+	case aFloat && bInt:
+		return isInt(af, bi)
 	}
 	return false
+}
+
+func isInt(f float64, i int64) bool {
+	return f == math.Trunc(f) && f >= math.MinInt64 && f < math.MaxInt64 && int64(f) == i
 }

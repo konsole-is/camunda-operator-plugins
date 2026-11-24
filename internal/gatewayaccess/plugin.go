@@ -128,7 +128,9 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{Pending: refused}, nil
 	}
 
-	live, err := listRoutes(ctx, p.client, req.Object)
+	// The cache can miss a route that the last reconcile applied, and the
+	// policies are read from the API server, so the routes are too.
+	live, err := listRoutes(ctx, p.reader, req.Object)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
