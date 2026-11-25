@@ -209,6 +209,23 @@ add volumes.json '.Volumes += [{VolumeId: "vol-2", State: "available", CreateTim
 "$here/eks-sweep.sh" --run cpo-ci-1-1-1 > /dev/null
 ! called "ec2 delete-volume --volume-id vol-2" || fail "$name" "deleted a volume without the run tag"
 
+name="an old volume whose run tag names no run"
+empty
+add volumes.json --arg at "$old" '.Volumes += [{VolumeId: "vol-3", State: "available", CreateTime: $at,
+  Tags: [{Key: "cpo-ci-run", Value: "prod"}]}]'
+"$here/eks-sweep.sh" --older-than 2 > /dev/null
+! called "ec2 delete-volume --volume-id vol-3" || fail "$name" "deleted a volume of no run"
+
+name="an old volume and cluster with the run tag in upper case"
+empty
+add volumes.json --arg at "$old" '.Volumes += [{VolumeId: "vol-4", State: "available", CreateTime: $at,
+  Tags: [{Key: "CPO-CI-RUN", Value: "cpo-ci-1-1-1"}]}]'
+add clusters.json --arg at "$old" '. += [{name: "cpo-ci-1-1-1", status: "ACTIVE", createdAt: $at, tags: {"CPO-CI-RUN": "cpo-ci-1-1-1"}}]'
+"$here/eks-sweep.sh" --older-than 2 > /dev/null
+called "ec2 delete-volume --volume-id vol-4" || fail "$name" "did not delete the volume"
+called "eks delete-cluster --name cpo-ci-1-1-1" || fail "$name" "did not delete the cluster"
+! grep -q 'tag-key' "$stub/calls" || fail "$name" "listed by the case-sensitive tag-key filter: $(grep tag-key "$stub/calls")"
+
 name="a listing that fails"
 empty
 a_run cpo-ci-1-1-1 i-1 vol-1 "$old" ACTIVE

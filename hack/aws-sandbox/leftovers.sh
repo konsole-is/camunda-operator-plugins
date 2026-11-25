@@ -87,7 +87,7 @@ clusters_left() {
   for name in ${names}; do
     if [ "${name}" != "${run}" ]; then
       if ! tag=$(aws eks describe-cluster --region "${region}" --name "${name}" --output json 2> "${err}" |
-        jq -r '.cluster.tags["cpo-ci-run"] // ""'); then
+        jq -r '(.cluster.tags // {} | with_entries(.key |= ascii_downcase))["cpo-ci-run"] // ""'); then
         # A cluster that is gone since the listing is no leftover.
         grep -q ResourceNotFoundException "${err}" || { echo "failed to read: ${kind} ${name}" >&2; failed=1; }
         continue
@@ -137,9 +137,8 @@ left bucket '.Buckets[].Name | select(startswith($run + "-"))' s3api list-bucket
 
 if ${eks}; then
   clusters_left "${AWS_REGION}" "EKS cluster"
-  left "EC2 instance" "${instances_filter}" ec2 describe-instances --filters "Name=tag-key,Values=cpo-ci-run"
-  left "EBS volume" "${volumes_filter}" ec2 describe-volumes \
-    --filters "Name=tag-key,Values=cpo-ci-run"
+  left "EC2 instance" "${instances_filter}" ec2 describe-instances
+  left "EBS volume" "${volumes_filter}" ec2 describe-volumes
   left "network interface" '.NetworkInterfaces[].NetworkInterfaceId' \
     ec2 describe-network-interfaces --filters "Name=vpc-id,Values=${AWS_EKS_VPC_ID}"
   left "security group" '.SecurityGroups[] | select(.GroupName | startswith("eks-cluster-sg-" + $run + "-")) | .GroupId' \
@@ -171,9 +170,8 @@ if ${all_regions}; then
     [ "${region}" != "${AWS_REGION}" ] || continue
     clusters_left "${region}" "EKS cluster in ${region}"
     left "EC2 instance in ${region}" "${instances_filter}" \
-      ec2 describe-instances --region "${region}" --filters "Name=tag-key,Values=cpo-ci-run"
-    left "EBS volume in ${region}" "${volumes_filter}" ec2 describe-volumes --region "${region}" \
-      --filters "Name=tag-key,Values=cpo-ci-run"
+      ec2 describe-instances --region "${region}"
+    left "EBS volume in ${region}" "${volumes_filter}" ec2 describe-volumes --region "${region}"
     keys_left "${region}" "KMS key in ${region}"
   done
 fi

@@ -143,7 +143,7 @@ if ! aws eks describe-addon-configuration --addon-name aws-ebs-csi-driver --addo
   exit 1
 fi
 running=$(aws ec2 describe-instances --output json --filters "Name=vpc-id,Values=${AWS_EKS_VPC_ID}" \
-  "Name=tag-key,Values=cpo-ci-run" "Name=instance-state-name,Values=pending,running" |
+  "Name=instance-state-name,Values=pending,running" |
   jq '[.Reservations[].Instances[]] | length')
 if [ $((running + nodes)) -gt "${max_nodes}" ]; then
   echo "${running} nodes of EKS runs already run in the VPC, and a run may not add ${nodes} more than ${max_nodes}" >&2

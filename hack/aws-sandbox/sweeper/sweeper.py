@@ -47,6 +47,10 @@ def has_run(value, rules):
     return value is not None and value not in rules["ignored_values"]
 
 
+def names_run(value, rules):
+    return bool(value) and value.startswith(rules["run_prefix"]) and len(value) > len(rules["run_prefix"])
+
+
 def older(created, now, hours):
     """Tells if created, a datetime or epoch seconds, lies more than hours
     before now."""
@@ -115,8 +119,9 @@ def select_bucket(name, created, now, rules):
 def select_cluster(name, cluster, vpc, now, rules):
     """The cluster rule of eks-sweep.sh: a run tag that starts with the run
     prefix, and a cpo-ci- name or the VPC of the runs."""
-    tag = (cluster.get("tags") or {}).get(rules["tag_key"])
-    if not tag or not tag.startswith(rules["run_prefix"]):
+    tags = {key.lower(): value for key, value in (cluster.get("tags") or {}).items()}
+    tag = tags.get(rules["tag_key"])
+    if not names_run(tag, rules):
         return False
     if not name.startswith(rules["run_prefix"]) and (cluster.get("resourcesVpcConfig") or {}).get("vpcId") != vpc:
         return False
@@ -124,7 +129,9 @@ def select_cluster(name, cluster, vpc, now, rules):
 
 
 def select_eks(tag, created, now, rules):
-    return matches(tag, created, now, rules["older_than_hours"]["eks_sweep"], rules)
+    # Each EKS kind is listed in the whole VPC or region, so the value must
+    # name a run.
+    return names_run(tag, rules) and older(created, now, rules["older_than_hours"]["eks_sweep"])
 
 
 def schedule_owner(name):
@@ -189,8 +196,8 @@ class Sweep:
         return self.failures
 
     def run_instances(self, states):
-        filters = [{"Name": "vpc-id", "Values": [self.vpc]}, {"Name": "tag-key", "Values": [self.rules["tag_key"]]},
-                   {"Name": "instance-state-name", "Values": states}]
+        # The tag-key filter of EC2 is case-sensitive, and run_tag is not.
+        filters = [{"Name": "vpc-id", "Values": [self.vpc]}, {"Name": "instance-state-name", "Values": states}]
         for reservation in items(self.client("ec2"), "describe_instances", "Reservations", Filters=filters):
             yield from reservation["Instances"]
 
@@ -219,8 +226,7 @@ class Sweep:
 
     def volumes(self):
         ec2 = self.client("ec2")
-        for volume in items(ec2, "describe_volumes", "Volumes",
-                            Filters=[{"Name": "tag-key", "Values": [self.rules["tag_key"]]}]):
+        for volume in items(ec2, "describe_volumes", "Volumes"):
             tag = run_tag(volume.get("Tags"), self.rules)
             if volume["State"] == "available" and select_eks(tag, volume["CreateTime"], self.now, self.rules):
                 self.log(f"EBS volume {volume['VolumeId']} ({tag})")

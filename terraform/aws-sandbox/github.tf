@@ -84,6 +84,7 @@ locals {
     AWS_EKS_PLUGINS_ROLE_ARN   = aws_iam_role.eks_plugins.arn
     AWS_EKS_SCHEDULER_ROLE_ARN = aws_iam_role.eks_scheduler.arn
     AWS_EKS_INSTANCE_TYPE      = var.eks_instance_types[0]
+    AWS_EKS_PLUGINS_NAMESPACE  = var.eks_plugins_namespace
   }
 }
 

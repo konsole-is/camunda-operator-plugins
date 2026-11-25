@@ -220,6 +220,15 @@ code=$?
 [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
 [ "$out" = "left: EKS cluster other" ] || fail "$name" "printed '$out'"
 
+name="--eks a cluster of the run with the run tag in upper case"
+eks_account
+add_cluster other
+echo '{"cluster": {"name": "other", "tags": {"CPO-CI-RUN": "cpo-ci-1-1-1"}}}' > "$stub/cluster-other.json"
+out=$("$here/leftovers.sh" --eks cpo-ci-1-1-1)
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+[ "$out" = "left: EKS cluster other" ] || fail "$name" "printed '$out'"
+
 name="--eks a volume of the driver without the run tag"
 eks_account
 add_volume vol-2 '[{"Key": "ebs.csi.aws.com/cluster", "Value": "true"}]'

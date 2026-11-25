@@ -150,6 +150,17 @@ class Rules(unittest.TestCase):
                                                     NOW, RULES), value)
         self.assertFalse(sweeper.select_cluster("cpo-ci-1-eks", dict(run, createdAt=YOUNG), "vpc-1", NOW, RULES))
 
+    def test_an_eks_resource_needs_the_value_of_a_run(self):
+        old = NOW - datetime.timedelta(hours=3)
+        for value in ("prod", "cpo-ci-", "None", "", None):
+            self.assertFalse(sweeper.select_eks(value, old, NOW, RULES), value)
+        self.assertTrue(sweeper.select_eks("cpo-ci-1-eks", old, NOW, RULES))
+
+    def test_a_cluster_tag_key_in_any_case(self):
+        old = NOW - datetime.timedelta(hours=3)
+        cluster = {"tags": {"CPO-CI-RUN": "cpo-ci-1-eks"}, "createdAt": old}
+        self.assertTrue(sweeper.select_cluster("cpo-ci-1-eks", cluster, "vpc-1", NOW, RULES))
+
     def test_names(self):
         self.assertEqual(sweeper.schedule_owner("cpo-ci-1-eks-delete-cluster"), "cpo-ci-1-eks")
         self.assertEqual(sweeper.schedule_owner("cpo-ci-1-eks-terminate-nodes"), "cpo-ci-1-eks")
@@ -234,6 +245,9 @@ class Pass(unittest.TestCase):
             {"Name": "cpo-ci-3-eks-delete-cluster", "CreationDate": old}]}}}
         _, calls = sweep(ec2=ec2, eks=eks, scheduler=scheduler)
         self.assertEqual(called(calls, "terminate_instances"), [{"InstanceIds": ["i-old"]}])
+        listings = called(calls, "describe_instances") + called(calls, "describe_volumes")
+        self.assertFalse([f for c in listings for f in c.get("Filters", []) if f["Name"] == "tag-key"],
+                         "the tag-key filter of EC2 is case-sensitive")
         self.assertEqual(called(calls, "delete_cluster"), [])
         self.assertEqual(called(calls, "delete_volume"), [{"VolumeId": "v-free"}])
         self.assertEqual(called(calls, "delete_network_interface"), [], "a cluster of a run still runs")

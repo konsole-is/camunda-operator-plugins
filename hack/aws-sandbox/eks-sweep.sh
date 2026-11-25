@@ -51,7 +51,9 @@ failed=0
 # matches <tag value> <creation date> tells if the sweep removes a resource.
 matches() {
   local tag=$1 created=$2
-  [ -n "${tag}" ] && [ "${tag}" != None ] || return 1
+  # Each EKS kind is listed in the whole VPC or region, so the value must
+  # name a run.
+  [[ ${tag} == cpo-ci-?* ]] || return 1
   if [ -n "${run}" ]; then
     [ "${tag}" = "${run}" ]
   else
@@ -91,7 +93,7 @@ run_tag='([(.Tags // [])[] | select((.Key | ascii_downcase) == "cpo-ci-run") | .
 # live_runs prints the run tag of each instance of the VPC that is not
 # terminated, and fails when the listing fails.
 live_runs() {
-  aws ec2 describe-instances --output json --filters "Name=vpc-id,Values=${vpc}" "Name=tag-key,Values=cpo-ci-run" \
+  aws ec2 describe-instances --output json --filters "Name=vpc-id,Values=${vpc}" \
     "Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped" |
     jq -r ".Reservations[].Instances[] | select(.State.Name != \"terminated\") | ${run_tag}"
 }
@@ -104,7 +106,7 @@ cluster_names() {
 
 # 1. The nodes first, so that no volume stays in use and no pod writes again.
 listing instances "EC2 instances" ec2 describe-instances --filters "Name=vpc-id,Values=${vpc}" \
-  "Name=tag-key,Values=cpo-ci-run" "Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped"
+  "Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped"
 ids=()
 while IFS='|' read -r id tag launched; do
   [ -n "${id}" ] || continue
@@ -133,7 +135,7 @@ for name in $(jq -r '(.clusters // [])[]' <<< "${clusters:-null}"); do
   fi
   rm -f "${err}"
   IFS='|' read -r status created tag cluster_vpc <<< "$(jq -r '.cluster |
-    [.status, .createdAt, (.tags["cpo-ci-run"] // "None"), (.resourcesVpcConfig.vpcId // "")] | join("|")' <<< "${cluster}")"
+    [.status, .createdAt, ((.tags // {} | with_entries(.key |= ascii_downcase))["cpo-ci-run"] // "None"), (.resourcesVpcConfig.vpcId // "")] | join("|")' <<< "${cluster}")"
   if [[ ${tag} != cpo-ci-* ]] || { [[ ${name} != cpo-ci-* ]] && [ "${cluster_vpc}" != "${vpc}" ]; }; then
     continue
   fi
@@ -155,7 +157,7 @@ done
 
 # 3. The volumes, by the run tag: the role of the EBS CSI driver creates no
 # volume without it.
-listing volumes "EBS volumes" ec2 describe-volumes --filters "Name=tag-key,Values=cpo-ci-run"
+listing volumes "EBS volumes" ec2 describe-volumes
 deadline=$(($(date +%s) + settle_seconds))
 while IFS='|' read -r id state created tag; do
   [ -n "${id}" ] || continue

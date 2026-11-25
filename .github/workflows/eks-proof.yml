@@ -58,6 +58,8 @@ jobs:
       AWS_EKS_PLUGINS_ROLE_ARN: ${{ vars.AWS_EKS_PLUGINS_ROLE_ARN }}
       AWS_EKS_SCHEDULER_ROLE_ARN: ${{ vars.AWS_EKS_SCHEDULER_ROLE_ARN }}
       AWS_EKS_INSTANCE_TYPE: ${{ vars.AWS_EKS_INSTANCE_TYPE }}
+      # The trust of the role cpo-sandbox-eks-plugins names this namespace.
+      CHART_NAMESPACE: ${{ vars.AWS_EKS_PLUGINS_NAMESPACE }}
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
