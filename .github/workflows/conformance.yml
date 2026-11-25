@@ -122,12 +122,12 @@ jobs:
       fail-fast: false
       matrix:
         # One line for each set of test/conformance/aws/ that runs in the AWS
-        # sandbox. every-controller runs the suite of each registration
-        # against one release. two-releases runs two releases in one
+        # sandbox. single-release runs the suite of each registration
+        # against one release. multi-release runs two releases in one
         # namespace, and moves the second into the first. See CONTRIBUTING.md.
         set:
-          - every-controller
-          - two-releases
+          - single-release
+          - multi-release
     env:
       PLUGIN: aws
       CONFORMANCE_SET: ${{ matrix.set }}

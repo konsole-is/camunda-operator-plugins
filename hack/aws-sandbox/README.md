@@ -4,7 +4,7 @@ The CI of the AWS plugins runs against a real AWS sandbox account. [`terraform/a
 
 ## A run in CI
 
-The job `conformance-aws` of `.github/workflows/conformance.yml` uses these scripts. It has one row for each set of `test/conformance/aws/` that runs in the sandbox: `every-controller` and `two-releases`. `CONTRIBUTING.md` tells how a plugin gets such a row. A job that uses AWS has the permission `id-token: write` and selects its environment as `.github/workflows/aws-sandbox.yml` does. It gets the credentials with `aws-actions/configure-aws-credentials` and the role `vars.AWS_ROLE_ARN`.
+The job `conformance-aws` of `.github/workflows/conformance.yml` uses these scripts. It has one row for each set of `test/conformance/aws/` that runs in the sandbox: `single-release` and `multi-release`. `CONTRIBUTING.md` tells how a plugin gets such a row. A job that uses AWS has the permission `id-token: write` and selects its environment as `.github/workflows/aws-sandbox.yml` does. It gets the credentials with `aws-actions/configure-aws-credentials` and the role `vars.AWS_ROLE_ARN`.
 
 The job `awskit-sandbox` of the same workflow runs no kind cluster. It uses only the credentials, the run ID, and `teardown.sh` of step 7. Steps 1 to 6 are for a run with a kind cluster.
 

@@ -92,7 +92,7 @@ Attach the policy of each controller that is on to the role. Make each policy a 
 
 aws-ebs makes no AWS call and needs no policy. With only aws-ebs on, the Pod loads no AWS config and needs no role, no region, and no credentials.
 
-## Two releases
+## More than one release
 
 You can install the chart twice in one namespace, with other controllers on in each release. For example, keep aws-kms in an IAM role of its own, in the release `aws-keys`. Each release has its own ServiceAccount, IAM role, and leader election Lease, all named after the release. So the role of `aws-keys` trusts the ServiceAccount `aws-keys`, and has only the policy of aws-kms. Each release also has its own shared values, such as `region`.
 
@@ -136,7 +136,7 @@ Before this chart, each AWS controller had its own chart: `aws-identity`, `aws-c
 1. Write the `values.yaml` of the chart `aws` from the values of each old release. Get them with `helm get values <release> --namespace camunda-operator-plugins`.
     - Put each value of a controller under the block of that controller, as the table below shows, and set `enabled: true` in each block. Write the shared values once.
     - Keep the same `roleNamePrefix` of `identity` and `connectorsRole`, the same `kms.aliasPrefix`, `region`, and `s3.partition`, and the whole `registrations` list of each old release. A changed role name prefix or region makes the controllers create new AWS objects.
-    - When the old releases used different regions, install one release of the chart `aws` for each region. See [Two releases](#two-releases).
+    - When the old releases used different regions, install one release of the chart `aws` for each region. See [More than one release](#more-than-one-release).
 2. Give the ServiceAccount `aws` the [role of the controllers](#the-role-of-the-controllers), with the policies of the controllers that are on, and set its IRSA annotation in `values.yaml`.
 3. Uninstall the old releases, and wait until their Pods are gone:
 
