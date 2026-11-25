@@ -27,13 +27,31 @@ data "aws_iam_policy_document" "sweep" {
     ]
     resources = [local.run_roles, local.run_policies, local.run_providers]
   }
+  # A role with a trust of no run goes also without the run tag, so the
+  # deletion of a role has no tag condition.
   statement {
-    sid = "DeleteRunIAM"
+    sid = "DeleteRunRoles"
     actions = [
-      "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole",
-      "iam:DeletePolicyVersion", "iam:DeletePolicy", "iam:DeleteOpenIDConnectProvider",
+      "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole", "iam:ListInstanceProfilesForRole",
     ]
-    resources = [local.run_roles, local.run_policies, local.run_providers]
+    resources = [local.run_roles]
+  }
+  statement {
+    sid       = "RemoveRunRolesFromProfiles"
+    actions   = ["iam:RemoveRoleFromInstanceProfile"]
+    resources = ["${local.iam}:instance-profile/cpo-ci-*"]
+  }
+  # cpo-ci-* also matches a path.
+  statement {
+    sid       = "NoRolesWithAPath"
+    effect    = "Deny"
+    actions   = ["iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole"]
+    resources = ["${local.iam}:role/*/*"]
+  }
+  statement {
+    sid       = "DeleteRunIAM"
+    actions   = ["iam:DeletePolicyVersion", "iam:DeletePolicy", "iam:DeleteOpenIDConnectProvider"]
+    resources = [local.run_policies, local.run_providers]
     condition {
       test     = "Null"
       variable = "aws:ResourceTag/cpo-ci-run"
@@ -251,8 +269,9 @@ resource "aws_lambda_function" "sweep" {
   handler          = "sweeper.handler"
   filename         = data.archive_file.sweep.output_path
   source_code_hash = data.archive_file.sweep.output_base64sha256
-  memory_size      = 128
-  timeout          = 300
+  # A pass in the account with no run used 112 of 128 MB.
+  memory_size = 256
+  timeout     = 300
 
   environment {
     variables = {

@@ -229,6 +229,19 @@ code=$?
 [ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
 [ "$out" = "left: EKS cluster other" ] || fail "$name" "printed '$out'"
 
+name="--eks the security group of a gone cluster with another name"
+eks_account
+add_cluster live
+echo '{"cluster": {"name": "live", "tags": {}}}' > "$stub/cluster-live.json"
+echo '{"SecurityGroups": [
+  {"GroupId": "sg-7", "GroupName": "eks-cluster-sg-other-123", "Tags": [{"Key": "aws:eks:cluster-name", "Value": "other"}]},
+  {"GroupId": "sg-8", "GroupName": "eks-cluster-sg-live-456", "Tags": [{"Key": "aws:eks:cluster-name", "Value": "live"}]},
+  {"GroupId": "sg-9", "GroupName": "default"}]}' > "$stub/groups.json"
+out=$("$here/leftovers.sh" --eks cpo-ci-1-1-1)
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+[ "$out" = "left: security group sg-7" ] || fail "$name" "printed '$out', want only the group of the gone cluster"
+
 name="--eks a volume of the driver without the run tag"
 eks_account
 add_volume vol-2 '[{"Key": "ebs.csi.aws.com/cluster", "Value": "true"}]'

@@ -75,9 +75,14 @@ def sweep(**clients):
     clients.setdefault("sts", {"answers": {"get_caller_identity": {"Account": ACCOUNT}}})
     clients.setdefault("iam", {"answers": {"list_open_id_connect_providers": {"OpenIDConnectProviderList": []}}})
     clients.setdefault("s3", {"answers": {"list_buckets": {"Buckets": []}}})
-    run = sweeper.Sweep(factory, RULES, ENV, now=NOW, log=lambda _: None)
+    run = sweeper.Sweep(factory, RULES, ENV, now=NOW, log=LOG.append)
+    LOG.clear()
     run.run()
     return run, calls
+
+
+# The lines that the last pass of sweep logged.
+LOG = []
 
 
 def called(calls, operation):
@@ -164,7 +169,14 @@ class Rules(unittest.TestCase):
     def test_names(self):
         self.assertEqual(sweeper.schedule_owner("cpo-ci-1-eks-delete-cluster"), "cpo-ci-1-eks")
         self.assertEqual(sweeper.schedule_owner("cpo-ci-1-eks-terminate-nodes"), "cpo-ci-1-eks")
-        self.assertEqual(sweeper.security_group_cluster("eks-cluster-sg-cpo-ci-1-eks-123"), "cpo-ci-1-eks")
+        self.assertEqual(sweeper.security_group_cluster({"GroupName": "eks-cluster-sg-cpo-ci-1-eks-123"}),
+                         "cpo-ci-1-eks")
+        tagged = {"GroupName": "eks-cluster-sg-other-123", "Tags": [{"Key": "aws:eks:cluster-name", "Value": "other"}]}
+        self.assertEqual(sweeper.security_group_cluster(tagged), "other")
+
+    def test_an_untagged_role_with_a_trust_of_no_run_goes(self):
+        role = {"RoleName": "cpo-ci-1-hub-a", "CreateDate": YOUNG, "AssumeRolePolicyDocument": OTHER_ACCOUNT}
+        self.assertEqual(sweeper.select_role(role, None, ACCOUNT, NOW, RULES), "a trust of no run")
 
 
 class Pass(unittest.TestCase):
@@ -186,6 +198,30 @@ class Pass(unittest.TestCase):
         self.assertEqual(sorted(c["RoleName"] for c in called(calls, "delete_role")),
                          ["cpo-ci-1-hub-foreign", "cpo-ci-1-hub-old"])
         self.assertEqual(run.failures, [])
+
+    def test_an_untagged_role_with_a_trust_of_no_run_is_removed_from_its_profiles(self):
+        iam = {"pages": {"list_roles": {"Roles": [
+            {"RoleName": "cpo-ci-1-hub-x", "CreateDate": YOUNG, "AssumeRolePolicyDocument": OTHER_ACCOUNT}]}},
+            "answers": {"list_role_tags": {"Tags": []},
+                        "list_instance_profiles_for_role": {"InstanceProfiles": [{"InstanceProfileName": "cpo-ci-1-p"}]},
+                        "list_open_id_connect_providers": {"OpenIDConnectProviderList": []}}}
+        run, calls = sweep(iam=iam)
+        self.assertEqual(called(calls, "remove_role_from_instance_profile"),
+                         [{"InstanceProfileName": "cpo-ci-1-p", "RoleName": "cpo-ci-1-hub-x"}])
+        self.assertEqual(called(calls, "delete_role"), [{"RoleName": "cpo-ci-1-hub-x"}])
+        self.assertIn("remove role cpo-ci-1-hub-x: a trust of no run", LOG)
+        self.assertEqual(run.failures, [])
+
+    def test_the_log_of_a_pass(self):
+        iam = {"pages": {"list_roles": {"Roles": [
+            {"RoleName": "cpo-ci-1-hub-old", "CreateDate": OLD, "AssumeRolePolicyDocument": ISSUER}]}},
+            "answers": {"list_role_tags": {"Tags": tags("cpo-ci-1")}, "delete_role": ClientError("AccessDenied"),
+                        "list_open_id_connect_providers": {"OpenIDConnectProviderList": []}}}
+        sweep(iam=iam)
+        self.assertIn("listed 1 roles of runs", LOG)
+        self.assertIn("remove role cpo-ci-1-hub-old: run cpo-ci-1, 7.0 h old", LOG)
+        self.assertTrue([line for line in LOG if line.startswith("failed: remove role cpo-ci-1-hub-old: ")], LOG)
+        self.assertEqual(LOG[-1], "pass done: 1 removals, 1 failures")
 
     def test_a_role_that_another_sweep_deleted_is_no_failure(self):
         iam = {"pages": {"list_roles": {"Roles": [
@@ -236,14 +272,18 @@ class Pass(unittest.TestCase):
             "describe_network_interfaces": {"NetworkInterfaces": [{"NetworkInterfaceId": "eni-1", "Status": "available"}]},
             "describe_security_groups": {"SecurityGroups": [
                 {"GroupId": "sg-1", "GroupName": "eks-cluster-sg-cpo-ci-1-eks-1"},
-                {"GroupId": "sg-2", "GroupName": "eks-cluster-sg-cpo-ci-2-eks-1"}]}}}
+                {"GroupId": "sg-2", "GroupName": "eks-cluster-sg-cpo-ci-2-eks-1"},
+                {"GroupId": "sg-3", "GroupName": "eks-cluster-sg-other-1",
+                 "Tags": [{"Key": "aws:eks:cluster-name", "Value": "other"}]}]}},
+            "answers": {"delete_security_group": lambda GroupId: (
+                ClientError("DependencyViolation") if GroupId == "sg-3" else {})}}
         eks = {"pages": {"list_clusters": {"clusters": ["cpo-ci-2-eks"]}}, "answers": {"describe_cluster": {
             "cluster": {"status": "ACTIVE", "createdAt": YOUNG, "tags": {"cpo-ci-run": "cpo-ci-2-eks"}}}}}
         scheduler = {"pages": {"list_schedules": {"Schedules": [
             {"Name": "cpo-ci-1-eks-terminate-nodes", "CreationDate": old},
             {"Name": "cpo-ci-2-eks-delete-cluster", "CreationDate": old},
             {"Name": "cpo-ci-3-eks-delete-cluster", "CreationDate": old}]}}}
-        _, calls = sweep(ec2=ec2, eks=eks, scheduler=scheduler)
+        run, calls = sweep(ec2=ec2, eks=eks, scheduler=scheduler)
         self.assertEqual(called(calls, "terminate_instances"), [{"InstanceIds": ["i-old"]}])
         listings = called(calls, "describe_instances") + called(calls, "describe_volumes")
         self.assertFalse([f for c in listings for f in c.get("Filters", []) if f["Name"] == "tag-key"],
@@ -251,7 +291,11 @@ class Pass(unittest.TestCase):
         self.assertEqual(called(calls, "delete_cluster"), [])
         self.assertEqual(called(calls, "delete_volume"), [{"VolumeId": "v-free"}])
         self.assertEqual(called(calls, "delete_network_interface"), [], "a cluster of a run still runs")
-        self.assertEqual(called(calls, "delete_security_group"), [{"GroupId": "sg-1"}])
+        # The group of the gone cluster named other goes too. Its interfaces
+        # are still there in this pass, which is no failure.
+        self.assertEqual(called(calls, "delete_security_group"), [{"GroupId": "sg-1"}, {"GroupId": "sg-3"}])
+        self.assertIn("later pass: remove security group sg-3: DependencyViolation", LOG)
+        self.assertEqual(run.failures, [])
         # The node of cpo-ci-1-eks is still listed in this pass, and the
         # cluster cpo-ci-2-eks runs.
         self.assertEqual(called(calls, "delete_schedule"),

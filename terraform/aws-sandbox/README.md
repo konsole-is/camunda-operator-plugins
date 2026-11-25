@@ -31,7 +31,7 @@ This configuration creates these resources:
 | Schedule | `cpo-sandbox-sweep` | Runs the function once an hour, in the schedule group `cpo-sandbox-sweep`, as the role `cpo-sandbox-sweep-scheduler`. |
 | CloudWatch alarms | `cpo-sandbox-sweep-errors`, `cpo-sandbox-sweep-no-pass` | An email to `alert_emails` when a pass fails, or when no pass ran for two hours, through the SNS topic `cpo-sandbox-alerts`. |
 
-The EKS parts cost nothing while no EKS run is active. The sweep in AWS stays within the free tier: one arm64 invocation of 128 MB an hour, no VPC, and two alarms.
+The EKS parts cost nothing while no EKS run is active. The sweep in AWS stays within the free tier: one arm64 invocation of 256 MB an hour, no VPC, and two alarms.
 
 No sweep removes a `cpo-sandbox-*` resource, because each one lists only `cpo-ci-*` names and resources with the tag `cpo-ci-run`.
 

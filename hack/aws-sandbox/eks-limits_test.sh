@@ -49,6 +49,7 @@ fail() {
 # denied by the absence of an allow.
 limits() {
   cat << 'EOF'
+role/cpo-sandbox-sweep.--action-names.iam:DeleteRole.--resource-arns.arn:aws:iam::111122223333:role/cpo-ci-limits-x allowed
 cpo-ci-other explicitDeny
 ContextKeyValues=ec2\.amazonaws\.com, explicitDeny
 VolumeInitializationRate explicitDeny

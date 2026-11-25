@@ -10,12 +10,12 @@
 #
 # --eks also prints what an EKS run left in AWS_REGION: its EKS cluster, EC2
 # instance, EBS volumes, images, schedules, log groups, KMS keys that are not
-# pending deletion, and KMS aliases. It prints each network interface, load
-# balancer, and cluster security group of the run in the VPC AWS_EKS_VPC_ID,
-# and each NAT gateway and Elastic IP of the region, because no run creates
-# one. --all-regions also prints the EKS clusters, EC2 instances, EBS
-# volumes, and KMS keys of the run in each other region, as "<kind> in
-# <region>". It needs administrator credentials.
+# pending deletion, and KMS aliases. It prints each network interface and load
+# balancer in the VPC AWS_EKS_VPC_ID, each cluster security group there whose
+# cluster is gone, and each NAT gateway and Elastic IP of the region, because
+# no run creates one. --all-regions also prints the EKS clusters, EC2
+# instances, EBS volumes, and KMS keys of the run in each other region, as
+# "<kind> in <region>". It needs administrator credentials.
 #
 # Needs the credentials of the CI role, or of the EKS role with --eks. It
 # exits 1 when it printed a line or a listing failed, and 2 on wrong
@@ -141,7 +141,16 @@ if ${eks}; then
   left "EBS volume" "${volumes_filter}" ec2 describe-volumes
   left "network interface" '.NetworkInterfaces[].NetworkInterfaceId' \
     ec2 describe-network-interfaces --filters "Name=vpc-id,Values=${AWS_EKS_VPC_ID}"
-  left "security group" '.SecurityGroups[] | select(.GroupName | startswith("eks-cluster-sg-" + $run + "-")) | .GroupId' \
+  # A cluster of a run can have another name than the run.
+  if ! CLUSTERS=$(aws eks list-clusters --output json | jq -c '.clusters'); then
+    echo "failed to list: EKS clusters" >&2
+    failed=1
+    CLUSTERS='[]'
+  fi
+  export CLUSTERS
+  left "security group" '.SecurityGroups[] | select(.GroupName | startswith("eks-cluster-sg-"))
+    | select(([(.Tags // [])[] | select(.Key == "aws:eks:cluster-name") | .Value][0] //
+    (.GroupName | ltrimstr("eks-cluster-sg-") | sub("-[^-]*$"; ""))) as $c | $ENV.CLUSTERS | fromjson | index($c) == null) | .GroupId' \
     ec2 describe-security-groups --filters "Name=vpc-id,Values=${AWS_EKS_VPC_ID}"
   left "NAT gateway" '.NatGateways[].NatGatewayId' \
     ec2 describe-nat-gateways --filter "Name=state,Values=pending,available,deleting,failed"

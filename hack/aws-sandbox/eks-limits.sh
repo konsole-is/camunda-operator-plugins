@@ -188,5 +188,14 @@ expect "${role}" iam:PassRole "${hub}" explicitDeny "${own}" "${session}" iam:Pa
 expect "${role}" eks:DeletePodIdentityAssociation \
   "arn:aws:eks:${AWS_REGION}:${account}:podidentityassociation/cpo-ci-other/a-1" explicitDeny "${session}"
 
+# The sweep in AWS removes a role of a run with a trust of no run, also
+# without the run tag, and nothing else.
+role=cpo-sandbox-sweep
+expect "${role}" iam:DeleteRole "arn:aws:iam::${account}:role/cpo-ci-limits-x" allowed
+expect "${role}" iam:DeleteRole "arn:aws:iam::${account}:role/cpo-ci-limits/x" explicitDeny
+expect "${role}" iam:DeleteRole "arn:aws:iam::${account}:role/cpo-sandbox-eks" explicitDeny
+expect "${role}" iam:CreateRole "arn:aws:iam::${account}:role/cpo-ci-limits-x" explicitDeny "${tag}"
+expect "${role}" iam:PassRole "arn:aws:iam::${account}:role/cpo-ci-limits-x" explicitDeny
+
 echo "eks-limits: ${passed} ok, ${failed} failed"
 [ "${failed}" -eq 0 ]

@@ -174,6 +174,25 @@ called "eks delete-cluster --name in-vpc" || fail "$name" "did not delete the cl
 ! called "eks delete-cluster --name elsewhere" || fail "$name" "deleted a cluster with another name outside the VPC"
 ! called "eks delete-cluster --name kept" || fail "$name" "deleted a cluster without the run tag"
 
+name="the security group of a cluster of the run with another name"
+empty
+add clusters.json --arg at "$young" '. += [
+  {name: "other", status: "ACTIVE", createdAt: $at, tags: {"cpo-ci-run": "cpo-ci-1-1-1"}, resourcesVpcConfig: {vpcId: "vpc-1"}},
+  {name: "live", status: "ACTIVE", createdAt: $at, tags: {}, resourcesVpcConfig: {vpcId: "vpc-1"}}]'
+echo '{"SecurityGroups": [
+  {"GroupId": "sg-7", "GroupName": "eks-cluster-sg-other-123", "Tags": [{"Key": "aws:eks:cluster-name", "Value": "other"}]},
+  {"GroupId": "sg-8", "GroupName": "eks-cluster-sg-live-456", "Tags": [{"Key": "aws:eks:cluster-name", "Value": "live"}]},
+  {"GroupId": "sg-9", "GroupName": "eks-cluster-sg-gone-789", "Tags": [{"Key": "aws:eks:cluster-name", "Value": "gone"}]}]}' \
+  > "$stub/groups.json"
+"$here/eks-sweep.sh" --run cpo-ci-1-1-1 > /dev/null
+called "ec2 delete-security-group --group-id sg-7" || fail "$name" "did not delete the group of the deleted cluster other"
+! called "sg-8" || fail "$name" "deleted the group of a live cluster"
+! called "sg-9" || fail "$name" "--run deleted the group of a cluster of no run of its own"
+rm -f "$stub/calls"
+"$here/eks-sweep.sh" --older-than 2 > /dev/null
+called "ec2 delete-security-group --group-id sg-9" || fail "$name" "--older-than did not delete the orphan group"
+! called "sg-8" || fail "$name" "--older-than deleted the group of a live cluster"
+
 name="a cluster whose run tag does not start with cpo-ci-"
 empty
 add clusters.json --arg at "$old" '. += [{name: "cpo-ci-9", status: "ACTIVE", createdAt: $at, tags: {"cpo-ci-run": "prod"}}]'

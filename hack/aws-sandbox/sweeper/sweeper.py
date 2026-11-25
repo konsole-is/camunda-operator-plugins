@@ -16,7 +16,11 @@ import time
 RULES_FILE = "sweep-rules.json"
 BUCKET_SECONDS = 60
 # A resource that another sweep deleted since the listing is no failure.
-GONE = {"NoSuchEntity", "NotFoundException", "ResourceNotFoundException", "NoSuchBucket"}
+GONE = {"NoSuchEntity", "NotFoundException", "ResourceNotFoundException", "NoSuchBucket", "InvalidGroup.NotFound",
+        "InvalidNetworkInterfaceID.NotFound", "InvalidVolume.NotFound", "InvalidInstanceID.NotFound"}
+# EKS removes the interfaces of a deleted cluster some minutes later, and
+# until then its security group is in use.
+IN_USE = {"DependencyViolation"}
 
 
 def load_rules(path=None):
@@ -143,9 +147,12 @@ def schedule_owner(name):
     return name
 
 
-def security_group_cluster(group_name):
-    """Returns the cluster of the security group eks-cluster-sg-<cluster>-<number>."""
-    return group_name[len("eks-cluster-sg-"):].rsplit("-", 1)[0]
+def security_group_cluster(group):
+    """Returns the cluster of an EKS cluster security group."""
+    for tag in group.get("Tags") or []:
+        if tag["Key"] == "aws:eks:cluster-name":
+            return tag["Value"]
+    return group["GroupName"][len("eks-cluster-sg-"):].rsplit("-", 1)[0]
 
 
 def items(client, operation, key, **kwargs):
@@ -155,7 +162,9 @@ def items(client, operation, key, **kwargs):
 
 class Sweep:
     """One pass of the sweep. clients(service, region) returns a boto3
-    client. A failed step is recorded, and the pass goes on."""
+    client. A failed step is recorded, and the pass goes on. log gets a line
+    with a count for each listing, one for each removal with its reason, and
+    one for each failure."""
 
     def __init__(self, clients, rules, env, now=None, log=print):
         self.clients = clients
@@ -168,6 +177,7 @@ class Sweep:
         self.now = now or datetime.datetime.now(datetime.timezone.utc)
         self.log = log
         self.failures = []
+        self.removed = 0
 
     def client(self, service, region=None):
         return self.clients(service, region or self.region)
@@ -178,9 +188,26 @@ class Sweep:
         except Exception as err:  # noqa: BLE001
             if error_code(err) in GONE:
                 return None
+            if error_code(err) in IN_USE:
+                self.log(f"later pass: {what}: {error_code(err)}")
+                return None
             self.failures.append(f"{what}: {err}")
             self.log(f"failed: {what}: {err}")
             return None
+
+    def listed(self, kind, count):
+        self.log(f"listed {count} {kind}")
+
+    def remove(self, kind, name, reason, call, *args, **kwargs):
+        self.log(f"remove {kind} {name}: {reason}")
+        self.removed += 1
+        return self.step(f"remove {kind} {name}", call, *args, **kwargs)
+
+    def age(self, tag, created):
+        if isinstance(created, (int, float)):
+            created = datetime.datetime.fromtimestamp(created, datetime.timezone.utc)
+        hours = (self.now - created).total_seconds() / 3600
+        return f"run {tag}, {hours:.1f} h old" if tag else f"{hours:.1f} h old"
 
     def run(self):
         """Runs each kind and returns the failures."""
@@ -193,6 +220,7 @@ class Sweep:
             ("OIDC providers", self.providers), ("buckets", self.buckets), ("KMS keys", self.keys),
         ):
             self.step("sweep " + name, part)
+        self.log(f"pass done: {self.removed} removals, {len(self.failures)} failures")
         return self.failures
 
     def run_instances(self, states):
@@ -202,18 +230,23 @@ class Sweep:
             yield from reservation["Instances"]
 
     def instances(self):
+        instances = list(self.run_instances(["pending", "running", "shutting-down", "stopping", "stopped"]))
+        self.listed("EC2 instances in the VPC", len(instances))
         ids = []
-        for instance in self.run_instances(["pending", "running", "shutting-down", "stopping", "stopped"]):
+        for instance in instances:
             tag = run_tag(instance.get("Tags"), self.rules)
             if select_eks(tag, instance["LaunchTime"], self.now, self.rules):
-                self.log(f"EC2 instance {instance['InstanceId']} ({tag})")
+                self.log(f"remove EC2 instance {instance['InstanceId']}: {self.age(tag, instance['LaunchTime'])}")
+                self.removed += 1
                 ids.append(instance["InstanceId"])
         if ids:
             self.step("terminate " + " ".join(ids), self.client("ec2").terminate_instances, InstanceIds=ids)
 
     def clusters(self):
         eks = self.client("eks")
-        for name in items(eks, "list_clusters", "clusters"):
+        names = list(items(eks, "list_clusters", "clusters"))
+        self.listed("EKS clusters", len(names))
+        for name in names:
             described = self.step("describe cluster " + name, eks.describe_cluster, name=name)
             if not described:
                 continue
@@ -221,16 +254,19 @@ class Sweep:
             # A cluster in CREATING cannot be deleted yet.
             if select_cluster(name, cluster, self.vpc, self.now, self.rules) and cluster["status"] not in (
                     "CREATING", "DELETING"):
-                self.log(f"EKS cluster {name} ({cluster['status']})")
-                self.step("delete cluster " + name, eks.delete_cluster, name=name)
+                tags = {k.lower(): v for k, v in (cluster.get("tags") or {}).items()}
+                self.remove("EKS cluster", name, self.age(tags[self.rules["tag_key"]], cluster["createdAt"]),
+                            eks.delete_cluster, name=name)
 
     def volumes(self):
         ec2 = self.client("ec2")
-        for volume in items(ec2, "describe_volumes", "Volumes"):
+        volumes = list(items(ec2, "describe_volumes", "Volumes"))
+        self.listed("EBS volumes", len(volumes))
+        for volume in volumes:
             tag = run_tag(volume.get("Tags"), self.rules)
             if volume["State"] == "available" and select_eks(tag, volume["CreateTime"], self.now, self.rules):
-                self.log(f"EBS volume {volume['VolumeId']} ({tag})")
-                self.step("delete volume " + volume["VolumeId"], ec2.delete_volume, VolumeId=volume["VolumeId"])
+                self.remove("EBS volume", volume["VolumeId"], self.age(tag, volume["CreateTime"]), ec2.delete_volume,
+                            VolumeId=volume["VolumeId"])
 
     def remaining(self):
         """Returns the clusters of the region and the runs of the instances
@@ -246,120 +282,138 @@ class Sweep:
         vpc = [{"Name": "vpc-id", "Values": [self.vpc]}]
         # The VPC holds only runs, so an available interface is a leftover
         # once no cluster runs, and so is the security group of a cluster
-        # that is gone.
+        # that is gone, whatever the name of that cluster.
         if not clusters:
-            for interface in items(ec2, "describe_network_interfaces", "NetworkInterfaces", Filters=vpc):
+            interfaces = list(items(ec2, "describe_network_interfaces", "NetworkInterfaces", Filters=vpc))
+            self.listed("network interfaces in the VPC", len(interfaces))
+            for interface in interfaces:
                 if interface["Status"] == "available":
-                    self.log(f"network interface {interface['NetworkInterfaceId']}")
-                    self.step("delete network interface " + interface["NetworkInterfaceId"],
-                              ec2.delete_network_interface, NetworkInterfaceId=interface["NetworkInterfaceId"])
-        groups = vpc + [{"Name": "group-name", "Values": ["eks-cluster-sg-" + self.rules["run_prefix"] + "*"]}]
-        for group in items(ec2, "describe_security_groups", "SecurityGroups", Filters=groups):
-            if security_group_cluster(group["GroupName"]) not in clusters:
-                self.log(f"security group {group['GroupId']} ({group['GroupName']})")
-                self.step("delete security group " + group["GroupId"], ec2.delete_security_group,
-                          GroupId=group["GroupId"])
+                    self.remove("network interface", interface["NetworkInterfaceId"], "available, and no cluster runs",
+                                ec2.delete_network_interface, NetworkInterfaceId=interface["NetworkInterfaceId"])
+        groups = list(items(ec2, "describe_security_groups", "SecurityGroups",
+                            Filters=vpc + [{"Name": "group-name", "Values": ["eks-cluster-sg-*"]}]))
+        self.listed("EKS cluster security groups in the VPC", len(groups))
+        for group in groups:
+            owner = security_group_cluster(group)
+            if owner not in clusters:
+                self.remove("security group", group["GroupId"], f"its cluster {owner} is gone",
+                            ec2.delete_security_group, GroupId=group["GroupId"])
 
     def images(self):
         ecr = self.client("ecr")
         for repo in self.repositories:
-            ids = [{"imageTag": tag}
-                   for image in items(ecr, "describe_images", "imageDetails", repositoryName=repo)
-                   for tag in image.get("imageTags") or []
-                   if tag.startswith(self.rules["run_prefix"])
-                   and select_eks(tag, image["imagePushedAt"], self.now, self.rules)]
+            images = list(items(ecr, "describe_images", "imageDetails", repositoryName=repo))
+            self.listed(f"images of {repo}", len(images))
+            ids = []
+            for image in images:
+                for tag in image.get("imageTags") or []:
+                    if tag.startswith(self.rules["run_prefix"]) and select_eks(
+                            tag, image["imagePushedAt"], self.now, self.rules):
+                        self.log(f"remove image {repo}:{tag}: {self.age(tag, image['imagePushedAt'])}")
+                        self.removed += 1
+                        ids.append({"imageTag": tag})
             if not ids:
                 continue
-            self.log(f"images of {repo}: {', '.join(i['imageTag'] for i in ids)}")
-            result = self.step("delete images of " + repo, ecr.batch_delete_image, repositoryName=repo, imageIds=ids)
+            result = self.step("remove images of " + repo, ecr.batch_delete_image, repositoryName=repo, imageIds=ids)
             for failure in (result or {}).get("failures") or []:
-                self.failures.append(f"delete image of {repo}: {failure}")
+                self.failures.append(f"remove image of {repo}: {failure}")
+                self.log(f"failed: remove image of {repo}: {failure}")
 
     def log_groups(self):
         logs = self.client("logs")
-        for group in items(logs, "describe_log_groups", "logGroups",
-                           logGroupNamePrefix="/aws/eks/" + self.rules["run_prefix"]):
+        groups = list(items(logs, "describe_log_groups", "logGroups",
+                            logGroupNamePrefix="/aws/eks/" + self.rules["run_prefix"]))
+        self.listed("EKS log groups", len(groups))
+        for group in groups:
             run = group["logGroupName"].split("/")[3]
             if select_eks(run, group["creationTime"] / 1000, self.now, self.rules):
-                self.log(f"log group {group['logGroupName']}")
-                self.step("delete log group " + group["logGroupName"], logs.delete_log_group,
-                          logGroupName=group["logGroupName"])
+                self.remove("log group", group["logGroupName"], self.age(run, group["creationTime"] / 1000),
+                            logs.delete_log_group, logGroupName=group["logGroupName"])
 
     def schedules(self):
         scheduler = self.client("scheduler")
         clusters, live = self.remaining()
-        for schedule in items(scheduler, "list_schedules", "Schedules", GroupName=self.group,
-                              NamePrefix=self.rules["run_prefix"]):
+        schedules = list(items(scheduler, "list_schedules", "Schedules", GroupName=self.group,
+                               NamePrefix=self.rules["run_prefix"]))
+        self.listed("schedules of runs", len(schedules))
+        for schedule in schedules:
             owner = schedule_owner(schedule["Name"])
             # The schedules end a run whose cleanup did not finish, so they
             # stay while its cluster or its node is there.
             if owner not in clusters and owner not in live and select_eks(
                     owner, schedule["CreationDate"], self.now, self.rules):
-                self.log(f"schedule {schedule['Name']}")
-                self.step("delete schedule " + schedule["Name"], scheduler.delete_schedule, GroupName=self.group,
-                          Name=schedule["Name"])
+                self.remove("schedule", schedule["Name"], self.age(owner, schedule["CreationDate"]) + ", no cluster",
+                            scheduler.delete_schedule, GroupName=self.group, Name=schedule["Name"])
 
     def roles(self, account):
         iam = self.client("iam")
-        for role in items(iam, "list_roles", "Roles"):
-            if not role["RoleName"].startswith(self.rules["run_prefix"]):
-                continue
+        roles = [r for r in items(iam, "list_roles", "Roles") if r["RoleName"].startswith(self.rules["run_prefix"])]
+        self.listed("roles of runs", len(roles))
+        for role in roles:
             tags = self.step("read the tags of role " + role["RoleName"], iam.list_role_tags,
                              RoleName=role["RoleName"])
             if tags is None:
                 continue
-            reason = select_role(role, run_tag(tags.get("Tags"), self.rules), account, self.now, self.rules)
+            tag = run_tag(tags.get("Tags"), self.rules)
+            reason = select_role(role, tag, account, self.now, self.rules)
             if reason:
-                self.log(f"role {role['RoleName']} ({reason})")
-                self.step("delete role " + role["RoleName"], self.delete_role, iam, role["RoleName"])
+                if reason.startswith("run "):
+                    reason = self.age(tag, role["CreateDate"])
+                self.remove("role", role["RoleName"], reason, self.delete_role, iam, role["RoleName"])
 
     @staticmethod
     def delete_role(iam, name):
-        for policy in iam.list_role_policies(RoleName=name)["PolicyNames"]:
+        for policy in iam.list_role_policies(RoleName=name).get("PolicyNames", []):
             iam.delete_role_policy(RoleName=name, PolicyName=policy)
-        for policy in iam.list_attached_role_policies(RoleName=name)["AttachedPolicies"]:
+        for policy in iam.list_attached_role_policies(RoleName=name).get("AttachedPolicies", []):
             iam.detach_role_policy(RoleName=name, PolicyArn=policy["PolicyArn"])
+        for profile in iam.list_instance_profiles_for_role(RoleName=name).get("InstanceProfiles", []):
+            iam.remove_role_from_instance_profile(InstanceProfileName=profile["InstanceProfileName"], RoleName=name)
         iam.delete_role(RoleName=name)
 
     def policies(self):
         iam = self.client("iam")
-        for policy in items(iam, "list_policies", "Policies", Scope="Local"):
-            if not policy["PolicyName"].startswith(self.rules["run_prefix"]):
-                continue
+        policies = [p for p in items(iam, "list_policies", "Policies", Scope="Local")
+                    if p["PolicyName"].startswith(self.rules["run_prefix"])]
+        self.listed("policies of runs", len(policies))
+        for policy in policies:
             tags = self.step("read the tags of policy " + policy["Arn"], iam.list_policy_tags, PolicyArn=policy["Arn"])
             if tags is None:
                 continue
             tag = run_tag(tags.get("Tags"), self.rules)
             if matches(tag, policy["CreateDate"], self.now, self.rules["older_than_hours"]["sweep"], self.rules):
-                self.log(f"policy {policy['Arn']} ({tag})")
-                self.step("delete policy " + policy["Arn"], self.delete_policy, iam, policy["Arn"])
+                self.remove("policy", policy["Arn"], self.age(tag, policy["CreateDate"]), self.delete_policy, iam,
+                            policy["Arn"])
 
     @staticmethod
     def delete_policy(iam, arn):
-        for version in iam.list_policy_versions(PolicyArn=arn)["Versions"]:
+        for version in iam.list_policy_versions(PolicyArn=arn).get("Versions", []):
             if not version["IsDefaultVersion"]:
                 iam.delete_policy_version(PolicyArn=arn, VersionId=version["VersionId"])
         iam.delete_policy(PolicyArn=arn)
 
     def providers(self):
         iam = self.client("iam")
-        for entry in iam.list_open_id_connect_providers()["OpenIDConnectProviderList"]:
+        providers = iam.list_open_id_connect_providers()["OpenIDConnectProviderList"]
+        self.listed("OIDC providers", len(providers))
+        for entry in providers:
             try:
                 provider = iam.get_open_id_connect_provider(OpenIDConnectProviderArn=entry["Arn"])
             except Exception:  # noqa: BLE001 - the role reads only the providers of the issuer bucket
                 continue
             tag = run_tag(provider.get("Tags"), self.rules)
             if matches(tag, provider["CreateDate"], self.now, self.rules["older_than_hours"]["sweep"], self.rules):
-                self.log(f"OIDC provider {entry['Arn']} ({tag})")
-                self.step("delete OIDC provider " + entry["Arn"], iam.delete_open_id_connect_provider,
-                          OpenIDConnectProviderArn=entry["Arn"])
+                self.remove("OIDC provider", entry["Arn"], self.age(tag, provider["CreateDate"]),
+                            iam.delete_open_id_connect_provider, OpenIDConnectProviderArn=entry["Arn"])
 
     def buckets(self):
         s3 = self.client("s3")
-        for bucket in s3.list_buckets().get("Buckets", []):
+        buckets = [b for b in s3.list_buckets().get("Buckets", []) if b["Name"].startswith(self.rules["run_prefix"])]
+        self.listed("buckets of runs", len(buckets))
+        for bucket in buckets:
             if select_bucket(bucket["Name"], bucket["CreationDate"], self.now, self.rules):
-                self.log(f"bucket {bucket['Name']}")
-                self.step("delete bucket " + bucket["Name"], self.delete_bucket, s3, bucket["Name"])
+                self.remove("bucket", bucket["Name"], self.age(None, bucket["CreationDate"]), self.delete_bucket, s3,
+                            bucket["Name"])
 
     def delete_bucket(self, s3, name):
         deadline = time.monotonic() + BUCKET_SECONDS
@@ -373,13 +427,15 @@ class Sweep:
             result = s3.delete_objects(Bucket=name, Delete={"Objects": objects, "Quiet": True})
             if result.get("Errors"):
                 raise RuntimeError(f"{len(result['Errors'])} objects not deleted, first: {result['Errors'][0]}")
-        self.log(f"bucket {name}: objects are left for the next pass")
+        self.log(f"later pass: bucket {name} still has objects")
 
     def keys(self):
         for region in [r for r in (self.region, self.replica_region) if r]:
             kms = self.client("kms", region)
-            for mapping in items(self.client("resourcegroupstaggingapi", region), "get_resources",
-                                 "ResourceTagMappingList", ResourceTypeFilters=["kms:key"]):
+            mappings = list(items(self.client("resourcegroupstaggingapi", region), "get_resources",
+                                  "ResourceTagMappingList", ResourceTypeFilters=["kms:key"]))
+            self.listed(f"KMS keys with tags in {region}", len(mappings))
+            for mapping in mappings:
                 tag = run_tag(mapping.get("Tags"), self.rules)
                 if not has_run(tag, self.rules):
                     continue
@@ -393,8 +449,8 @@ class Sweep:
                     continue
                 if matches(tag, metadata["CreationDate"], self.now, self.rules["older_than_hours"]["sweep"],
                            self.rules):
-                    self.log(f"KMS key {key} in {region} ({tag})")
-                    self.step("delete key " + key, self.delete_key, kms, key)
+                    self.remove(f"KMS key in {region}", key, self.age(tag, metadata["CreationDate"]), self.delete_key,
+                                kms, key)
 
     @staticmethod
     def delete_key(kms, key):

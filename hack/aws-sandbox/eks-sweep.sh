@@ -199,19 +199,22 @@ if [ -z "${remaining}" ]; then
 fi
 
 # 5. The cluster security group of a deleted cluster:
-# eks-cluster-sg-<cluster>-<number>.
+# eks-cluster-sg-<cluster>-<number>, with the tag aws:eks:cluster-name. With
+# --run, the groups of the run include those of the clusters of step 2.
 listing groups "security groups" ec2 describe-security-groups \
-  --filters "Name=vpc-id,Values=${vpc}" "Name=group-name,Values=eks-cluster-sg-cpo-ci-*"
-while IFS='|' read -r id group_name; do
+  --filters "Name=vpc-id,Values=${vpc}" "Name=group-name,Values=eks-cluster-sg-*"
+while IFS='|' read -r id group_name cluster; do
   [ -n "${id}" ] || continue
-  cluster=${group_name#eks-cluster-sg-}
-  cluster=${cluster%-*}
   [ "${remaining}" != unknown ] || continue
   ! grep -qxF "${cluster}" <<< "${remaining}" || continue
-  [ -z "${run}" ] || [ "${cluster}" = "${run}" ] || continue
+  # A cluster of a run can have another name than the run.
+  if [ -n "${run}" ] && [ "${cluster}" != "${run}" ] && ! printf '%s\n' "${deleted[@]}" | grep -qxF "${cluster}"; then
+    continue
+  fi
   echo "security group ${id} (${group_name})"
   step aws ec2 delete-security-group --group-id "${id}"
-done < <(jq -r '(.SecurityGroups // [])[] | [.GroupId, .GroupName] | join("|")' <<< "${groups:-null}")
+done < <(jq -r '(.SecurityGroups // [])[] | [.GroupId, .GroupName, ([(.Tags // [])[] | select(.Key == "aws:eks:cluster-name") | .Value][0] //
+    (.GroupName | ltrimstr("eks-cluster-sg-") | sub("-[^-]*$"; "")))] | join("|")' <<< "${groups:-null}")
 
 # 6. The images of the runs.
 for repo in "${repositories[@]}"; do
