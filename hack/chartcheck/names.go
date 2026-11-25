@@ -25,8 +25,18 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// clusterScoped holds cluster-scoped kinds. objectNames treats each other
+// kind as namespaced.
+var clusterScoped = map[string]bool{
+	"ClusterRole": true, "ClusterRoleBinding": true, "CustomResourceDefinition": true, "Namespace": true,
+	"PriorityClass": true, "StorageClass": true, "IngressClass": true, "PluginRegistration": true,
+	"MutatingWebhookConfiguration": true, "ValidatingWebhookConfiguration": true,
+	"ValidatingAdmissionPolicy": true, "ValidatingAdmissionPolicyBinding": true,
+}
+
 // objectNames returns one line "<Kind> <namespace>/<name>" for each object,
-// with "-" as the namespace of an object that sets none, and one line
+// with "-" as the namespace of a cluster-scoped kind and namespace for a
+// namespaced object that sets none, and one line
 // "Lease <namespace>/<id>" for each Deployment whose controller container
 // elects a leader. The Lease is in the namespace of the Deployment, or in
 // namespace when the Deployment sets none. A controller without
@@ -35,7 +45,11 @@ import (
 func objectNames(objects []*unstructured.Unstructured, namespace string) []string {
 	lines := make([]string, 0, len(objects))
 	for _, o := range objects {
-		lines = append(lines, o.GetKind()+" "+cmp.Or(o.GetNamespace(), "-")+"/"+o.GetName())
+		objectNamespace := inNamespace(o.GetNamespace(), namespace)
+		if clusterScoped[o.GetKind()] {
+			objectNamespace = "-"
+		}
+		lines = append(lines, o.GetKind()+" "+objectNamespace+"/"+o.GetName())
 
 		if o.GetKind() != "Deployment" {
 			continue

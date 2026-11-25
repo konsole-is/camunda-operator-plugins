@@ -93,3 +93,10 @@ spec:
 
 	assert.Equal(t, []string{"Deployment plugins/aws"}, objectNames(objects, "plugins"))
 }
+
+func TestObjectNamesPlacesANamespacedObjectWithoutANamespaceInTheReleaseNamespace(t *testing.T) {
+	objects := render(t, "apiVersion: v1\nkind: ServiceAccount\nmetadata: {name: plugin}\n", clusterRole("plugin"))
+
+	assert.Equal(t, []string{"ClusterRole -/plugin", "ServiceAccount team-a/plugin"}, objectNames(objects, "team-a"))
+	assert.NotEqual(t, objectNames(objects, "team-a"), objectNames(objects, "team-b"))
+}
