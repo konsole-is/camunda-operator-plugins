@@ -1,0 +1,57 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AssumeRunRolesOnlyFromTheSandbox",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::149561017949:role/cpo-ci-*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "aws:PrincipalAccount": "149561017949"
+        },
+        "BoolIfExists": {
+          "aws:PrincipalIsAWSService": "false"
+        }
+      }
+    },
+    {
+      "Sid": "AssumeRunRolesOnlyForServicesOfTheSandbox",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::149561017949:role/cpo-ci-*",
+      "Condition": {
+        "Bool": {
+          "aws:PrincipalIsAWSService": "true"
+        },
+        "Null": {
+          "aws:SourceAccount": "false"
+        },
+        "StringNotEquals": {
+          "aws:SourceAccount": "149561017949"
+        }
+      }
+    },
+    {
+      "Sid": "WebIdentityOnlyFromTheRunIssuers",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Resource": "arn:aws:iam::149561017949:role/cpo-ci-*",
+      "Condition": {
+        "StringNotLike": {
+          "aws:FederatedProvider": "arn:aws:iam::149561017949:oidc-provider/cpo-sandbox-issuers-149561017949-eu-west-1.s3.eu-west-1.amazonaws.com/cpo-ci-*"
+        }
+      }
+    },
+    {
+      "Sid": "NoSAMLForRunRoles",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "sts:AssumeRoleWithSAML",
+      "Resource": "arn:aws:iam::149561017949:role/cpo-ci-*"
+    }
+  ]
+}

@@ -138,3 +138,34 @@ You need the Terraform of `.tool-versions`, the AWS CLI, administrator access to
     The apply also packs `hack/aws-sandbox/sweeper` into the function `cpo-sandbox-sweep`. Confirm the email of SNS that each address of `alert_emails` gets, or the alarms of the sweep send nothing.
 
     The defaults of `variables.tf` are those of this repository. If the account already has an OIDC provider for `token.actions.githubusercontent.com`, add `-var github_oidc_provider_arn=<its ARN>`. `alert_emails` is required: the EKS run role is not created without a budget alert. In an account of an AWS organization, the management account must first enable "Linked account access" in its Cost Management preferences.
+
+## The organization policy for the roles of runs
+
+A run can write a trust policy that trusts another account, and IAM cannot limit what a trust policy holds. The sweep removes such a role, but the role works until the sweep finds it. The resource control policy (RCP) [`organization/cpo-ci-roles-rcp.json`](organization/cpo-ci-roles-rcp.json) closes that gap in AWS Organizations. Terraform does not apply it, because it belongs to the management account of the organization.
+
+For each role `cpo-ci-*` of the sandbox account, it refuses:
+
+- `sts:AssumeRole` by a principal of another account. A principal of the sandbox account and an AWS service, such as EKS Pod Identity, can still assume the role.
+- `sts:AssumeRole` by an AWS service for another account, when the service names that account in `aws:SourceAccount`.
+- `sts:AssumeRoleWithWebIdentity` with an OIDC provider other than an issuer of a run under the issuer bucket. The kind runs use these issuers with IRSA.
+- `sts:AssumeRoleWithSAML`. No run uses SAML.
+
+It cannot block these:
+
+- A change of a trust policy. IAM is not a service that RCPs apply to, so a run can still write a foreign trust. The policy stops only the assume.
+- A principal of the sandbox account, and an AWS service that sends no `aws:SourceAccount`.
+- An issuer that a run publishes under its own `<run-id>/` path of the issuer bucket. Each run can write the issuer documents there, so its trust is that of the run.
+- A role with another name, and a service-linked role.
+
+The file holds the account and the issuer host of this sandbox. For another account, take them from `terraform output issuer_host` and the ARN of `terraform output ci_role_arn`. An EKS run in IRSA mode needs its own OIDC provider in the pattern of the third statement.
+
+To apply it, use credentials of the management account. RCPs must be enabled for the organization once, with `aws organizations enable-policy-type --root-id <root ID> --policy-type RESOURCE_CONTROL_POLICY`. Then create the policy and attach it to the sandbox account:
+
+```sh
+aws organizations create-policy --name cpo-sandbox-run-roles --type RESOURCE_CONTROL_POLICY \
+  --description "Only the sandbox, its services, and the issuers of its runs assume the roles of runs." \
+  --content file://terraform/aws-sandbox/organization/cpo-ci-roles-rcp.json
+aws organizations attach-policy --policy-id <ID of the new policy> --target-id <sandbox account ID>
+```
+
+After the attach, run a kind conformance job and an EKS proof run, and look in CloudTrail for an AccessDenied of STS on a `cpo-ci-*` role.
