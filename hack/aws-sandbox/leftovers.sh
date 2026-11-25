@@ -56,7 +56,7 @@ left() {
   local kind=$1 filter=$2 names
   shift 2
   if ! names=$(aws "$@" --output json | jq -r -L "${here}" --arg run "${run}" --arg vpc "${AWS_EKS_VPC_ID:-}" \
-    --arg account "${account}" "include \"trust\"; ${filter}"); then
+    --arg account "${account}" --slurpfile rules "${here}/sweep-rules.json" "include \"trust\"; ${filter}"); then
     echo "failed to list: ${kind}" >&2
     failed=1
     return
@@ -128,7 +128,7 @@ keys_left() {
 # The dash after the run ID keeps cpo-ci-1-1-10 out of the run cpo-ci-1-1-1.
 left role '.Roles[].RoleName | select(startswith($run + "-"))' iam list-roles
 left "role with a trust of no run" \
-  '.Roles[] | select((.RoleName | startswith("cpo-ci-")) and (.AssumeRolePolicyDocument | foreign($account))) | .RoleName' \
+  '.Roles[] | select((.RoleName | startswith("cpo-ci-")) and (.AssumeRolePolicyDocument | foreign($account; $rules[0]))) | .RoleName' \
   iam list-roles
 left policy '.Policies[].PolicyName | select(startswith($run + "-"))' iam list-policies --scope Local
 left "OIDC provider" '.OpenIDConnectProviderList[].Arn | select(endswith("/" + $run))' \

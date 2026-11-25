@@ -4,7 +4,8 @@ name: EKS proof
 # cluster of the AWS sandbox, and removes the cluster after. A maintainer
 # starts it by hand: with workflow_dispatch, or on a pull request of this
 # repository by adding the label eks-proof. workflow_dispatch fires only for a
-# workflow of the default branch. See hack/aws-sandbox/README.md.
+# workflow of the default branch. The job then waits for one approval in the
+# environment aws-eks. See hack/aws-sandbox/README.md.
 on:
   workflow_dispatch:
   pull_request:

@@ -54,13 +54,13 @@ Give each run an ID that starts with `cpo-ci-`, for example `cpo-ci-${{ github.r
 
 ## An EKS run
 
-The workflow `.github/workflows/eks-proof.yml` proves volume encryption and Pod Identity of the AWS plugins on a real EKS cluster. A maintainer starts it by hand: with `workflow_dispatch` on `main`, or by adding the label `eks-proof` to a pull request of this repository. Only the trusted user can start it, and only one EKS run runs at a time.
+The workflow `.github/workflows/eks-proof.yml` proves volume encryption and Pod Identity of the AWS plugins on a real EKS cluster. A maintainer starts it by hand: with `workflow_dispatch` on `main`, or by adding the label `eks-proof` to a pull request of this repository. Only the trusted user can start it, and only one EKS run runs at a time. Each run then waits for one approval in the environment `aws-eks`: open the run in the Actions tab, choose **Review deployments**, select `aws-eks`, and approve. The trusted user is the reviewer.
 
 A run creates one EKS cluster with one `t3.xlarge` node, the volumes of one Camunda cluster, one KMS key, one hub role, and two images. `hack/aws-sandbox/eks-cluster.sh` creates the cluster, and `make journey-eks` runs the journey `eks` on it. The public endpoint of the cluster answers only the address of the runner of the job. The node and the pods use the private endpoint. A run takes 37 to 51 minutes and costs about 0.10 USD: the cluster lives about 25 minutes and the node about 15. Three layers remove what the run created:
 
 - The last step of the job runs `eks-teardown.sh` when the job passes or fails. It fails when `leftovers.sh --eks` still finds anything of the run.
 - AWS ends the node and the cluster also when the job is gone. A schedule terminates the node 150 minutes after the start of the run, and the node shuts itself down a few minutes before that. A second schedule deletes the cluster after 160 minutes. Each image expires one day after its push.
-- The scheduled sweep removes each EKS run that is older than two hours. GitHub can skip scheduled runs, so the next sweep can come about 12 hours later. Until then, the volumes, the KMS key, and the hub role of a run can stay. They cost a few cents.
+- The function `cpo-sandbox-sweep` of `terraform/aws-sandbox` removes each EKS run that is older than two hours, once an hour, with the rules of `sweep.sh` and `eks-sweep.sh` and the ages of `sweep-rules.json`. A failed pass sends an email to the alert addresses. The scheduled job `sweep-eks` in GitHub does the same as a fallback. GitHub can skip scheduled runs, so that job can come about 12 hours later.
 
 Do not cancel a run. On a cancel, GitHub gives the cleanup step only five minutes, which can be too short for the teardown. A step that hangs fails at its time limit, and the cleanup then gets its full 30 minutes. If a run was cancelled, remove it by hand at once.
 
@@ -79,7 +79,7 @@ hack/aws-sandbox/leftovers.sh --eks --all-regions <run ID>
 
 ## The sweep
 
-A cancelled job cannot remove its resources. The workflow `.github/workflows/aws-sandbox.yml` is scheduled each hour, but GitHub skips scheduled runs when it is busy: runs came 5 to 12 hours apart. It removes each role, managed policy, OIDC provider, and bucket with the tag `cpo-ci-run` that is older than six hours. It schedules each such KMS key for deletion after 7 days, the shortest window, in the region of the sandbox and in the replica region of `AWS_KMS_REPLICA_REGION`. The issuer documents expire after one day.
+A cancelled job cannot remove its resources. The function `cpo-sandbox-sweep` in AWS runs the sweep once an hour. The workflow `.github/workflows/aws-sandbox.yml` runs it too, as a fallback: it is scheduled each hour, but GitHub skips scheduled runs when it is busy, and runs came 5 to 12 hours apart. The sweep removes each role, managed policy, OIDC provider, and bucket with the tag `cpo-ci-run` that is older than six hours, and each `cpo-ci-*` role that trusts a principal that no run trusts, at any age. It schedules each such KMS key for deletion after 7 days, the shortest window, in the region of the sandbox and in the replica region of `AWS_KMS_REPLICA_REGION`. The issuer documents expire after one day.
 
 To do a sweep from your machine, use administrator credentials:
 
@@ -87,7 +87,7 @@ To do a sweep from your machine, use administrator credentials:
 AWS_REGION=eu-west-1 AWS_KMS_REPLICA_REGION=eu-central-1 hack/aws-sandbox/sweep.sh --older-than 6
 ```
 
-The job `sweep-eks` of the same workflow removes each EKS cluster, node, volume, image, and schedule of an EKS run that is older than two hours. By hand, with administrator credentials:
+The ages are in `sweep-rules.json`, which `sweeper/sweeper.py`, `trust.jq`, and the workflow read. `make test-sweeper` tests the function without AWS. The job `sweep-eks` of the same workflow runs from `main` only, in the environment `aws-sandbox-sweep`, and removes each EKS cluster, node, volume, image, and schedule of an EKS run that is older than two hours. By hand, with administrator credentials:
 
 ```sh
 AWS_REGION=eu-west-1 AWS_EKS_VPC_ID=<VPC ID> hack/aws-sandbox/eks-sweep.sh --older-than 2

@@ -14,7 +14,8 @@
 # trusts a principal that no run trusts, as trust.jq reads it. Needs AWS_REGION and the credentials of the CI
 # role. With AWS_KMS_REPLICA_REGION, it also schedules the keys there, which
 # hold the replicas of multi-Region keys. It exits 1 when a removal or the
-# listing of a resource type failed.
+# listing of a resource type failed. sweeper/sweeper.py holds the same rules
+# for the hourly sweep in AWS: change both.
 set -euo pipefail
 
 run=""
@@ -139,9 +140,10 @@ delete_key() {
 }
 
 # Roles before policies, so that the policies are detached.
-if ! roles=$(aws iam list-roles --output json | jq -r -L "${here}" --arg account "${account}" 'include "trust";
+if ! roles=$(aws iam list-roles --output json | jq -r -L "${here}" --arg account "${account}" \
+  --slurpfile rules "${here}/sweep-rules.json" 'include "trust";
   .Roles[] | select(.RoleName | startswith("cpo-ci-"))
-  | [.RoleName, .CreateDate, (.AssumeRolePolicyDocument | foreign($account))] | @tsv'); then
+  | [.RoleName, .CreateDate, (.AssumeRolePolicyDocument | foreign($account; $rules[0]))] | @tsv'); then
   echo "failed to list: roles" >&2
   failed=1
 fi

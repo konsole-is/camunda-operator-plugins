@@ -14,8 +14,11 @@
 # roles and the KMS keys of a run.
 #
 # Needs AWS_REGION, AWS_EKS_VPC_ID, and the credentials of the role
-# cpo-sandbox-eks or of an administrator. It tries every kind, and exits 1
+# cpo-sandbox-eks, of the role cpo-sandbox-eks-sweep, or of an administrator.
+# It tries every kind, and exits 1
 # when a listing or a removal failed, and 2 on wrong arguments.
+# sweeper/sweeper.py holds the same rules for the hourly sweep in AWS: change
+# both.
 set -euo pipefail
 
 run=""

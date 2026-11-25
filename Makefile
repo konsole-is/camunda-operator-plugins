@@ -49,6 +49,10 @@ test: fmt vet setup-envtest envtest-crds ## Run the unit tests, the envtest suit
 test-scripts: ## Run the tests of the CI scripts, each *_test.sh in git.
 	@for t in $$(git ls-files '*_test.sh'); do echo "==> $$t"; bash "$$t" || exit 1; done
 
+.PHONY: test-sweeper
+test-sweeper: ## Run the unit tests of the scheduled sweep in hack/aws-sandbox/sweeper. They call no AWS API.
+	python3 -B -m unittest discover -s hack/aws-sandbox/sweeper -p 'test_*.py'
+
 .PHONY: test-api-ref
 test-api-ref: ## Check that a pseudo-version and a tag of the api module map to the operator ref of their CRD bases.
 	@got="$$($(MAKE) -s print-api-ref API_VERSION=v0.2.1-0.20261015084104-bb2edca2c2db)"; \

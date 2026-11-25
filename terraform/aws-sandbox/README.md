@@ -22,10 +22,18 @@ This configuration creates these resources:
 | Managed policy | `cpo-sandbox-eks-limits` | The cost limits of every role of an EKS run. |
 | ECR repositories | `cpo-sandbox-eks/camunda-operator`, `cpo-sandbox-eks/aws` | The images of an EKS run. Images expire one day after their push. |
 | Schedule group | `cpo-sandbox-eks` | The schedules that delete the cluster and the node of an EKS run. |
-| GitHub environment | `aws-eks` | The environment of the EKS proof workflow, with the `AWS_EKS_*` variables. |
+| GitHub environment | `aws-eks` | The environment of the EKS proof workflow, with the `AWS_EKS_*` variables. Each run waits for one approval of the trusted user. |
 | GitHub variable | `AWS_EKS_SANDBOX` | `true` when the EKS parts exist. |
+| Managed policy | `cpo-sandbox-sweep` | The list and delete rights of the sweeps, on resources of runs only. It allows no create, no tag write, and no pass of a role. |
+| IAM role | `cpo-sandbox-eks-sweep` | The role of the scheduled EKS sweep in GitHub, with `cpo-sandbox-sweep` only. |
+| GitHub environment | `aws-sandbox-sweep` | The environment of the scheduled EKS sweep: `main` only, no reviewer, with the variables `AWS_SWEEP_ROLE_ARN`, `AWS_REGION`, and `AWS_EKS_VPC_ID`. |
+| Lambda function | `cpo-sandbox-sweep` | The hourly sweep in AWS, from `hack/aws-sandbox/sweeper`. Its role `cpo-sandbox-sweep` has `cpo-sandbox-sweep` and the right to write its log group `/aws/lambda/cpo-sandbox-sweep`, which keeps logs for 3 days. |
+| Schedule | `cpo-sandbox-sweep` | Runs the function once an hour, in the schedule group `cpo-sandbox-sweep`, as the role `cpo-sandbox-sweep-scheduler`. |
+| CloudWatch alarms | `cpo-sandbox-sweep-errors`, `cpo-sandbox-sweep-no-pass` | An email to `alert_emails` when a pass fails, or when no pass ran for two hours, through the SNS topic `cpo-sandbox-alerts`. |
 
-The EKS parts cost nothing while no EKS run is active.
+The EKS parts cost nothing while no EKS run is active. The sweep in AWS stays within the free tier: one arm64 invocation of 128 MB an hour, no VPC, and two alarms.
+
+No sweep removes a `cpo-sandbox-*` resource, because each one lists only `cpo-ci-*` names and resources with the tag `cpo-ci-run`.
 
 The Terraform state is in the S3 bucket `cpo-sandbox-tfstate-<account>-<region>`, which you create by hand before the first apply.
 
@@ -37,6 +45,13 @@ The role trusts only the OIDC tokens of this repository, in one of two GitHub en
 | --- | --- | --- |
 | `aws-sandbox` | The runs of one trusted user: the scheduled sweep, pushes to `main`, and the pull requests of that user. | None. The role also checks the actor ID in the token, so a changed workflow cannot use this environment for another user. |
 | `aws-sandbox-review` | Every other run, such as a pull request of another contributor or of Renovate. | A maintainer approves each run in GitHub. |
+
+Three more environments have roles of their own:
+
+| Environment | Runs | Approval |
+| --- | --- | --- |
+| `aws-eks` | The job `eks` of the EKS proof workflow, as the role `cpo-sandbox-eks`. | The trusted user approves each run in GitHub. |
+| `aws-sandbox-sweep` | The job `sweep-eks` of the workflow `AWS sandbox`, on `main` only, as the role `cpo-sandbox-eks-sweep`. | None. |
 
 A job selects the environment from `github.actor_id` and the repository variable `AWS_SANDBOX_ACTOR_ID`. GitHub gives no OIDC token to a pull request from a fork.
 
@@ -119,5 +134,7 @@ You need the Terraform of `.tool-versions`, the AWS CLI, administrator access to
     terraform -chdir=terraform/aws-sandbox apply \
       -var 'alert_emails=["<address>"]'
     ```
+
+    The apply also packs `hack/aws-sandbox/sweeper` into the function `cpo-sandbox-sweep`. Confirm the email of SNS that each address of `alert_emails` gets, or the alarms of the sweep send nothing.
 
     The defaults of `variables.tf` are those of this repository. If the account already has an OIDC provider for `token.actions.githubusercontent.com`, add `-var github_oidc_provider_arn=<its ARN>`. `alert_emails` is required: the EKS run role is not created without a budget alert. In an account of an AWS organization, the management account must first enable "Linked account access" in its Cost Management preferences.

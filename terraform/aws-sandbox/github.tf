@@ -88,8 +88,13 @@ locals {
 }
 
 resource "github_repository_environment" "eks" {
-  repository  = var.github_repository
-  environment = local.eks_environment
+  repository          = var.github_repository
+  environment         = local.eks_environment
+  prevent_self_review = false
+
+  reviewers {
+    users = [tonumber(data.github_user.trusted.id)]
+  }
 }
 
 resource "github_actions_environment_variable" "eks" {
@@ -99,6 +104,36 @@ resource "github_actions_environment_variable" "eks" {
   environment   = github_repository_environment.eks.environment
   variable_name = each.key
   value         = local.eks_environment_variables[each.key]
+}
+
+# The role cpo-sandbox-eks-sweep of sweep.tf trusts only this environment.
+resource "github_repository_environment" "sweep" {
+  repository  = var.github_repository
+  environment = local.sweep_environment
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "sweep" {
+  repository     = var.github_repository
+  environment    = github_repository_environment.sweep.environment
+  branch_pattern = "main"
+}
+
+resource "github_actions_environment_variable" "sweep" {
+  for_each = {
+    AWS_SWEEP_ROLE_ARN = aws_iam_role.eks_sweep.arn
+    AWS_REGION         = var.region
+    AWS_EKS_VPC_ID     = aws_vpc.eks.id
+  }
+
+  repository    = var.github_repository
+  environment   = github_repository_environment.sweep.environment
+  variable_name = each.key
+  value         = each.value
 }
 
 # The EKS workflows run only when this configuration created the EKS parts.
