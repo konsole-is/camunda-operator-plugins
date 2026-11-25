@@ -33,9 +33,9 @@ for f in auth.yaml deployment-base.yaml service.yaml mutatingwebhook.yaml; do
     "https://raw.githubusercontent.com/aws/amazon-eks-pod-identity-webhook/$POD_IDENTITY_WEBHOOK_VERSION/deploy/$f"
 done
 image=public.ecr.aws/eks/amazon-eks-pod-identity-webhook:$POD_IDENTITY_WEBHOOK_VERSION
-# public.ecr.aws refuses an anonymous pull with 429 Too Many Requests when
-# several jobs pull at the same time. So the runner pulls the image with
-# retries and loads it into kind, and the node does not pull it.
+# public.ecr.aws limits an anonymous pull, and a CI job logs in to it only on
+# the runner. So the runner pulls the image with retries and loads it into
+# kind, and the node does not pull it.
 echo "==> Loading $image into kind"
 # The archive holds only the platform of the node. An import of a
 # multi-platform index looks for the layers of each platform.
