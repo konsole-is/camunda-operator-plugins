@@ -223,6 +223,17 @@ class Pass(unittest.TestCase):
         self.assertTrue([line for line in LOG if line.startswith("failed: remove role cpo-ci-1-hub-old: ")], LOG)
         self.assertEqual(LOG[-1], "pass done: 1 removals, 1 failures")
 
+    def test_an_oidc_provider_that_the_sweep_may_not_read_is_no_failure_and_another_error_is(self):
+        providers = {"OpenIDConnectProviderList": [{"Arn": f"arn:aws:iam::{ACCOUNT}:oidc-provider/a"},
+                                                   {"Arn": f"arn:aws:iam::{ACCOUNT}:oidc-provider/b"}]}
+        errors = {"a": ClientError("AccessDenied"), "b": ClientError("ServiceFailure")}
+        iam = {"answers": {"list_open_id_connect_providers": providers,
+                           "get_open_id_connect_provider": lambda OpenIDConnectProviderArn: errors[
+                               OpenIDConnectProviderArn.rsplit("/", 1)[1]]}}
+        run, _ = sweep(iam=iam)
+        self.assertEqual(len(run.failures), 1)
+        self.assertIn("oidc-provider/b", run.failures[0])
+
     def test_a_role_that_another_sweep_deleted_is_no_failure(self):
         iam = {"pages": {"list_roles": {"Roles": [
             {"RoleName": "cpo-ci-1-hub-gone", "CreateDate": OLD, "AssumeRolePolicyDocument": ISSUER}]}},

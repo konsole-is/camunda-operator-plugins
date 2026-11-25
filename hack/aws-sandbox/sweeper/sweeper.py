@@ -399,7 +399,11 @@ class Sweep:
         for entry in providers:
             try:
                 provider = iam.get_open_id_connect_provider(OpenIDConnectProviderArn=entry["Arn"])
-            except Exception:  # noqa: BLE001 - the role reads only the providers of the issuer bucket
+            except Exception as err:  # noqa: BLE001
+                # The role reads only the providers of the issuer bucket.
+                if error_code(err) not in GONE | {"AccessDenied"}:
+                    self.failures.append(f"read OIDC provider {entry['Arn']}: {err}")
+                    self.log(f"failed: read OIDC provider {entry['Arn']}: {err}")
                 continue
             tag = run_tag(provider.get("Tags"), self.rules)
             if matches(tag, provider["CreateDate"], self.now, self.rules["older_than_hours"]["sweep"], self.rules):

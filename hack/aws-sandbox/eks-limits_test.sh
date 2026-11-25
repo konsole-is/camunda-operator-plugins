@@ -56,7 +56,7 @@ VolumeInitializationRate explicitDeny
 aws:TagKeys explicitDeny
 principalArn,ContextKeyValues=arn:aws:iam::111122223333:role/cpo-sandbox-eks, explicitDeny
 accessEntryType,ContextKeyValues=STANDARD, explicitDeny
-m5\.4xlarge explicitDeny
+p5\.48xlarge explicitDeny
 HopLimit,ContextKeyValues=2, explicitDeny
 us-east-1 explicitDeny
 EXTENDED explicitDeny
@@ -100,6 +100,14 @@ code=$?
 [ "$code" -eq 0 ] || fail "$name" "exit $code, want 0: $out"
 grep -q -- 'ContextKeyName=aws:RequestedRegion,ContextKeyValues=us-west-2,ContextKeyType=string' "$stub/calls" ||
   fail "$name" "no call in a region other than the region of the sandbox"
+
+name="a sandbox whose node type is not t3.xlarge"
+{ echo 't3\.xlarge explicitDeny'; limits; } > "$stub/decisions"
+rm -f "$stub/calls"
+out=$(AWS_EKS_INSTANCE_TYPE=t3a.xlarge "$here/eks-limits.sh")
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0: $out"
+grep -q 'ContextKeyName=ec2:InstanceType,ContextKeyValues=t3a.xlarge,' "$stub/calls" || fail "$name" "no case with the node type"
 
 name="a run tag that the controllers can overwrite with None"
 { echo 'kms:TagResource.*ContextKeyValues=None, allowed'; limits; } > "$stub/decisions"

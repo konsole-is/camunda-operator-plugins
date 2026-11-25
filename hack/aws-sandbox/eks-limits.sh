@@ -8,6 +8,8 @@
 # Usage: eks-limits.sh
 #
 # Needs AWS_REGION and administrator credentials of the sandbox account.
+# AWS_EKS_INSTANCE_TYPE is a type of eks_instance_types, t3.xlarge when it is
+# not set.
 set -euo pipefail
 
 : "${AWS_REGION:?AWS_REGION is not set}"
@@ -60,20 +62,23 @@ no_run=aws:RequestTag/cpo-ci-run=string:None
 other_run=aws:RequestTag/cpo-ci-run=string:cpo-ci-other
 session=aws:PrincipalTag/eks-cluster-name=string:cpo-ci-limits
 node=(ec2:MetadataHttpPutResponseHopLimit=numeric:1 ec2:MetadataHttpTokens=string:required)
+node_type=${AWS_EKS_INSTANCE_TYPE:-t3.xlarge}
+# The default of eks_instance_types does not hold this type.
+costly_type=p5.48xlarge
 other_region=us-east-1
 [ "${AWS_REGION}" != "${other_region}" ] || other_region=us-west-2
 
 # The run role.
 role=cpo-sandbox-eks
-expect "${role}" ec2:RunInstances "${ec2}:instance/*" allowed ec2:InstanceType=string:t3.xlarge "${node[@]}" "${tag}"
-expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceType=string:m5.4xlarge "${node[@]}" "${tag}"
-expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceType=string:t3.xlarge \
+expect "${role}" ec2:RunInstances "${ec2}:instance/*" allowed "ec2:InstanceType=string:${node_type}" "${node[@]}" "${tag}"
+expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny "ec2:InstanceType=string:${costly_type}" "${node[@]}" "${tag}"
+expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny "ec2:InstanceType=string:${node_type}" \
   ec2:MetadataHttpPutResponseHopLimit=numeric:2 ec2:MetadataHttpTokens=string:required "${tag}"
-expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceType=string:t3.xlarge "${node[@]}"
-expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceType=string:t3.xlarge "${node[@]}" "${tag}" \
+expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny "ec2:InstanceType=string:${node_type}" "${node[@]}"
+expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny "ec2:InstanceType=string:${node_type}" "${node[@]}" "${tag}" \
   "aws:RequestedRegion=string:${other_region}"
-expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceType=string:t3.xlarge "${node[@]}" "${no_run}"
-expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny ec2:InstanceType=string:t3.xlarge "${node[@]}" "${tag}" \
+expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny "ec2:InstanceType=string:${node_type}" "${node[@]}" "${no_run}"
+expect "${role}" ec2:RunInstances "${ec2}:instance/*" explicitDeny "ec2:InstanceType=string:${node_type}" "${node[@]}" "${tag}" \
   ec2:Tenancy=string:dedicated
 root=(ec2:VolumeType=string:gp3 ec2:VolumeSize=numeric:20)
 expect "${role}" ec2:RunInstances "${ec2}:volume/*" allowed "${root[@]}" "${tag}"

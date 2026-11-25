@@ -27,7 +27,9 @@ case "$1 $2" in
     ;;
   "kms list-keys") cat "$STUB/keys.json" 2> /dev/null || { echo "An error occurred (InternalError)" >&2; exit 254; } ;;
   "kms list-resource-tags")
-    cat "$STUB/tags-$(arg --key-id "$@").json" 2> /dev/null || { echo "An error occurred (AccessDeniedException)" >&2; exit 254; }
+    key=$(arg --key-id "$@")
+    [ ! -f "$STUB/tags-$key.error" ] || { echo "An error occurred ($(cat "$STUB/tags-$key.error"))" >&2; exit 254; }
+    cat "$STUB/tags-$key.json" 2> /dev/null || { echo "An error occurred (AccessDeniedException)" >&2; exit 254; }
     ;;
   *) echo "unexpected call: aws $*" >&2; exit 3 ;;
 esac
@@ -67,6 +69,16 @@ out=$("$here/run-keys.sh" eu-west-1 2> /dev/null)
 code=$?
 [ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
 [ "$out" = "k-1 cpo-ci-1-1-1" ] || fail "$name" "printed '$out', want 'k-1 cpo-ci-1-1-1'"
+
+name="a read of the tags of a key that fails for another reason"
+rm -f "$stub"/*.json "$stub"/*.error "$stub/calls"
+echo '{"Keys": [{"KeyId": "k-1"}, {"KeyId": "k-6"}]}' > "$stub/keys.json"
+echo '{"Tags": [{"TagKey": "cpo-ci-run", "TagValue": "cpo-ci-1-1-1"}]}' > "$stub/tags-k-1.json"
+echo ThrottlingException > "$stub/tags-k-6.error"
+out=$("$here/run-keys.sh" eu-west-1 2> /dev/null)
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+[ -z "$out" ] || fail "$name" "printed '$out', want nothing"
 
 name="a listing that fails both ways"
 rm -f "$stub"/*.json "$stub/calls"

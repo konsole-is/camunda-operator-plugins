@@ -5,7 +5,9 @@
 # API, it reads them with one call of kms list-resource-tags for each key,
 # which takes minutes in an account with hundreds of keys. A key whose tags
 # the caller may not read belongs to no run. It exits 1, and prints nothing,
-# when neither listing works, so that a failed read is never an empty list.
+# when neither listing works or a read of the tags of a key fails for a reason
+# other than a refusal or a deleted key, so that a failed read is never an
+# empty list.
 #
 # Usage: run-keys.sh <region>
 #
@@ -26,8 +28,17 @@ fi
 
 echo "run-keys.sh: the tagging API refused the listing in ${region}; reading the tags of each key" >&2
 keys=$(aws kms list-keys --region "${region}" --output json | jq -r '.Keys[].KeyId') || exit 1
+err=$(mktemp)
+trap 'rm -f "${err}"' EXIT
+lines=""
 for key in ${keys}; do
-  tags=$(aws kms list-resource-tags --region "${region}" --key-id "${key}" --output json 2> /dev/null) || continue
+  if ! tags=$(aws kms list-resource-tags --region "${region}" --key-id "${key}" --output json 2> "${err}"); then
+    # A key of another owner refuses the read, and a deleted key is gone.
+    grep -qE 'AccessDeniedException|NotFoundException' "${err}" && continue
+    cat "${err}" >&2
+    exit 1
+  fi
   run=$(jq -r ".Tags | ${run_tag}" <<< "${tags}")
-  [ -z "${run}" ] || echo "${key} ${run}"
+  [ -z "${run}" ] || lines+="${key} ${run}"$'\n'
 done
+printf '%s' "${lines}"

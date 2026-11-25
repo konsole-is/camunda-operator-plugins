@@ -1113,13 +1113,23 @@ data "aws_iam_policy_document" "eks_cleanup" {
     ]
     resources = [local.run_roles, local.run_policies]
   }
+  # The sweep removes a role with a trust of no run also without the run tag.
+  # cpo-ci-* also matches a path.
   statement {
-    sid = "DeleteRunIAM"
-    actions = [
-      "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole",
-      "iam:DeletePolicyVersion", "iam:DeletePolicy",
-    ]
-    resources = [local.run_roles, local.run_policies]
+    sid       = "DeleteRunRoles"
+    actions   = ["iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole"]
+    resources = [local.run_roles]
+  }
+  statement {
+    sid       = "NoRolesWithAPath"
+    effect    = "Deny"
+    actions   = ["iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole"]
+    resources = ["${local.iam}:role/*/*"]
+  }
+  statement {
+    sid       = "DeleteRunIAM"
+    actions   = ["iam:DeletePolicyVersion", "iam:DeletePolicy"]
+    resources = [local.run_policies]
     condition {
       test     = "Null"
       variable = "aws:ResourceTag/cpo-ci-run"
