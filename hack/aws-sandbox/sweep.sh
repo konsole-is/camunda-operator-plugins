@@ -88,20 +88,42 @@ step() {
   fi
 }
 
+# iam_call runs an aws call and prints its output. It returns 2 when the
+# resource is gone: the sweep of another run can delete it at the same time.
+iam_call() {
+  local err out
+  err=$(mktemp)
+  if out=$(aws "$@" 2> "${err}"); then
+    rm -f "${err}"
+    printf '%s' "${out}"
+    return 0
+  fi
+  if grep -q NoSuchEntity "${err}"; then
+    rm -f "${err}"
+    return 2
+  fi
+  cat "${err}" >&2
+  rm -f "${err}"
+  return 1
+}
+
 # The delete_* functions run inside the condition of step, where errexit
 # is off, so each command ends the function on its own failure.
 
+# delete_role succeeds when the role is gone before or during its delete.
 delete_role() {
   local role=$1 names p
-  names=$(aws iam list-role-policies --role-name "${role}" --query 'PolicyNames[]' --output text) || return 1
+  names=$(iam_call iam list-role-policies --role-name "${role}" --query 'PolicyNames[]' --output text) ||
+    { [ $? -eq 2 ]; return; }
   for p in ${names}; do
-    aws iam delete-role-policy --role-name "${role}" --policy-name "${p}" || return 1
+    iam_call iam delete-role-policy --role-name "${role}" --policy-name "${p}" > /dev/null || { [ $? -eq 2 ]; return; }
   done
-  names=$(aws iam list-attached-role-policies --role-name "${role}" --query 'AttachedPolicies[].PolicyArn' --output text) || return 1
+  names=$(iam_call iam list-attached-role-policies --role-name "${role}" --query 'AttachedPolicies[].PolicyArn' \
+    --output text) || { [ $? -eq 2 ]; return; }
   for p in ${names}; do
-    aws iam detach-role-policy --role-name "${role}" --policy-arn "${p}" || return 1
+    iam_call iam detach-role-policy --role-name "${role}" --policy-arn "${p}" > /dev/null || { [ $? -eq 2 ]; return; }
   done
-  aws iam delete-role --role-name "${role}"
+  iam_call iam delete-role --role-name "${role}" > /dev/null || [ $? -eq 2 ]
 }
 
 delete_policy() {

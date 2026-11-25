@@ -26,8 +26,14 @@ case "$1 $2" in
     fi
     echo '{"Tags": [{"Key": "cpo-ci-run", "Value": "cpo-ci-other"}]}'
     ;;
-  "iam list-role-policies" | "iam list-attached-role-policies") ;;
-  "iam delete-role") echo "$*" >> "$STUB/deleted" ;;
+  # ROLE_ERROR is the error of each call on the role after the listing.
+  "iam list-role-policies" | "iam list-attached-role-policies" | "iam delete-role")
+    if [ -n "${ROLE_ERROR:-}" ]; then
+      echo "An error occurred ($ROLE_ERROR) when calling the $2 operation" >&2
+      exit 254
+    fi
+    [ "$2" != delete-role ] || echo "$*" >> "$STUB/deleted"
+    ;;
   "iam list-policies" | "iam list-open-id-connect-providers" | "s3api list-buckets" | "kms list-keys") ;;
   # KEY_RUN is the run of the one key that the tagging API lists.
   "resourcegroupstaggingapi get-resources")
@@ -97,6 +103,20 @@ code=$?
 [ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
 grep -q -- '--role-name cpo-ci-other-hub-1' "$stub/deleted" 2> /dev/null ||
   fail "$name" "did not delete the role"
+
+name="a role with a trust of no run that another sweep deletes first"
+TAGS_ERROR=NoSuchEntity ROLE_ERROR=NoSuchEntity \
+  TRUST='{"Statement": {"Effect": "Allow", "Action": "sts:AssumeRole", "Principal": {"AWS": "arn:aws:iam::999999999999:root"}}}' \
+  "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
+
+name="a role with a trust of no run whose delete fails"
+ROLE_ERROR=AccessDenied \
+  TRUST='{"Statement": {"Effect": "Allow", "Action": "sts:AssumeRole", "Principal": {"AWS": "arn:aws:iam::999999999999:root"}}}' \
+  "$here/sweep.sh" --run cpo-ci-1-1-1 > /dev/null 2>&1
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
 
 name="a role of another run that trusts its issuer"
 rm -f "$stub/deleted"
