@@ -9,8 +9,8 @@
 # Usage: leftovers.sh [--eks] [--all-regions] <run-id>
 #
 # --eks also prints what an EKS run left in AWS_REGION: its EKS cluster, EC2
-# instance, EBS volumes, images, schedules, log groups, KMS keys that are not
-# pending deletion, and KMS aliases. It prints each network interface and load
+# instance, EBS volumes that EC2 is not deleting, images, schedules, log
+# groups, KMS keys that are not pending deletion, and KMS aliases. It prints each network interface and load
 # balancer in the VPC AWS_EKS_VPC_ID, each cluster security group there whose
 # cluster is gone, and each NAT gateway and Elastic IP of the region, because
 # no run creates one. --all-regions also prints the EKS clusters, EC2
@@ -72,7 +72,7 @@ left() {
 # The value of the run tag is read in any case of its key.
 run_tag='([(.Tags // [])[] | select((.Key | ascii_downcase) == "cpo-ci-run") | .Value][0])'
 instances_filter=".Reservations[].Instances[] | select(.State.Name != \"terminated\" and ${run_tag} == \$run) | .InstanceId"
-volumes_filter=".Volumes[] | select(${run_tag} == \$run) | .VolumeId"
+volumes_filter=".Volumes[] | select(.State != \"deleting\" and ${run_tag} == \$run) | .VolumeId"
 
 # clusters_left <region> <kind> prints each EKS cluster of the run in region:
 # the cluster with the name of the run, and each cluster with its run tag.

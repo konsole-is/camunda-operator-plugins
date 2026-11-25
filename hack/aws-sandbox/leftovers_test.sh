@@ -158,7 +158,8 @@ add_instance() {
 }
 add_volume() {
   [ -f "$stub/volumes.json" ] || echo '{"Volumes": []}' > "$stub/volumes.json"
-  jq --arg id "$1" --argjson tags "$2" '.Volumes += [{VolumeId: $id, State: "available", Tags: $tags}]' \
+  jq --arg id "$1" --argjson tags "$2" --arg state "${3:-available}" \
+    '.Volumes += [{VolumeId: $id, State: $state, Tags: $tags}]' \
     "$stub/volumes.json" > "$stub/x" && mv "$stub/x" "$stub/volumes.json"
 }
 add_image() {
@@ -187,6 +188,7 @@ add_volume vol-9 "$(tagged cpo-ci-1-1-10)"
 add_image aws cpo-ci-1-1-10
 echo '{"Schedules": [{"Name": "cpo-ci-1-1-10-delete-cluster"}]}' > "$stub/schedules.json"
 add_instance i-8 cpo-ci-1-1-1 terminated
+add_volume vol-8 "$(tagged cpo-ci-1-1-1)" deleting
 out=$("$here/leftovers.sh" --eks cpo-ci-1-1-1)
 code=$?
 [ "$code" -eq 0 ] || fail "$name" "exit $code, want 0"
