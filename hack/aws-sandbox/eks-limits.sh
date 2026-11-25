@@ -188,8 +188,10 @@ expect "${role}" iam:TagRole "${hub}" explicitDeny "${own}" "${other_run}" "${se
 expect "${role}" iam:UpdateAssumeRolePolicy "${hub}" allowed "${own}" "${session}"
 expect "${role}" iam:UpdateAssumeRolePolicy "${other_hub}" explicitDeny "${other}" "${session}"
 expect "${role}" iam:UpdateAssumeRolePolicy "${hub}" explicitDeny "${other}" "${session}"
-expect "${role}" iam:PassRole "${hub}" allowed "${own}" "${session}" "${pods}"
-expect "${role}" iam:PassRole "${hub}" explicitDeny "${own}" "${session}" iam:PassedToService=string:ec2.amazonaws.com
+# A pass has no tag of the role in its request, so these cases give none.
+expect "${role}" iam:PassRole "${hub}" allowed "${session}" "${pods}"
+expect "${role}" iam:PassRole "${other_hub}" explicitDeny "${session}" "${pods}"
+expect "${role}" iam:PassRole "${hub}" explicitDeny "${session}" iam:PassedToService=string:ec2.amazonaws.com
 expect "${role}" eks:DeletePodIdentityAssociation \
   "arn:aws:eks:${AWS_REGION}:${account}:podidentityassociation/cpo-ci-other/a-1" explicitDeny "${session}"
 

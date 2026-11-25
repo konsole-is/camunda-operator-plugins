@@ -447,15 +447,12 @@ data "aws_iam_policy_document" "eks_plugins" {
       values   = [local.own_run]
     }
   }
+  # The name holds the run. IAM does not read the tags of a role for
+  # iam:PassRole, so a tag condition here refuses every pass.
   statement {
     sid       = "PassRoles"
     actions   = ["iam:PassRole"]
     resources = [local.own_hub_roles]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:ResourceTag/cpo-ci-run"
-      values   = [local.own_run]
-    }
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
