@@ -212,6 +212,16 @@ class Pass(unittest.TestCase):
         self.assertIn("remove role cpo-ci-1-hub-x: a trust of no run", LOG)
         self.assertEqual(run.failures, [])
 
+    def test_a_role_whose_policy_another_sweep_deleted_first_is_still_deleted(self):
+        iam = {"pages": {"list_roles": {"Roles": [
+            {"RoleName": "cpo-ci-1-hub-x", "CreateDate": YOUNG, "AssumeRolePolicyDocument": OTHER_ACCOUNT}]}},
+            "answers": {"list_role_tags": {"Tags": []}, "list_role_policies": {"PolicyNames": ["grant-a"]},
+                        "delete_role_policy": ClientError("NoSuchEntity"),
+                        "list_open_id_connect_providers": {"OpenIDConnectProviderList": []}}}
+        run, calls = sweep(iam=iam)
+        self.assertEqual(called(calls, "delete_role"), [{"RoleName": "cpo-ci-1-hub-x"}])
+        self.assertEqual(run.failures, [])
+
     def test_the_log_of_a_pass(self):
         iam = {"pages": {"list_roles": {"Roles": [
             {"RoleName": "cpo-ci-1-hub-old", "CreateDate": OLD, "AssumeRolePolicyDocument": ISSUER}]}},

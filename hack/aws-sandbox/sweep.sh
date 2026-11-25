@@ -116,12 +116,14 @@ delete_role() {
   names=$(iam_call iam list-role-policies --role-name "${role}" --query 'PolicyNames[]' --output text) ||
     { [ $? -eq 2 ]; return; }
   for p in ${names}; do
-    iam_call iam delete-role-policy --role-name "${role}" --policy-name "${p}" > /dev/null || { [ $? -eq 2 ]; return; }
+    # A policy that is gone needs no removal. delete-role tells if the role
+    # is gone too.
+    iam_call iam delete-role-policy --role-name "${role}" --policy-name "${p}" > /dev/null || [ $? -eq 2 ] || return 1
   done
   names=$(iam_call iam list-attached-role-policies --role-name "${role}" --query 'AttachedPolicies[].PolicyArn' \
     --output text) || { [ $? -eq 2 ]; return; }
   for p in ${names}; do
-    iam_call iam detach-role-policy --role-name "${role}" --policy-arn "${p}" > /dev/null || { [ $? -eq 2 ]; return; }
+    iam_call iam detach-role-policy --role-name "${role}" --policy-arn "${p}" > /dev/null || [ $? -eq 2 ] || return 1
   done
   iam_call iam delete-role --role-name "${role}" > /dev/null || [ $? -eq 2 ]
 }

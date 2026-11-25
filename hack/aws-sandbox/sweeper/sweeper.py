@@ -363,12 +363,22 @@ class Sweep:
 
     @staticmethod
     def delete_role(iam, name):
+        def unless_gone(call, **kwargs):
+            # A policy or a profile that is gone needs no removal. delete_role
+            # tells if the role is gone too.
+            try:
+                call(**kwargs)
+            except Exception as err:  # noqa: BLE001
+                if error_code(err) not in GONE:
+                    raise
+
         for policy in iam.list_role_policies(RoleName=name).get("PolicyNames", []):
-            iam.delete_role_policy(RoleName=name, PolicyName=policy)
+            unless_gone(iam.delete_role_policy, RoleName=name, PolicyName=policy)
         for policy in iam.list_attached_role_policies(RoleName=name).get("AttachedPolicies", []):
-            iam.detach_role_policy(RoleName=name, PolicyArn=policy["PolicyArn"])
+            unless_gone(iam.detach_role_policy, RoleName=name, PolicyArn=policy["PolicyArn"])
         for profile in iam.list_instance_profiles_for_role(RoleName=name).get("InstanceProfiles", []):
-            iam.remove_role_from_instance_profile(InstanceProfileName=profile["InstanceProfileName"], RoleName=name)
+            unless_gone(iam.remove_role_from_instance_profile, InstanceProfileName=profile["InstanceProfileName"],
+                        RoleName=name)
         iam.delete_role(RoleName=name)
 
     def policies(self):
