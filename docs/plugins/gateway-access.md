@@ -12,18 +12,22 @@ The plugin reads `status.endpoints` of the target of each request, and writes ro
 - For the `CamundaOptimize` of that cluster: one `HTTPRoute <request>-optimize` on the Optimize host.
 - For a `CamundaManagementCluster`: one `HTTPRoute <request>` on the management host, with one rule for each endpoint, such as `/auth` or `/modeler`.
 
+Each rule of a route carries the `ExtensionRef` filters of `routeFilters`, in the list order.
+
 Each route is in the namespace of the claim, next to its Services. Its only parent is the Gateway of `gatewayRef`, on the listener `listenerName` when it is set. The routes are standard-channel `gateway.networking.k8s.io/v1` objects.
 
 A route counts as accepted only when the controller of the GatewayClass of that Gateway accepts it. The plugin ignores the route status that another controller wrote. For example, a Gateway that was recreated with the same name under another implementation leaves the status of the old controller on the routes.
 
 When an endpoint leaves `status.endpoints`, or the Optimize is deleted, the plugin deletes the route at the next reconcile.
 
+For each item of `policyTemplates` and each route, the plugin also writes one policy `<route>-policy-<n>` in the namespace of the claim, where `<n>` is the index of the template. See [Route policies](#route-policies). The plugin applies the policies before the routes, and deletes them after the routes.
+
 The plugin also writes:
 
 - One PluginRegistration for each item of the chart value `registrations`.
 - One Lease `<release>` in the release namespace. Only the replica that holds it writes.
 
-The summary of a request shows the host, the number of accepted routes, and the expiry date of the listener certificate. The expiry has the severity `Warning` when the certificate expires within 21 days.
+The summary of a request shows the host, the number of accepted routes, the number of accepted policies when there are policies, and the expiry date of the listener certificate. The expiry has the severity `Warning` when the certificate expires within 21 days.
 
 ## Prerequisites
 
@@ -34,6 +38,7 @@ Before you install the chart, make sure that the cluster has:
 3. `allowedRoutes` on that listener that admits the namespaces of the claims.
 4. DNS records for the hostname patterns that point at the Gateway.
 5. The CRDs of the operator.
+6. For route policies: the CRD of each kind of `policyKinds`, installed before the controller starts.
 
 ## Chart values
 
@@ -43,6 +48,7 @@ Before you install the chart, make sure that the cluster has:
 | `reportCertificateExpiry` | `true` | Show the expiry of the listener certificate in the summary of each `https` request. It grants `get` on the Secrets of `certificateSecrets`. |
 | `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It reads the certificate again, so the expiry in the summary follows a renewed certificate. A Go duration such as `30m`. `0` turns it off, and then the expiry changes only when something else reconciles the request. |
 | `certificateSecrets` | `[]` | The Secret of each listener certificate, as `{namespace, name}`. The chart grants `get` on these Secrets only. The expiry of a certificate whose Secret is not in the list shows as `unknown`. |
+| `policyKinds` | `[]` | The policy kinds that the controller can write from `policyTemplates`, as `{apiVersion, kind, resource}`. `resource` is the plural name that RBAC uses, such as `securitypolicies`. The chart grants the controller the verbs on these kinds only. The chart refuses to render an item without one of the three fields, or with an `apiVersion` that is not `<group>/<version>`. |
 | `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/gateway-access` | The image of the controller. |
 | `image.tag` | the `appVersion` of the chart | The tag of the image. |
 | `resources` | 10m CPU and 64Mi memory requested, 128Mi memory limit | The resources of the controller container. |
@@ -106,8 +112,77 @@ A hostname pattern takes two placeholders only: `{name}`, the name of the claim,
 | `grpcHostnamePattern` | yes | The host of the gRPC API of a cluster. |
 | `optimizeHostnamePattern` | yes | The host of Optimize of a cluster. |
 | `managementHostnamePattern` | yes | The host of a management plane. |
+| `policyTemplates` | no | The policies of each route, as `{apiVersion, kind, spec}`. See [Route policies](#route-policies). |
+| `routeFilters` | no | The filters of each route rule, as `{group, kind, name}` of an object in the namespace of the claim, such as a Traefik `Middleware`. Each item becomes one `ExtensionRef` filter. The admin creates the objects. |
 
 Each host must be a DNS name and not an IP address. Each label is at most 63 characters, and the host is at most 253. A long claim name and a long namespace can give a label that is too long.
+
+## Route policies
+
+A route policy adds a rule of the Gateway implementation to the routes of a claim, such as an IP allowlist. The Gateway API has no such rule. Some implementations have a policy kind that names its route in `spec.targetRefs`, for example `SecurityPolicy` of Envoy Gateway.
+
+This example gives each claim an IP allowlist with an Envoy Gateway `SecurityPolicy`, and lets each claim pick the networks. First, the chart values allow the kind and add the parameter `allowedCIDRs` to the registration:
+
+```yaml
+policyKinds:
+  - apiVersion: gateway.envoyproxy.io/v1alpha1
+    kind: SecurityPolicy
+    resource: securitypolicies
+registrations:
+  - name: gateway-public
+    # ... the other fields of the default registration
+    parameters:
+      type: object
+      properties:
+        # ... the default properties
+        allowedCIDRs:
+          type: array
+          items: {type: string}
+    parameterValues:
+      # ... the default values
+      allowedCIDRs: ["203.0.113.0/24"]
+      policyTemplates:
+        - apiVersion: gateway.envoyproxy.io/v1alpha1
+          kind: SecurityPolicy
+          spec:
+            authorization:
+              defaultAction: Deny
+              rules:
+                - action: Allow
+                  principal:
+                    clientCIDRs: "{allowedCIDRs}"
+```
+
+Then an Environment lets a claim pick the networks from a list:
+
+```yaml
+apiVersion: fleet.camunda.io/v1alpha1
+kind: Environment
+metadata:
+  name: production
+spec:
+  parameters:
+    gateway-public:
+      allowedCIDRs:
+        claimEditable: true
+        allowed:
+          - name: office
+            label: Office network
+            value: "203.0.113.0/24"
+          - name: vpn
+            label: VPN
+            value: "198.51.100.0/24"
+```
+
+The claim stores the names of its choices, such as `[office, vpn]`, and the request gets their values. For a claim `orders` with the request `orders-access`, the plugin writes the `SecurityPolicy` objects `orders-access-policy-0` for the `HTTPRoute` and `orders-access-grpc-policy-0` for the `GRPCRoute`. Each is in the namespace of the claim, and has `clientCIDRs` set to the networks of the claim.
+
+The rules of a template:
+
+- A string of the `spec` that is exactly `{<parameter>}` takes the value of that parameter of the request, of any type. A string with other text, such as `zone-{allowedCIDRs}`, stays as it is. The parameter must have a value, and it cannot be `policyTemplates` or `routeFilters`.
+- The plugin sets `spec.targetRefs` to the route, so the template must not set it. The kind must take a route in `spec.targetRefs` and report `status.ancestors`. `AuthorizationPolicy` of Istio and `GCPBackendPolicy` of GKE do not take a route, so they do not work.
+- The kind must be in `policyKinds`. A CRD that you install after the controller started is used after a restart of the controller.
+
+A policy counts as accepted when the controller of the GatewayClass reports `Accepted=True` in `status.ancestors`, for the Gateway or for the route, for its current generation. Until then, the request is not `Ready`. When that controller refuses a policy, the routes stay, and `Ready` gives the reason and the message of the controller. When the plugin or the API server refuses a template, the plugin writes no new route and changes no route that is there.
 
 ## Outputs
 
@@ -130,18 +205,23 @@ The plugin writes no grants.
 
 The registrations offer the deletion policies `Delete` and `Orphan`. Both delete every route of the request when a claim is deleted, because a route sends traffic to Services that go with the cluster. The routes belong to the request and go with it. `Orphan` keeps no route. The registrations offer `Orphan` so that a claim can keep the resources of its other plugins. A route to a Service that is gone never stays.
 
+The policies go after their routes: the policy of a deleted route at the next reconcile after the route is gone, and every policy of a deleted request after every route of the request is gone. When the parameters no longer have a template, its policies go at once. When a template changes its kind or its index, the old policy of a route stays until the new one is applied. A delete of the request with foreground propagation lets the garbage collector delete the routes and the policies at the same time.
+
 ## Troubleshooting
 
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `WaitingForEndpoints` | `Ready` of the request | The target does not exist yet, or it has published no endpoints yet. The outputs are ready. Wait until the operator reconciles the target. |
 | `GatewayNotFound` | `Ready` of the request | The Gateway of `gatewayRef` does not exist, or its GatewayClass does not exist. The message names the missing object. Correct `gatewayRef`, or create the Gateway. |
-| `Pending` | `Ready` of the request | The controller of the GatewayClass has not reported on a route yet. The message names the route. Make sure that this controller runs. |
+| `Pending` | `Ready` of the request | The controller of the GatewayClass has not reported on a route or a policy yet. The message names the route or the policy. Make sure that this controller runs, and that it serves the policy kind. |
 | `NotAllowedByListeners` and the other route reasons | `Ready` of the request | The Gateway refused a route. The message names the route and gives the message of the Gateway. For `NotAllowedByListeners`, make sure that `allowedRoutes` of the listener admits the namespace of the claim. For `BackendNotFound`, make sure that the Service of the target exists. |
-| `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not pass the schema, or a pattern gives a host that is not a DNS name. The message names the parameter and the host. Correct the pattern in the registration or the environment. For a label that is too long, put `{name}` and `{namespace}` in two labels, as in `{name}.{namespace}.example.com`, or use a shorter claim name. |
+| `InvalidParameters` | `OutputsReady` and `Ready` of the request | The parameters do not pass the schema, a pattern gives a host that is not a DNS name, or a policy template breaks a rule of [Route policies](#route-policies). The message names the parameter, the host, or the field of the template. Correct the pattern in the registration or the environment. For a label that is too long, put `{name}` and `{namespace}` in two labels, as in `{name}.{namespace}.example.com`, or use a shorter claim name. |
+| `PolicyKindNotAllowed` | `OutputsReady` and `Ready` of the request | A policy template has a kind that `policyKinds` does not list. Add the kind to `policyKinds`, or correct the template. |
+| `PolicyKindNotInstalled` | `OutputsReady` and `Ready` of the request | The cluster did not serve the kind of a policy template when the controller started. Install the CRD of the kind, then restart the controller. |
+| `Invalid` and the other policy reasons | `Ready` of the request | The controller of the GatewayClass refused a policy. The message names the policy and gives the message of that controller. Correct the template or the parameter that it names. |
 | `UnsupportedTarget` | `OutputsReady` and `Ready` of the request | The target kind is not `CamundaCluster` or `CamundaManagementCluster`. |
-| `ReconcileError` | `Ready` of the request | The message gives the error, for example a read of the target, of the Gateway, or of its GatewayClass, or a list of the routes that failed. pluginkit tries again. |
-| `DeleteFailed` | `Ready` of a deleted request | The plugin could not delete a route of the request. The message gives the error. The finalizer stays, and pluginkit tries again. |
+| `ReconcileError` | `Ready` of the request | The message gives the error, for example a read of the target, of the Gateway, or of its GatewayClass, or a list of the routes or the policies that failed. pluginkit tries again. |
+| `DeleteFailed` | `Ready` of a deleted request | The plugin could not delete a route or a policy of the request. The message gives the error. The finalizer stays, and pluginkit tries again. |
 
 A summary item `Certificate expires` with the value `unknown: <cause>` means that the plugin could not read the certificate. The request is still `Ready`. Usual causes:
 
@@ -154,4 +234,4 @@ Add the Secret to `certificateSecrets`, set `listenerName` to the HTTPS listener
 
 The plugin has no health check, so its registration is never `Unhealthy`.
 
-When the controller Pod does not get ready, read its log. The controller stops when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
+When the controller Pod does not get ready, read its log. The controller stops when it cannot read the file of its registrations, when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set, when it cannot read the flag `-policy-kinds`, or when `policyKinds` lists a cluster-scoped kind or two versions of one kind.

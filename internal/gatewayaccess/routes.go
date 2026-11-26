@@ -34,8 +34,8 @@ const (
 // ClusterRoutes returns the routes of a cluster for the request named
 // request: the HTTPRoute <request> on h.Cluster with one rule for each HTTP
 // endpoint, and the GRPCRoute <request>-grpc on h.GRPC with one rule for each
-// gRPC endpoint. A route without a rule is left out. The routes have no
-// namespace and no labels.
+// gRPC endpoint. A route without a rule is left out. Each rule carries the
+// filters of p.RouteFilters. The routes have no namespace and no labels.
 func ClusterRoutes(request string, p Params, h Hosts, endpoints []v1.Endpoint) []client.Object {
 	var routes []client.Object
 	if route := httpRoute(request, p, h.Cluster, endpoints); route != nil {
@@ -102,6 +102,7 @@ func httpRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 					Value: new(path),
 				},
 			}},
+			Filters:     httpFilters(p),
 			BackendRefs: []gatewayv1.HTTPBackendRef{{BackendRef: backendRef(e)}},
 		})
 	}
@@ -120,11 +121,27 @@ func httpRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 	}
 }
 
+func httpFilters(p Params) []gatewayv1.HTTPRouteFilter {
+	if len(p.RouteFilters) == 0 {
+		return nil
+	}
+
+	filters := make([]gatewayv1.HTTPRouteFilter, 0, len(p.RouteFilters))
+	for _, ref := range p.RouteFilters {
+		filters = append(
+			filters,
+			gatewayv1.HTTPRouteFilter{Type: gatewayv1.HTTPRouteFilterExtensionRef, ExtensionRef: &ref},
+		)
+	}
+	return filters
+}
+
 func grpcRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gatewayv1.GRPCRoute {
 	var rules []gatewayv1.GRPCRouteRule
 	for _, e := range endpoints {
 		if e.Protocol == v1.EndpointProtocolGRPC {
 			rules = append(rules, gatewayv1.GRPCRouteRule{
+				Filters:     grpcFilters(p),
 				BackendRefs: []gatewayv1.GRPCBackendRef{{BackendRef: backendRef(e)}},
 			})
 		}
@@ -142,6 +159,21 @@ func grpcRoute(name string, p Params, host string, endpoints []v1.Endpoint) *gat
 			Rules:           rules,
 		},
 	}
+}
+
+func grpcFilters(p Params) []gatewayv1.GRPCRouteFilter {
+	if len(p.RouteFilters) == 0 {
+		return nil
+	}
+
+	filters := make([]gatewayv1.GRPCRouteFilter, 0, len(p.RouteFilters))
+	for _, ref := range p.RouteFilters {
+		filters = append(
+			filters,
+			gatewayv1.GRPCRouteFilter{Type: gatewayv1.GRPCRouteFilterExtensionRef, ExtensionRef: &ref},
+		)
+	}
+	return filters
 }
 
 // backendRef sends traffic to the Service of e. It names no namespace: the

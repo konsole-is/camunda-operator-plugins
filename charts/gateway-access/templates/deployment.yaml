@@ -36,6 +36,9 @@ spec:
             - -leader-election-id={{ include "gateway-access.fullname" . }}
             - -report-certificate-expiry={{ .Values.reportCertificateExpiry }}
             - -resync={{ .Values.resync }}
+            {{- with .Values.policyKinds }}
+            - -policy-kinds={{ include "gateway-access.policyKinds" $ }}
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

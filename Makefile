@@ -65,7 +65,7 @@ test-api-ref: ## Check that a pseudo-version and a tag of the api module map to 
 		[ "$$got" = api/v0.3.0-rc.1 ] || { echo "prerelease tag maps to '$$got', want api/v0.3.0-rc.1" >&2; exit 1; }
 
 .PHONY: chart-verify
-chart-verify: ## Render the chart of each plugin with its cases in hack/chartcheck/testdata/, and check the chart rule of CONTRIBUTING.md.
+chart-verify: chart-verify-policy-kinds ## Render the chart of each plugin with its cases in hack/chartcheck/testdata/, and check the chart rule of CONTRIBUTING.md.
 	@for c in charts/*/; do \
 		c="$$(basename "$$c")"; \
 		test -d "cmd/$$c" || { echo "charts/$$c has no binary cmd/$$c" >&2; exit 1; }; \
@@ -74,6 +74,36 @@ chart-verify: ## Render the chart of each plugin with its cases in hack/chartche
 		test -f "charts/$$p/Chart.yaml" || { echo "cmd/$$p has no chart charts/$$p" >&2; exit 1; }; \
 		HELM="$(HELM)" hack/chartcheck/verify.sh "charts/$$p" "$(CHART_NAMESPACE)" || exit 1; \
 	done
+
+# chart-verify-policy-kinds checks that the gateway-access chart grants the
+# verbs on the policy kinds of its values and on no other kind, and passes
+# them to the controller.
+.PHONY: chart-verify-policy-kinds
+chart-verify-policy-kinds:
+	@# The golden file names the namespace camunda-operator-plugins, and the role
+	@# names hash it.
+	@$(HELM) template verify charts/gateway-access --namespace camunda-operator-plugins \
+		-f hack/chartcheck/testdata/gateway-access/policy-kinds.yaml --show-only templates/policies.yaml \
+		| diff -u hack/chartcheck/testdata/gateway-access-policies.golden.yaml - \
+		|| { echo "charts/gateway-access: the policy role differs from gateway-access-policies.golden.yaml" >&2; exit 1; }
+	@$(HELM) template verify charts/gateway-access --namespace $(CHART_NAMESPACE) \
+		-f hack/chartcheck/testdata/gateway-access/policy-kinds.yaml --show-only templates/deployment.yaml \
+		| grep -qxF -- '            - -policy-kinds=gateway.envoyproxy.io/v1alpha1/SecurityPolicy,security.istio.io/v1/AuthorizationPolicy' \
+		|| { echo "charts/gateway-access: the controller does not get the policy kinds" >&2; exit 1; }
+	@out="$$($(HELM) template verify charts/gateway-access --namespace $(CHART_NAMESPACE) 2>&1)"; \
+		case "$$out" in *policy-kinds*|*-policies*) \
+			echo "charts/gateway-access grants policy kinds without policyKinds" >&2; exit 1 ;; esac
+	@err="$$($(HELM) template verify charts/gateway-access --set 'policyKinds[0].apiVersion=gateway.envoyproxy.io/v1alpha1' \
+		--set 'policyKinds[0].kind=SecurityPolicy' 2>&1 >/dev/null || true)"; \
+		case "$$err" in *"each policy kind needs a resource"*) ;; *) \
+			echo "charts/gateway-access renders a policy kind without a resource" >&2; exit 1 ;; esac
+	@for v in v1 /v1 gateway.envoyproxy.io/ a/b/c; do \
+		err="$$($(HELM) template verify charts/gateway-access --set "policyKinds[0].apiVersion=$$v" \
+			--set 'policyKinds[0].kind=SecurityPolicy' --set 'policyKinds[0].resource=securitypolicies' 2>&1 >/dev/null || true)"; \
+		case "$$err" in *"needs an apiVersion <group>/<version>"*) ;; *) \
+			echo "charts/gateway-access renders a policy kind with the apiVersion '$$v'" >&2; exit 1 ;; esac; \
+	done
+	@echo "  charts/gateway-access grants the verbs on the listed policy kinds only"
 
 # GOMOD_FILE is the go.mod that check-published-api reads. test-published-api
 # sets it to a copy that requires the root module of the operator.

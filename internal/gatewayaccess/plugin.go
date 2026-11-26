@@ -26,6 +26,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -45,18 +46,21 @@ const (
 
 // The events that the plugin records on a request.
 const (
-	eventReasonRouteCreated = "RouteCreated"
-	eventReasonRouteDeleted = "RouteDeleted"
-	eventActionCreate       = "Create"
-	eventActionDelete       = "Delete"
+	eventReasonRouteCreated  = "RouteCreated"
+	eventReasonRouteDeleted  = "RouteDeleted"
+	eventReasonPolicyCreated = "PolicyCreated"
+	eventReasonPolicyDeleted = "PolicyDeleted"
+	eventActionCreate        = "Create"
+	eventActionDelete        = "Delete"
 )
 
 // Plugin serves access requests. It publishes the four outputs of the
 // hostname patterns, and it writes an HTTPRoute and a GRPCRoute for a
 // CamundaCluster and its CamundaOptimize, or an HTTPRoute for a
-// CamundaManagementCluster, from status.endpoints of the target. It deletes
-// the routes of a request that it no longer wants, and every route of a
-// deleted request.
+// CamundaManagementCluster, from status.endpoints of the target, and one
+// policy for each policy template and each route. It deletes the routes and
+// the policies of a request that it no longer wants, and every route and
+// then every policy of a deleted request.
 type Plugin struct {
 	client client.Client
 	// reader reads the Gateway, its GatewayClass, and the certificate
@@ -64,6 +68,7 @@ type Plugin struct {
 	reader                  client.Reader
 	reportCertificateExpiry bool
 	now                     func() time.Time
+	policyKinds             PolicyKinds
 }
 
 // access is what a request routes: the host of its summary, its routes, and
@@ -75,13 +80,17 @@ type access struct {
 	notReady *pluginkit.Waiting
 }
 
-// Reconcile returns the outputs, the routes, and the status of the request.
-// It is Pending with the reason InvalidParameters when a pattern gives no
-// valid host, and with the reason UnsupportedTarget for a target kind that
-// the plugin does not serve. Ready is False with the reason
+// Reconcile returns the outputs, the policies, the routes, and the status of
+// the request. The policies come before the routes, so that pluginkit never
+// applies a new route without its policies. It is Pending with the reason
+// InvalidParameters when a pattern gives no valid host, and with the reason
+// UnsupportedTarget for a target kind that the plugin does not serve. It is
+// also Pending with the reason of the refusal of Policies for a policy
+// template that breaks a rule. Ready is False with the reason
 // WaitingForEndpoints until the target publishes endpoints, and with the
 // reason GatewayNotFound while the Gateway of the parameters or its
-// GatewayClass does not exist. Then it follows that Gateway.
+// GatewayClass does not exist. Then it follows that Gateway for the routes,
+// and the controller of its GatewayClass for the policies.
 func (p *Plugin) Reconcile(
 	ctx context.Context,
 	req pluginkit.Request[Params, map[string]string],
@@ -114,12 +123,35 @@ func (p *Plugin) Reconcile(
 		return pluginkit.Result{}, err
 	}
 
-	live, err := listRoutes(ctx, p.client, req.Object)
+	policies, refused := Policies(req.Parameters, a.routes, p.policyKinds)
+	if refused != nil {
+		return pluginkit.Result{Pending: refused}, nil
+	}
+
+	// The cache can miss a route that the last reconcile applied, and the
+	// policies are read from the API server, so the routes are too.
+	live, err := listRoutes(ctx, p.reader, req.Object)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
 
-	if err := deleteRoutes(ctx, p.client, req, StaleRoutes(live, a.routes), "whose endpoint is gone"); err != nil {
+	livePolicies, err := listPolicies(ctx, p.reader, req.Object, p.policyKinds)
+	if err != nil {
+		return pluginkit.Result{}, err
+	}
+
+	going := StaleRoutes(live, a.routes)
+	if err := deleteRoutes(ctx, p.client, req, going, "whose endpoint is gone"); err != nil {
+		return pluginkit.Result{}, err
+	}
+
+	if err := deletePolicies(
+		ctx,
+		p.client,
+		req,
+		StalePolicies(livePolicies, policies, going),
+		"that the parameters or the routes no longer ask for",
+	); err != nil {
 		return pluginkit.Result{}, err
 	}
 
@@ -128,7 +160,7 @@ func (p *Plugin) Reconcile(
 		liveByKey[KeyOf(obj)] = obj
 	}
 
-	resources := make([]pluginsv1alpha1.ResourceRef, 0, len(a.routes))
+	resources := make([]pluginsv1alpha1.ResourceRef, 0, len(a.routes)+len(policies))
 	for _, obj := range a.routes {
 		key := KeyOf(obj)
 		host := routeHost(obj)
@@ -151,17 +183,49 @@ func (p *Plugin) Reconcile(
 		})
 	}
 
+	livePolicyByKey := make(map[PolicyKey]*unstructured.Unstructured, len(livePolicies))
+	for _, obj := range livePolicies {
+		livePolicyByKey[KeyOfPolicy(obj)] = obj
+	}
+
+	objects := make([]client.Object, 0, len(policies)+len(a.routes))
+	for _, obj := range policies {
+		key := KeyOfPolicy(obj)
+		target := policyTarget(obj)
+		if _, ok := livePolicyByKey[key]; !ok {
+			req.Event(
+				corev1.EventTypeNormal,
+				eventReasonPolicyCreated,
+				eventActionCreate,
+				"Applying the %s %s for the %s %s",
+				key.GVK.Kind,
+				key.Name,
+				target.Kind,
+				target.Name,
+			)
+		}
+		resources = append(resources, pluginsv1alpha1.ResourceRef{
+			Kind:     key.GVK.Kind,
+			Name:     key.Name,
+			Role:     "Policy of the " + target.Kind + " " + target.Name,
+			OnOrphan: pluginsv1alpha1.OnOrphanDeleted,
+		})
+		objects = append(objects, obj)
+	}
+	objects = append(objects, a.routes...)
+
 	controller, noGateway, err := GatewayController(ctx, p.reader, req.Parameters)
 	if err != nil {
 		return pluginkit.Result{}, err
 	}
 
 	accepted, waiting := RouteWaiting(a.routes, liveByKey, ParentRef(req.Parameters), controller)
-	notReady := cmp.Or(a.notReady, noGateway, waiting)
+	policiesAccepted, policyWaiting := PolicyWaiting(policies, livePolicyByKey, ParentRef(req.Parameters), controller)
+	notReady := cmp.Or(a.notReady, noGateway, waiting, policyWaiting)
 
 	res := pluginkit.Result{
 		Outputs:  Outputs(req.Parameters, hosts),
-		Objects:  a.routes,
+		Objects:  objects,
 		NotReady: notReady,
 		Summary: []pluginsv1alpha1.SummaryItem{
 			{Label: "Host", Value: a.host},
@@ -169,6 +233,12 @@ func (p *Plugin) Reconcile(
 		},
 		Links:     a.links,
 		Resources: resources,
+	}
+	if len(policies) > 0 {
+		res.Summary = append(res.Summary, pluginsv1alpha1.SummaryItem{
+			Label: "Policies accepted",
+			Value: fmt.Sprintf("%d of %d", policiesAccepted, len(policies)),
+		})
 	}
 
 	if p.reportCertificateExpiry {
@@ -350,6 +420,119 @@ func deleteRoutes(
 	return nil
 }
 
+// listPolicies lists the policies of the served kinds of kinds that carry the
+// labels of request, by kind and then by name.
+func listPolicies(
+	ctx context.Context,
+	reader client.Reader,
+	request *pluginsv1alpha1.PluginRequest,
+	kinds PolicyKinds,
+) ([]*unstructured.Unstructured, error) {
+	var policies []*unstructured.Unstructured
+	for _, gvk := range kinds.sorted() {
+		if !kinds[gvk] {
+			continue
+		}
+
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(gvk.GroupVersion().WithKind(gvk.Kind + "List"))
+		if err := reader.List(
+			ctx,
+			list,
+			client.InNamespace(request.Namespace),
+			client.MatchingLabels{
+				pluginsv1alpha1.LabelRegistration: request.Spec.Registration,
+				pluginsv1alpha1.LabelRequest:      request.Name,
+			},
+		); err != nil {
+			return nil, fmt.Errorf("listing the %s policies of the request: %w", gvk.Kind, err)
+		}
+
+		for i := range list.Items {
+			policies = append(policies, &list.Items[i])
+		}
+	}
+	return policies, nil
+}
+
+// StalePolicies returns the policies of live whose kind and name are not in
+// desired. A policy of a route stays while that route is in goingRoutes, and
+// while a policy of desired for that route has no live copy that holds its
+// spec and is not deleting.
+func StalePolicies(
+	live, desired []*unstructured.Unstructured,
+	goingRoutes []client.Object,
+) []*unstructured.Unstructured {
+	liveByKey := make(map[PolicyKey]*unstructured.Unstructured, len(live))
+	for _, obj := range live {
+		liveByKey[KeyOfPolicy(obj)] = obj
+	}
+
+	wanted := make(map[PolicyKey]bool, len(desired))
+	keep := make(map[RouteKey]bool, len(desired)+len(goingRoutes))
+	for _, obj := range desired {
+		wanted[KeyOfPolicy(obj)] = true
+		current := liveByKey[KeyOfPolicy(obj)]
+		// A route keeps its old policies until their replacement is applied.
+		if current == nil || !current.GetDeletionTimestamp().IsZero() || !holdsSpec(obj, current) {
+			keep[policyTarget(obj)] = true
+		}
+	}
+	for _, obj := range goingRoutes {
+		keep[KeyOf(obj)] = true
+	}
+
+	var stale []*unstructured.Unstructured
+	for _, obj := range live {
+		if !wanted[KeyOfPolicy(obj)] && !keep[policyTarget(obj)] {
+			stale = append(stale, obj)
+		}
+	}
+	return stale
+}
+
+// policyTarget returns the key of the route that the first item of
+// spec.targetRefs of policy names, or an empty key.
+func policyTarget(policy *unstructured.Unstructured) RouteKey {
+	targets, _, _ := unstructured.NestedSlice(policy.Object, "spec", "targetRefs")
+	if len(targets) == 0 {
+		return RouteKey{}
+	}
+
+	target, _ := targets[0].(map[string]any)
+	kind, _ := target["kind"].(string)
+	name, _ := target["name"].(string)
+	return RouteKey{Kind: kind, Name: name}
+}
+
+// deletePolicies deletes policies, each with an event on the request that
+// ends with why. A policy that is already gone is not an error.
+func deletePolicies(
+	ctx context.Context,
+	c client.Client,
+	req pluginkit.Request[Params, map[string]string],
+	policies []*unstructured.Unstructured,
+	why string,
+) error {
+	for _, obj := range policies {
+		// The UID keeps a policy that replaced obj under its name.
+		uid := obj.GetUID()
+		if err := c.Delete(ctx, obj, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting the %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+		req.Event(
+			corev1.EventTypeNormal,
+			eventReasonPolicyDeleted,
+			eventActionDelete,
+			"Deleted the %s %s, %s",
+			obj.GetKind(),
+			obj.GetName(),
+			why,
+		)
+	}
+	return nil
+}
+
 func routeHost(obj client.Object) string {
 	var hostnames []gatewayv1.Hostname
 	switch r := obj.(type) {
@@ -365,8 +548,10 @@ func routeHost(obj client.Object) string {
 	return string(hostnames[0])
 }
 
-// Delete deletes every route of the request. It returns an error while a
-// route is still there, so that pluginkit keeps the finalizer and retries.
+// Delete deletes every route of the request, and then every policy of the
+// request. It returns an error while a route or a policy is still there, so
+// that pluginkit keeps the finalizer and retries. A policy stays while a route
+// is there, so that no route serves without its policies.
 func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	live, err := listRoutes(ctx, p.reader, req.Object)
 	if err != nil {
@@ -392,11 +577,44 @@ func (p *Plugin) Delete(ctx context.Context, req pluginkit.Request[Params, map[s
 	if len(names) > 0 {
 		return fmt.Errorf("waiting for the routes %s to be gone", strings.Join(names, ", "))
 	}
+
+	return p.deleteEveryPolicy(ctx, req)
+}
+
+// deleteEveryPolicy deletes every policy of the request, and returns an error
+// while one is still there.
+func (p *Plugin) deleteEveryPolicy(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
+	live, err := listPolicies(ctx, p.reader, req.Object, p.policyKinds)
+	if err != nil {
+		return err
+	}
+
+	toDelete := slices.DeleteFunc(live, func(obj *unstructured.Unstructured) bool {
+		return !obj.GetDeletionTimestamp().IsZero()
+	})
+	if err := deletePolicies(ctx, p.client, req, toDelete, "which goes with the request"); err != nil {
+		return err
+	}
+
+	// A policy that a finalizer holds is still there after its delete.
+	left, err := listPolicies(ctx, p.reader, req.Object, p.policyKinds)
+	if err != nil {
+		return err
+	}
+
+	names := make([]string, 0, len(left))
+	for _, obj := range left {
+		names = append(names, obj.GetKind()+" "+obj.GetName())
+	}
+	if len(names) > 0 {
+		return fmt.Errorf("waiting for the policies %s to be gone", strings.Join(names, ", "))
+	}
 	return nil
 }
 
-// Orphan deletes every route of the request, as Delete does. A route to a
-// Service that goes with the target never stays.
+// Orphan deletes every route and then every policy of the request, as Delete
+// does. A route to a Service that goes with the target never stays, and a
+// policy never stays without its route.
 func (p *Plugin) Orphan(ctx context.Context, req pluginkit.Request[Params, map[string]string]) error {
 	return p.Delete(ctx, req)
 }

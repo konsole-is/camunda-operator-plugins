@@ -35,7 +35,9 @@ import (
 // Setup adds the plugin to mgr: a Publisher of the registrations of cfg, and
 // a controller named cfg.Name that serves each PluginRequest whose
 // registration label names one of them. The scheme of mgr must hold the
-// plugins.camunda.io kinds and each kind of cfg.Owns and cfg.Watches. Setup
+// plugins.camunda.io kinds and each kind of cfg.Owns and cfg.Watches, except
+// a kind of cfg.Owns given as an *unstructured.Unstructured with its apiVersion
+// and kind set. Setup
 // refuses a cfg without a name or without a registration, a negative Resync,
 // a Watch without an Object or a Requests function, and a nil plugin.
 func Setup[P, I any](mgr ctrl.Manager, cfg Config, plugin Plugin[P, I]) error {

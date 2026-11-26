@@ -25,15 +25,18 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
 	"time"
 
+	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"sigs.k8s.io/yaml"
@@ -311,9 +314,52 @@ func gatewayParams() gatewayaccess.Params {
 }
 
 func rawParams(p gatewayaccess.Params) *apiextensionsv1.JSON {
-	// A struct of strings always encodes.
+	return rawParamsWith(p, nil)
+}
+
+// rawParamsWith returns the parameters p with the parameters of extra too.
+func rawParamsWith(p gatewayaccess.Params, extra map[string]any) *apiextensionsv1.JSON {
+	// Params and the JSON values of extra always encode.
 	raw, _ := json.Marshal(p)
+	if len(extra) > 0 {
+		var values map[string]any
+		_ = json.Unmarshal(raw, &values)
+		maps.Copy(values, extra)
+		raw, _ = json.Marshal(values)
+	}
 	return &apiextensionsv1.JSON{Raw: raw}
+}
+
+// examplePolicyTemplate is a template of an ExamplePolicy that takes the
+// parameter allowedCIDRs.
+func examplePolicyTemplate() gatewayaccess.PolicyTemplate {
+	return gatewayaccess.PolicyTemplate{
+		APIVersion: examplePolicyKind.GroupVersion().String(),
+		Kind:       examplePolicyKind.Kind,
+		Spec:       json.RawMessage(`{"allowed":"{allowedCIDRs}","mode":"Deny"}`),
+	}
+}
+
+// policyRequest returns accessRequest for the cluster orders, with the
+// policy templates of p and the parameter allowedCIDRs set to allowed.
+func policyRequest(namespace, name string, p gatewayaccess.Params, allowed ...string) *pluginsv1alpha1.PluginRequest {
+	request := accessRequest(namespace, name, clusterTarget("orders"), p)
+	request.Spec.Parameters = rawParamsWith(p, map[string]any{"allowedCIDRs": allowed})
+	return request
+}
+
+// policiesOf lists the ExamplePolicies with the labels of request.
+func policiesOf(g Gomega, request *pluginsv1alpha1.PluginRequest) []unstructured.Unstructured {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(examplePolicyKind.GroupVersion().WithKind(examplePolicyKind.Kind + "List"))
+	g.Expect(mgr.GetAPIReader().List(ctx, list,
+		client.InNamespace(request.Namespace),
+		client.MatchingLabels{
+			pluginsv1alpha1.LabelRegistration: request.Spec.Registration,
+			pluginsv1alpha1.LabelRequest:      request.Name,
+		},
+	)).To(Succeed())
+	return list.Items
 }
 
 // accessRequest returns a request of the registration gateway-public, as a

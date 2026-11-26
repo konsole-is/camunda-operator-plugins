@@ -227,3 +227,55 @@ func TestParentRef_SetsTheListenerOnlyWhenNamed(t *testing.T) {
 	p.ListenerName = httpsListener
 	assert.Equal(t, ptr.To(gatewayv1.SectionName(httpsListener)), ParentRef(p).SectionName)
 }
+
+func TestClusterRoutes_AddEachRouteFilterToEachRule(t *testing.T) {
+	p := validParams()
+	p.RouteFilters = []gatewayv1.LocalObjectReference{
+		{Group: "traefik.io", Kind: "Middleware", Name: "allowlist"},
+		{Group: "traefik.io", Kind: "Middleware", Name: "headers"},
+	}
+	httpRoute, grpcRoute := routesByKind(t, ClusterRoutes("orders-access", p, testHosts(t), standaloneEndpoints()))
+
+	wantHTTP := []gatewayv1.HTTPRouteFilter{
+		{Type: gatewayv1.HTTPRouteFilterExtensionRef, ExtensionRef: &p.RouteFilters[0]},
+		{Type: gatewayv1.HTTPRouteFilterExtensionRef, ExtensionRef: &p.RouteFilters[1]},
+	}
+	require.NotEmpty(t, httpRoute.Spec.Rules)
+	for _, rule := range httpRoute.Spec.Rules {
+		assert.Equal(t, wantHTTP, rule.Filters)
+	}
+
+	wantGRPC := []gatewayv1.GRPCRouteFilter{
+		{Type: gatewayv1.GRPCRouteFilterExtensionRef, ExtensionRef: &p.RouteFilters[0]},
+		{Type: gatewayv1.GRPCRouteFilterExtensionRef, ExtensionRef: &p.RouteFilters[1]},
+	}
+	require.NotEmpty(t, grpcRoute.Spec.Rules)
+	for _, rule := range grpcRoute.Spec.Rules {
+		assert.Equal(t, wantGRPC, rule.Filters)
+	}
+}
+
+func TestClusterRoutes_NoRouteFiltersGiveNoFilters(t *testing.T) {
+	httpRoute, grpcRoute := routesByKind(
+		t,
+		ClusterRoutes("orders-access", validParams(), testHosts(t), standaloneEndpoints()),
+	)
+
+	for _, rule := range httpRoute.Spec.Rules {
+		assert.Nil(t, rule.Filters)
+	}
+	for _, rule := range grpcRoute.Spec.Rules {
+		assert.Nil(t, rule.Filters)
+	}
+}
+
+func TestOptimizeRoute_AddsTheRouteFilters(t *testing.T) {
+	p := validParams()
+	p.RouteFilters = []gatewayv1.LocalObjectReference{{Group: "traefik.io", Kind: "Middleware", Name: "allowlist"}}
+
+	route := OptimizeRoute("orders-access", p, testHosts(t), optimizeEndpoints()).(*gatewayv1.HTTPRoute)
+
+	assert.Equal(t, []gatewayv1.HTTPRouteFilter{
+		{Type: gatewayv1.HTTPRouteFilterExtensionRef, ExtensionRef: &p.RouteFilters[0]},
+	}, route.Spec.Rules[0].Filters)
+}

@@ -19,6 +19,7 @@ package gatewayaccess_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -51,7 +53,17 @@ var (
 	k8s        client.Client
 	// refuse holds the names of the routes that the fake Gateway refuses.
 	refuse sync.Map
+	// policyVerdicts holds the verdict of the fake Gateway for a policy name.
+	policyVerdicts sync.Map
 )
+
+// missingPolicyKind is a policy kind that the chart lists and that has no CRD
+// in the suite.
+var missingPolicyKind = schema.GroupVersionKind{
+	Group:   "policies.example.com",
+	Version: "v1alpha1",
+	Kind:    "MissingPolicy",
+}
 
 func TestGatewayAccess(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -64,7 +76,10 @@ var _ = BeforeSuite(func() {
 	crds := os.Getenv("ENVTEST_CRDS")
 	Expect(crds).NotTo(BeEmpty(), "ENVTEST_CRDS is not set: run make test, which downloads the CRD bases")
 
-	testEnv = &envtest.Environment{CRDDirectoryPaths: []string{crds}, ErrorIfCRDPathMissing: true}
+	testEnv = &envtest.Environment{
+		CRDDirectoryPaths:     []string{crds, filepath.Join("testdata", "crds")},
+		ErrorIfCRDPathMissing: true,
+	}
 	var err error
 	restConfig, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
@@ -79,9 +94,11 @@ var _ = BeforeSuite(func() {
 		ServiceAccount:          serviceAccount,
 		ReportCertificateExpiry: true,
 		Resync:                  2 * time.Second,
+		PolicyKinds:             []schema.GroupVersionKind{examplePolicyKind, missingPolicyKind},
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(startFakeGateway(mgr, &refuse)).To(Succeed())
+	Expect(startFakePolicyController(mgr, &policyVerdicts)).To(Succeed())
 
 	k8s, err = client.New(restConfig, client.Options{Scheme: mgr.GetScheme()})
 	Expect(err).NotTo(HaveOccurred())

@@ -17,6 +17,7 @@ limitations under the License.
 package gatewayaccess
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -32,6 +33,17 @@ func validParams() Params {
 		OptimizeHostnamePattern:   "optimize-{name}.{namespace}.example.com",
 		ManagementHostnamePattern: "{name}.platform.example.com",
 	}
+}
+
+func TestParams_KeepsEveryParameterForReferences(t *testing.T) {
+	var p Params
+	require.NoError(
+		t,
+		json.Unmarshal([]byte(`{"hostnamePattern":"{name}.x","allowedCIDRs":["10.0.0.0/8"],"limit":3}`), &p),
+	)
+	assert.Equal(t, "{name}.x", p.HostnamePattern)
+	assert.Equal(t, []any{"10.0.0.0/8"}, p.values["allowedCIDRs"])
+	assert.Equal(t, int64(3), p.values["limit"])
 }
 
 func TestRenderHosts_FillsEachPatternWithNameAndNamespace(t *testing.T) {
