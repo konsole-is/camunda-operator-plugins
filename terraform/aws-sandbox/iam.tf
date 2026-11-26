@@ -337,10 +337,7 @@ data "aws_iam_policy_document" "ci_iam" {
     actions = [
       "iam:PutRolePermissionsBoundary",
       "iam:PutRolePolicy",
-      "iam:DeleteRolePolicy",
       "iam:AttachRolePolicy",
-      "iam:DetachRolePolicy",
-      "iam:DeleteRole",
       "iam:TagRole",
       "iam:UntagRole",
       "iam:UpdateAssumeRolePolicy",
@@ -358,6 +355,17 @@ data "aws_iam_policy_document" "ci_iam" {
       variable = "aws:ResourceTag/cpo-ci-run"
       values   = ["false"]
     }
+  }
+  # The sweep removes a role with a trust of no run also without the run tag.
+  # cpo-ci-* also matches a path.
+  statement {
+    actions   = ["iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole"]
+    resources = [local.run_roles]
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole"]
+    resources = ["${local.iam}:role/*/*"]
   }
   # Reads carry no tag condition: a read of a role that does not exist must
   # answer NoSuchEntity, not AccessDenied.

@@ -1,0 +1,156 @@
+name: EKS proof
+
+# Proves volume encryption and Pod Identity of the AWS plugins on a real EKS
+# cluster of the AWS sandbox, and removes the cluster after. A maintainer
+# starts it by hand: with workflow_dispatch, or on a pull request of this
+# repository by adding the label eks-proof. workflow_dispatch fires only for a
+# workflow of the default branch. The job then waits for one approval in the
+# environment aws-eks. See hack/aws-sandbox/README.md.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+# One EKS run at a time. A run is never cancelled by another, so it always
+# reaches its cleanup.
+concurrency:
+  group: eks-proof
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  eks:
+    name: Prove the AWS plugins on EKS
+    # A re-run keeps github.actor, so the user who starts or restarts the run
+    # must be that actor too.
+    if: >-
+      github.repository == 'konsole-is/camunda-operator-plugins' &&
+      vars.AWS_EKS_SANDBOX == 'true' &&
+      github.actor_id == vars.AWS_SANDBOX_ACTOR_ID &&
+      github.triggering_actor == github.actor &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'eks-proof' &&
+      github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-latest
+    # Below the age limit of the EKS sweep, 2 hours, so the sweep never
+    # removes a run in progress. The schedules of the run end the node and
+    # the cluster later, at 150 and 160 minutes.
+    timeout-minutes: 110
+    # The role cpo-sandbox-eks trusts only this environment and the actor
+    # AWS_SANDBOX_ACTOR_ID.
+    environment: aws-eks
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # eks-cluster.sh refuses an ID that does not match cpo-ci-[a-z0-9-]{1,40}.
+      RUN_ID: cpo-ci-${{ github.run_id }}-${{ github.run_attempt }}-eks
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_EKS_VPC_ID: ${{ vars.AWS_EKS_VPC_ID }}
+      AWS_EKS_SUBNET_IDS: ${{ vars.AWS_EKS_SUBNET_IDS }}
+      AWS_EKS_REGISTRY: ${{ vars.AWS_EKS_REGISTRY }}
+      AWS_EKS_CLUSTER_ROLE_ARN: ${{ vars.AWS_EKS_CLUSTER_ROLE_ARN }}
+      AWS_EKS_NODE_ROLE_ARN: ${{ vars.AWS_EKS_NODE_ROLE_ARN }}
+      AWS_EKS_NODE_PROFILE: ${{ vars.AWS_EKS_NODE_PROFILE }}
+      AWS_EKS_CSI_ROLE_ARN: ${{ vars.AWS_EKS_CSI_ROLE_ARN }}
+      AWS_EKS_PLUGINS_ROLE_ARN: ${{ vars.AWS_EKS_PLUGINS_ROLE_ARN }}
+      AWS_EKS_SCHEDULER_ROLE_ARN: ${{ vars.AWS_EKS_SCHEDULER_ROLE_ARN }}
+      AWS_EKS_INSTANCE_TYPE: ${{ vars.AWS_EKS_INSTANCE_TYPE }}
+      # The trust of the role cpo-sandbox-eks-plugins names this namespace.
+      CHART_NAMESPACE: ${{ vars.AWS_EKS_PLUGINS_NAMESPACE }}
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install the operator checkout and the cluster tools
+        uses: ./.github/actions/kind-tools
+
+      - name: Point kubectl at a file of the run
+        run: echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "${GITHUB_ENV}"
+
+      # The public endpoint of the cluster answers only this runner.
+      - name: Find the address of the runner
+        run: |
+          address=$(curl -fsS --retry 5 --retry-all-errors https://checkip.amazonaws.com)
+          echo "AWS_EKS_PUBLIC_CIDR=${address}/32" >> "${GITHUB_ENV}"
+
+      - name: Get the credentials of the EKS role
+        id: aws
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_EKS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      # The waits of eks-cluster.sh take at most 25 minutes. With 3 minutes
+      # of setup, 45 of the proof, 5 of the read, and 30 of the cleanup, the
+      # job stays within its 110.
+      - name: Create the EKS cluster
+        id: cluster
+        timeout-minutes: 27
+        run: hack/aws-sandbox/eks-cluster.sh "${RUN_ID}"
+
+      - name: Run the proof
+        timeout-minutes: 45
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
+        run: make journey-eks
+
+      - name: Upload the journey report
+        if: ${{ !cancelled() && steps.cluster.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: journey-eks
+          path: bin/journeys/
+          if-no-files-found: warn
+
+      - name: Read the EKS cluster
+        if: ${{ failure() && steps.cluster.outcome != 'skipped' }}
+        timeout-minutes: 5
+        run: |
+          kubectl get nodes || true
+          kubectl get pods -A -o wide || true
+          kubectl get camundaclusterclaims,pluginrequests,pluginregistrations,grants -A -o yaml || true
+          kubectl get camundaclusters,elasticsearchclusters,storageclasses,pvc,pv -A -o yaml || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -200 || true
+          # The claim of the journey and its cluster live in the namespace eks.
+          for pod in $(kubectl get pods -n eks -o name 2> /dev/null); do
+            echo "=== logs of ${pod} in eks"
+            kubectl logs -n eks "${pod}" --all-containers --tail=200 || true
+          done
+          for target in \
+            "camunda-operator-system deployment/camunda-operator-controller-manager" \
+            "camunda-operator-plugins deployment/aws" \
+            "kube-system deployment/ebs-csi-controller" \
+            "elastic-system statefulset/elastic-operator"; do
+            read -r namespace workload <<< "${target}"
+            echo "=== logs of ${workload} in ${namespace}"
+            kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
+          done
+          for instance in $(aws ec2 describe-instances --filters "Name=tag:cpo-ci-run,Values=${RUN_ID}" \
+            --query 'Reservations[].Instances[].InstanceId' --output text); do
+            echo "=== console of the node ${instance}"
+            aws ec2 get-console-output --instance-id "${instance}" --latest --output text || true
+          done
+
+      # A cancelled step can leave the first session close to its end.
+      - name: Get the credentials of the EKS role for the cleanup
+        if: ${{ always() && steps.cluster.outcome != 'skipped' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_EKS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # On a cancel, GitHub gives it only a few minutes. It fails when
+      # leftovers.sh still finds anything of the run.
+      - name: Remove what the run created
+        if: ${{ always() && steps.cluster.outcome != 'skipped' }}
+        timeout-minutes: 30
+        run: hack/aws-sandbox/eks-teardown.sh "${RUN_ID}"

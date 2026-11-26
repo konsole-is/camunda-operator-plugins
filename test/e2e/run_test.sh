@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Tests the Camunda minor of run.sh and of make journey-kind, and the
-# variables that make journey-kind passes. make test-scripts runs it.
+# Tests the Camunda minor of run.sh and of make journey-kind, the variables
+# that make journey-kind and make journey-eks pass, and that the eks journey
+# needs its EKS cluster. make test-scripts runs it.
 set -uo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -44,6 +45,22 @@ want="test/e2e/matrix/8.99.env is not in the operator checkout at $operator, so 
 run_journey 8.9
 grep -q '^kind create cluster' "$work/started" 2> /dev/null ||
   fail "a minor with a matrix file" "did not create the cluster: $(cat "$work/stderr")"
+
+name="the eks journey without EKS_CLUSTER"
+rm -f "$work/started"
+PATH="$work/bin:$PATH" OPERATOR_DIR="$operator" REPORT="$work/report.xml" CAMUNDA_MINOR=8.9 EKS_CLUSTER='' \
+  "$here/run.sh" eks > /dev/null 2> "$work/stderr"
+code=$?
+[ "$code" -eq 1 ] || fail "$name" "exit $code, want 1"
+grep -q EKS_CLUSTER "$work/stderr" || fail "$name" "stderr '$(cat "$work/stderr")' does not name EKS_CLUSTER"
+[ ! -e "$work/started" ] || fail "$name" "started a cluster: $(cat "$work/started")"
+
+# make -n prints the variables that journey-eks passes to the eks journey.
+recipe=$(RUN_ID=cpo-ci-test AWS_EKS_REGISTRY=r.example AWS_EKS_PLUGINS_ROLE_ARN=arn:p make -s -n -C "$repo" journey-eks)
+for want in 'EKS_CLUSTER="cpo-ci-test"' 'RUN_ID="cpo-ci-test"' 'AWS_EKS_REGISTRY="r.example"' \
+  'AWS_EKS_PLUGINS_ROLE_ARN="arn:p"' 'AWS_CLI_IMAGE="public.ecr.aws/aws-cli/aws-cli:' 'test/e2e/run.sh eks'; do
+  grep -qF -- "$want" <<< "$recipe" || fail "make journey-eks" "does not pass $want"
+done
 
 # make -n prints the recipe of journey-kind with the minor that it passes on.
 minor_of_make() {

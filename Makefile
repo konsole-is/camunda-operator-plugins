@@ -49,6 +49,10 @@ test: fmt vet setup-envtest envtest-crds ## Run the unit tests, the envtest suit
 test-scripts: ## Run the tests of the CI scripts, each *_test.sh in git.
 	@for t in $$(git ls-files '*_test.sh'); do echo "==> $$t"; bash "$$t" || exit 1; done
 
+.PHONY: test-sweeper
+test-sweeper: ## Run the unit tests of the scheduled sweep in hack/aws-sandbox/sweeper. They call no AWS API.
+	python3 -B -m unittest discover -s hack/aws-sandbox/sweeper -p 'test_*.py'
+
 .PHONY: test-api-ref
 test-api-ref: ## Check that a pseudo-version and a tag of the api module map to the operator ref of their CRD bases.
 	@got="$$($(MAKE) -s print-api-ref API_VERSION=v0.2.1-0.20261015084104-bb2edca2c2db)"; \
@@ -168,7 +172,7 @@ docker-buildx: ## Build the image of PLUGIN as IMG for PLATFORMS, and push or lo
 	$(CONTAINER_TOOL) buildx build $(BUILDX_OUTPUT) --platform=$(PLATFORMS) \
 		--build-arg PLUGIN=$(PLUGIN) --build-arg VERSION=$(VERSION) -t $(IMG) .
 
-##@ Kind
+##@ CI clusters
 
 # The kind targets run in CI: they create a kind cluster and fill it. Never
 # point them at a cluster that you use.
@@ -234,6 +238,17 @@ journey-kind: ## Create a kind cluster with the operator, ECK, and the plugins o
 	AWS_REGION="$(AWS_REGION)" RUN_ID="$(RUN_ID)" AWS_ACCOUNT_ID="$(AWS_ACCOUNT_ID)" \
 	AWS_OIDC_PROVIDER_ARN="$(AWS_OIDC_PROVIDER_ARN)" \
 		test/e2e/run.sh "$(JOURNEY)"
+
+# The node pulls the AWS CLI image, and Docker Hub limits the anonymous pulls
+# of one address, so journey-eks takes it from ECR Public.
+.PHONY: journey-eks
+journey-eks: ## Install the operator, ECK, and the chart aws on the EKS cluster of RUN_ID, and run the eks journey. CI only.
+	EKS_CLUSTER="$(RUN_ID)" OPERATOR_DIR="$(OPERATOR_DIR)" CHART_NAMESPACE="$(CHART_NAMESPACE)" \
+	REPORT="$(LOCALBIN)/journeys/eks.xml" CAMUNDA_MINOR="$(CAMUNDA_MINOR)" \
+	AWS_CLI_IMAGE="public.ecr.aws/aws-cli/aws-cli:$(AWS_CLI_VERSION)" \
+	AWS_REGION="$(AWS_REGION)" RUN_ID="$(RUN_ID)" AWS_ACCOUNT_ID="$(AWS_ACCOUNT_ID)" \
+	AWS_EKS_REGISTRY="$(AWS_EKS_REGISTRY)" AWS_EKS_PLUGINS_ROLE_ARN="$(AWS_EKS_PLUGINS_ROLE_ARN)" \
+		test/e2e/run.sh eks
 
 ##@ Dependencies
 

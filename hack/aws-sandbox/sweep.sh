@@ -7,12 +7,15 @@
 #   sweep.sh --run <run-id>          what that run created, at any age
 #   sweep.sh --older-than <hours>    what any run created that many hours ago
 #
-# It removes a role, policy, OIDC provider, or KMS key only when it has the
-# tag. With --older-than, it also removes a cpo-ci-* bucket without the tag
-# that is that many hours old. Needs AWS_REGION and the credentials of the CI
+# It removes a policy, OIDC provider, or KMS key only when it has the tag,
+# and a role only when it has the tag or the trust below. With --older-than,
+# it also removes a cpo-ci-* bucket without the tag that is that many hours
+# old. In both modes, it also removes a cpo-ci-* role of any run and age that
+# trusts a principal that no run trusts, as trust.jq reads it. Needs AWS_REGION and the credentials of the CI
 # role. With AWS_KMS_REPLICA_REGION, it also schedules the keys there, which
 # hold the replicas of multi-Region keys. It exits 1 when a removal or the
-# listing of a resource type failed.
+# listing of a resource type failed. sweeper/sweeper.py holds the same rules
+# for the hourly sweep in AWS: change both.
 set -euo pipefail
 
 run=""
@@ -26,6 +29,8 @@ case ${1:-} in
     ;;
 esac
 : "${AWS_REGION:?}"
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+account=$(aws sts get-caller-identity --query Account --output text)
 
 cutoff=0
 if [ -n "${hours}" ]; then
@@ -83,20 +88,44 @@ step() {
   fi
 }
 
+# iam_call runs an aws call and prints its output. It returns 2 when the
+# resource is gone: the sweep of another run can delete it at the same time.
+iam_call() {
+  local err out
+  err=$(mktemp)
+  if out=$(aws "$@" 2> "${err}"); then
+    rm -f "${err}"
+    printf '%s' "${out}"
+    return 0
+  fi
+  if grep -q NoSuchEntity "${err}"; then
+    rm -f "${err}"
+    return 2
+  fi
+  cat "${err}" >&2
+  rm -f "${err}"
+  return 1
+}
+
 # The delete_* functions run inside the condition of step, where errexit
 # is off, so each command ends the function on its own failure.
 
+# delete_role succeeds when the role is gone before or during its delete.
 delete_role() {
   local role=$1 names p
-  names=$(aws iam list-role-policies --role-name "${role}" --query 'PolicyNames[]' --output text) || return 1
+  names=$(iam_call iam list-role-policies --role-name "${role}" --query 'PolicyNames[]' --output text) ||
+    { [ $? -eq 2 ]; return; }
   for p in ${names}; do
-    aws iam delete-role-policy --role-name "${role}" --policy-name "${p}" || return 1
+    # A policy that is gone needs no removal. delete-role tells if the role
+    # is gone too.
+    iam_call iam delete-role-policy --role-name "${role}" --policy-name "${p}" > /dev/null || [ $? -eq 2 ] || return 1
   done
-  names=$(aws iam list-attached-role-policies --role-name "${role}" --query 'AttachedPolicies[].PolicyArn' --output text) || return 1
+  names=$(iam_call iam list-attached-role-policies --role-name "${role}" --query 'AttachedPolicies[].PolicyArn' \
+    --output text) || { [ $? -eq 2 ]; return; }
   for p in ${names}; do
-    aws iam detach-role-policy --role-name "${role}" --policy-arn "${p}" || return 1
+    iam_call iam detach-role-policy --role-name "${role}" --policy-arn "${p}" > /dev/null || [ $? -eq 2 ] || return 1
   done
-  aws iam delete-role --role-name "${role}"
+  iam_call iam delete-role --role-name "${role}" > /dev/null || [ $? -eq 2 ]
 }
 
 delete_policy() {
@@ -135,17 +164,24 @@ delete_key() {
 }
 
 # Roles before policies, so that the policies are detached.
-if ! roles=$(aws iam list-roles --query "Roles[?starts_with(RoleName, 'cpo-ci-')].[RoleName, CreateDate]" --output text); then
+if ! roles=$(aws iam list-roles --output json | jq -r -L "${here}" --arg account "${account}" \
+  --slurpfile rules "${here}/sweep-rules.json" 'include "trust";
+  .Roles[] | select(.RoleName | startswith("cpo-ci-"))
+  | [.RoleName, .CreateDate, (.AssumeRolePolicyDocument | foreign($account; $rules[0]))] | @tsv'); then
   echo "failed to list: roles" >&2
   failed=1
 fi
-while read -r role created; do
+while read -r role created foreign; do
   [ -n "${role}" ] || continue
   if ! tag=$(tags iam list-role-tags --role-name "${role}" | run_tag); then
     failed=1
     continue
   fi
-  if matches "${tag}" "${created}"; then
+  # A run can rewrite the trust of a role of another run.
+  if [ "${foreign}" = true ]; then
+    echo "role ${role} (${tag:-no tag}) trusts a principal that no run trusts"
+    step delete_role "${role}"
+  elif matches "${tag}" "${created}"; then
     echo "role ${role} (${tag})"
     step delete_role "${role}"
   fi
@@ -203,17 +239,21 @@ while read -r bucket created; do
 done <<<"${buckets}"
 
 for region in "${AWS_REGION}" ${AWS_KMS_REPLICA_REGION:-}; do
-  if ! keys=$(aws kms list-keys --region "${region}" --query 'Keys[].KeyId' --output text); then
+  if ! keys=$("${here}/run-keys.sh" "${region}"); then
     echo "failed to list: keys in ${region}" >&2
     failed=1
+    keys=""
   fi
-  for key in ${keys}; do
-    # The boundary allows reads only of tagged keys; others answer AccessDenied.
-    tag=$(aws kms list-resource-tags --region "${region}" --key-id "${key}" --output json 2>/dev/null | run_tag) || continue
-    if ! metadata=$(aws kms describe-key --region "${region}" --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text); then
-      failed=1
+  while read -r key tag; do
+    [ -n "${key}" ] || continue
+    err=$(mktemp)
+    if ! metadata=$(aws kms describe-key --region "${region}" --key-id "${key}" --query 'KeyMetadata.[KeyState, CreationDate]' --output text 2>"${err}"); then
+      # The tagging index can still list a key that KMS deleted.
+      grep -q NotFoundException "${err}" || { cat "${err}" >&2; failed=1; }
+      rm -f "${err}"
       continue
     fi
+    rm -f "${err}"
     read -r state created <<<"${metadata}"
     # A primary key waits in PendingReplicaDeletion until its replicas are gone.
     case ${state} in PendingDeletion | PendingReplicaDeletion) continue ;; esac
@@ -221,7 +261,7 @@ for region in "${AWS_REGION}" ${AWS_KMS_REPLICA_REGION:-}; do
       echo "KMS key ${key} in ${region} (${tag})"
       step delete_key "${region}" "${key}"
     fi
-  done
+  done <<<"${keys}"
 done
 
 exit ${failed}

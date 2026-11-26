@@ -1,29 +1,62 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016 # $run is a variable of jq, not of the shell
+# shellcheck disable=SC2016 # $run and $vpc are variables of jq, not of the shell
 # Prints each role, managed policy, OIDC provider, and bucket that one CI
 # run left in the sandbox account, one line "left: <kind> <name>" each. It
-# reads names, not tags, so it finds also an object that lost its tag.
+# reads names, not tags, so it finds also an object that lost its tag. It
+# also prints each cpo-ci-* role of any run that trusts a principal that no
+# run trusts, as trust.jq reads it.
 #
-# Usage: leftovers.sh <run-id>
+# Usage: leftovers.sh [--eks] [--all-regions] <run-id>
 #
-# Needs the credentials of the CI role. It exits 1 when it printed a line or
-# a listing failed.
+# --eks also prints what an EKS run left in AWS_REGION: its EKS cluster, EC2
+# instance, EBS volumes that EC2 is not deleting, images, schedules, log
+# groups, KMS keys that are not pending deletion, and KMS aliases. It prints each network interface and load
+# balancer in the VPC AWS_EKS_VPC_ID, each cluster security group there whose
+# cluster is gone, and each NAT gateway and Elastic IP of the region, because
+# no run creates one. --all-regions also prints the EKS clusters, EC2
+# instances, EBS volumes, and KMS keys of the run in each other region, as
+# "<kind> in <region>". It needs administrator credentials.
+#
+# Needs the credentials of the CI role, or of the EKS role with --eks. It
+# exits 1 when it printed a line or a listing failed, and 2 on wrong
+# arguments.
 set -euo pipefail
 
-run=${1:?usage: leftovers.sh <run-id>}
+eks=false
+all_regions=false
+while [ $# -gt 0 ]; do
+  case $1 in
+    --eks) eks=true ;;
+    --all-regions) all_regions=true ;;
+    *) break ;;
+  esac
+  shift
+done
+run=${1:-}
 if ! [[ ${run} =~ ^cpo-ci-[a-z0-9-]{1,40}$ ]]; then
-  echo "the run ID must match cpo-ci-[a-z0-9-]{1,40}: ${run}" >&2
+  echo "usage: leftovers.sh [--eks] [--all-regions] <run-id>, where the run ID matches cpo-ci-[a-z0-9-]{1,40}: ${run}" >&2
+  exit 2
+fi
+if ${eks} && { [ -z "${AWS_REGION:-}" ] || [ -z "${AWS_EKS_VPC_ID:-}" ]; }; then
+  echo "--eks needs AWS_REGION and AWS_EKS_VPC_ID" >&2
+  exit 2
+fi
+if ${all_regions} && ! ${eks}; then
+  echo "--all-regions needs --eks" >&2
   exit 2
 fi
 
 failed=0
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+account=$(aws sts get-caller-identity --query Account --output text)
 
 # left <kind> <jq filter> <aws arguments...> prints the names of the listing
 # that belong to the run.
 left() {
   local kind=$1 filter=$2 names
   shift 2
-  if ! names=$(aws "$@" --output json | jq -r --arg run "${run}" "${filter}"); then
+  if ! names=$(aws "$@" --output json | jq -r -L "${here}" --arg run "${run}" --arg vpc "${AWS_EKS_VPC_ID:-}" \
+    --arg account "${account}" --slurpfile rules "${here}/sweep-rules.json" "include \"trust\"; ${filter}"); then
     echo "failed to list: ${kind}" >&2
     failed=1
     return
@@ -35,11 +68,121 @@ left() {
   done <<< "${names}"
 }
 
+# The jq filters of the EKS kinds that --all-regions reads in each region.
+# The value of the run tag is read in any case of its key.
+run_tag='([(.Tags // [])[] | select((.Key | ascii_downcase) == "cpo-ci-run") | .Value][0])'
+instances_filter=".Reservations[].Instances[] | select(.State.Name != \"terminated\" and ${run_tag} == \$run) | .InstanceId"
+volumes_filter=".Volumes[] | select(.State != \"deleting\" and ${run_tag} == \$run) | .VolumeId"
+
+# clusters_left <region> <kind> prints each EKS cluster of the run in region:
+# the cluster with the name of the run, and each cluster with its run tag.
+clusters_left() {
+  local region=$1 kind=$2 names name tag err
+  if ! names=$(aws eks list-clusters --region "${region}" --output json | jq -r '.clusters[]'); then
+    echo "failed to list: ${kind}" >&2
+    failed=1
+    return
+  fi
+  err=$(mktemp)
+  for name in ${names}; do
+    if [ "${name}" != "${run}" ]; then
+      if ! tag=$(aws eks describe-cluster --region "${region}" --name "${name}" --output json 2> "${err}" |
+        jq -r '(.cluster.tags // {} | with_entries(.key |= ascii_downcase))["cpo-ci-run"] // ""'); then
+        # A cluster that is gone since the listing is no leftover.
+        grep -q ResourceNotFoundException "${err}" || { echo "failed to read: ${kind} ${name}" >&2; failed=1; }
+        continue
+      fi
+      [ "${tag}" = "${run}" ] || continue
+    fi
+    echo "left: ${kind} ${name}"
+    failed=1
+  done
+  rm -f "${err}"
+}
+
+# keys_left <region> <kind> prints each KMS key of the run in region that is
+# not pending deletion.
+keys_left() {
+  local region=$1 kind=$2 keys key tag state err
+  if ! keys=$("${here}/run-keys.sh" "${region}"); then
+    echo "failed to list: ${kind}" >&2
+    failed=1
+    return
+  fi
+  err=$(mktemp)
+  while read -r key tag; do
+    [ -n "${key}" ] && [ "${tag}" = "${run}" ] || continue
+    if ! state=$(aws kms describe-key --region "${region}" --key-id "${key}" --output json 2> "${err}" |
+      jq -r .KeyMetadata.KeyState); then
+      # The tagging index can still list a key that KMS deleted.
+      grep -q NotFoundException "${err}" || { echo "failed to read: ${kind} ${key}" >&2; failed=1; }
+      continue
+    fi
+    case ${state} in PendingDeletion | PendingReplicaDeletion) continue ;; esac
+    echo "left: ${kind} ${key}"
+    failed=1
+  done <<< "${keys}"
+  rm -f "${err}"
+}
+
 # The dash after the run ID keeps cpo-ci-1-1-10 out of the run cpo-ci-1-1-1.
 left role '.Roles[].RoleName | select(startswith($run + "-"))' iam list-roles
+left "role with a trust of no run" \
+  '.Roles[] | select((.RoleName | startswith("cpo-ci-")) and (.AssumeRolePolicyDocument | foreign($account; $rules[0]))) | .RoleName' \
+  iam list-roles
 left policy '.Policies[].PolicyName | select(startswith($run + "-"))' iam list-policies --scope Local
 left "OIDC provider" '.OpenIDConnectProviderList[].Arn | select(endswith("/" + $run))' \
   iam list-open-id-connect-providers
 left bucket '.Buckets[].Name | select(startswith($run + "-"))' s3api list-buckets
+
+if ${eks}; then
+  clusters_left "${AWS_REGION}" "EKS cluster"
+  left "EC2 instance" "${instances_filter}" ec2 describe-instances
+  left "EBS volume" "${volumes_filter}" ec2 describe-volumes
+  left "network interface" '.NetworkInterfaces[].NetworkInterfaceId' \
+    ec2 describe-network-interfaces --filters "Name=vpc-id,Values=${AWS_EKS_VPC_ID}"
+  # A cluster of a run can have another name than the run.
+  if ! CLUSTERS=$(aws eks list-clusters --output json | jq -c '.clusters'); then
+    echo "failed to list: EKS clusters" >&2
+    failed=1
+    CLUSTERS='[]'
+  fi
+  export CLUSTERS
+  left "security group" '.SecurityGroups[] | select(.GroupName | startswith("eks-cluster-sg-"))
+    | select(([(.Tags // [])[] | select(.Key == "aws:eks:cluster-name") | .Value][0] //
+    (.GroupName | ltrimstr("eks-cluster-sg-") | sub("-[^-]*$"; ""))) as $c | $ENV.CLUSTERS | fromjson | index($c) == null) | .GroupId' \
+    ec2 describe-security-groups --filters "Name=vpc-id,Values=${AWS_EKS_VPC_ID}"
+  left "NAT gateway" '.NatGateways[].NatGatewayId' \
+    ec2 describe-nat-gateways --filter "Name=state,Values=pending,available,deleting,failed"
+  left "Elastic IP" '.Addresses[] | .AllocationId // .PublicIp' ec2 describe-addresses
+  left "load balancer" '.LoadBalancerDescriptions[] | select(.VPCId == $vpc) | .LoadBalancerName' \
+    elb describe-load-balancers
+  left "load balancer" '.LoadBalancers[] | select(.VpcId == $vpc) | .LoadBalancerName' elbv2 describe-load-balancers
+  left "log group" '.logGroups[].logGroupName' logs describe-log-groups --log-group-name-prefix "/aws/eks/${run}/"
+  # terraform/aws-sandbox/eks-registry.tf creates these two repositories.
+  for repo in cpo-sandbox-eks/camunda-operator cpo-sandbox-eks/aws; do
+    left image ".imageDetails[].imageTags[]? | select(. == \$run) | \"${repo}:\" + ." \
+      ecr describe-images --repository-name "${repo}"
+  done
+  left schedule '.Schedules[].Name | select(. == $run + "-delete-cluster" or . == $run + "-terminate-nodes")' \
+    scheduler list-schedules --group-name cpo-sandbox-eks --name-prefix "${run}-"
+  keys_left "${AWS_REGION}" "KMS key"
+  left "KMS alias" '.Aliases[].AliasName | select(startswith("alias/" + $run + "/"))' kms list-aliases
+fi
+
+if ${all_regions}; then
+  if ! regions=$(aws ec2 describe-regions --output json | jq -r '.Regions[].RegionName'); then
+    echo "failed to list: regions" >&2
+    failed=1
+  fi
+  for region in ${regions:-}; do
+    [ "${region}" != "${AWS_REGION}" ] || continue
+    clusters_left "${region}" "EKS cluster in ${region}"
+    left "EC2 instance in ${region}" "${instances_filter}" \
+      ec2 describe-instances --region "${region}"
+    left "EBS volume in ${region}" "${volumes_filter}" ec2 describe-volumes --region "${region}"
+    keys_left "${region}" "KMS key in ${region}"
+  done
+fi
 
 exit "${failed}"
