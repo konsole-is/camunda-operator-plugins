@@ -159,8 +159,8 @@ github.com/klauspost/compress v1.20.1 h1:T7kKElXUMXrUJ2E9QhQhxFtcK5rPyLdsGZvdbLM
 github.com/klauspost/compress v1.20.1/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/konsole-is/camunda-operator/api v0.2.1-0.20261116132614-b2ba1adc8be8 h1:SrstgbV9NtAEa7i7oRGNi9Nm1uuPFZYYC7Lf9y+fYkg=
 github.com/konsole-is/camunda-operator/api v0.2.1-0.20261116132614-b2ba1adc8be8/go.mod h1:w7tX2bfA6KlrcPMxi4+ZMFplRPtvY3/cpXUB9UEd8WA=
-github.com/konsole-is/camunda-operator/conformance v0.0.0-20261123221029-9d6c4182d0e8 h1:ldU/eEQtcOkYAmZgY3O18gH6bsclnDqOZe0w9Ld3HLQ=
-github.com/konsole-is/camunda-operator/conformance v0.0.0-20261123221029-9d6c4182d0e8/go.mod h1:Lje7z/XIz4qzN0T8MkrZxigUnpvLGD/pKz2XER20dy8=
+github.com/konsole-is/camunda-operator/conformance v0.0.0-20261125231704-34046effbbdd h1:zCjhD5StObnWtPPbWKiVAnem3PJQ34Ma+0AKxUbKdwc=
+github.com/konsole-is/camunda-operator/conformance v0.0.0-20261125231704-34046effbbdd/go.mod h1:Lje7z/XIz4qzN0T8MkrZxigUnpvLGD/pKz2XER20dy8=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
 github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
