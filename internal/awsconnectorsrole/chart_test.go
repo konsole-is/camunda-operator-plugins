@@ -29,19 +29,21 @@ import (
 )
 
 func TestChartPolicyARNPatternTakesOnlyWhatIAMAccepts(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "charts", "aws-connectors-role", "values.yaml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "charts", "aws", "values.yaml"))
 	require.NoError(t, err)
 	var values struct {
-		Registrations []struct {
-			Name       string `json:"name"`
-			Parameters struct {
-				Properties map[string]struct {
-					Items struct {
-						Pattern string `json:"pattern"`
-					} `json:"items"`
-				} `json:"properties"`
-			} `json:"parameters"`
-		} `json:"registrations"`
+		ConnectorsRole struct {
+			Registrations []struct {
+				Name       string `json:"name"`
+				Parameters struct {
+					Properties map[string]struct {
+						Items struct {
+							Pattern string `json:"pattern"`
+						} `json:"items"`
+					} `json:"properties"`
+				} `json:"parameters"`
+			} `json:"registrations"`
+		} `json:"connectorsRole"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &values))
 
@@ -64,7 +66,7 @@ func TestChartPolicyARNPatternTakesOnlyWhatIAMAccepts(t *testing.T) {
 	}
 
 	var checked int
-	for _, r := range values.Registrations {
+	for _, r := range values.ConnectorsRole.Registrations {
 		for _, field := range []string{"managedPolicyArns", "extraPolicyArns"} {
 			pattern := r.Parameters.Properties[field].Items.Pattern
 			if pattern == "" {

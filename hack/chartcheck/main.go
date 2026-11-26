@@ -18,14 +18,27 @@ limitations under the License.
 // rule of CONTRIBUTING.md. make chart-verify pipes helm template into it.
 //
 // The chart must render a Deployment that runs as a ServiceAccount of the
-// chart, a ClusterRole that grants the verb serve on pluginregistrations
-// with resourceNames set to exactly the registrations of the values, and a
-// ClusterRoleBinding of that ClusterRole to the controller ServiceAccount. It
-// must render no ValidatingAdmissionPolicy and no
+// chart, ClusterRoles that grant the verb serve on pluginregistrations with
+// resourceNames set to exactly the registrations of the values, and
+// ClusterRoleBindings of those ClusterRoles to the controller
+// ServiceAccount. It must render no ValidatingAdmissionPolicy and no
 // ValidatingAdmissionPolicyBinding, because the operator chart holds the one
 // grant admission policy.
 //
-// Usage: helm template ... | chartcheck -values <values file> -namespace <release namespace>
+// The values are one or more files, merged in order as helm merges its -f
+// files. The registrations of the values are the names of the top-level
+// registrations, and the names of <block>.registrations for each top-level
+// block whose enabled is true: a chart with more than one controller serves
+// the registrations of each controller that is on.
+//
+// With -names, chartcheck checks nothing. It prints one line for each
+// rendered object, and one for the leader election Lease of each Deployment,
+// so that make chart-verify can compare the names of two releases.
+//
+// Usage:
+//
+//	helm template ... | chartcheck -values <values file> [-values <values file>]... -namespace <release namespace>
+//	helm template ... | chartcheck -names -namespace <release namespace>
 package main
 
 import (
@@ -33,7 +46,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,22 +57,42 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// valueFiles are the files of a repeated -values flag, in the order given.
+type valueFiles []string
+
+func (v *valueFiles) String() string {
+	return strings.Join(*v, ",")
+}
+
+func (v *valueFiles) Set(file string) error {
+	*v = append(*v, file)
+	return nil
+}
+
 func main() {
-	values := flag.String(
+	var values valueFiles
+	flag.Var(
+		&values,
 		"values",
-		"",
-		"the values file of the render; its registrations[].name are the registrations of the chart",
+		"a values file of the render; repeat it for each -f of helm template, in the same order",
 	)
+	names := flag.Bool("names", false, "print the name of each object and Lease of the render instead of the check")
 	namespace := flag.String("namespace", "", "the release namespace of the render")
 	flag.Parse()
 
-	if err := run(os.Stdin, *values, *namespace); err != nil {
+	var err error
+	if *names {
+		err = printNames(os.Stdin, *namespace)
+	} else {
+		err = run(os.Stdin, values, *namespace)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "chartcheck:", err)
 		os.Exit(1)
 	}
 }
 
-func run(input io.Reader, values, namespace string) error {
+func run(input io.Reader, values []string, namespace string) error {
 	registrations, err := readRegistrations(values)
 	if err != nil {
 		return err
@@ -79,28 +115,74 @@ func run(input io.Reader, values, namespace string) error {
 	return nil
 }
 
-// readRegistrations returns the registrations[].name of a values file.
-func readRegistrations(file string) ([]string, error) {
-	data, err := os.ReadFile(file)
+func printNames(input io.Reader, namespace string) error {
+	objects, err := readObjects(input)
 	if err != nil {
-		return nil, fmt.Errorf("reading the values %s: %w", file, err)
+		return err
 	}
 
-	var values struct {
-		Registrations []struct {
-			Name string `json:"name"`
-		} `json:"registrations"`
-	}
-	if err := yaml.Unmarshal(data, &values); err != nil {
-		return nil, fmt.Errorf("decoding the values %s: %w", file, err)
+	for _, line := range objectNames(objects, namespace) {
+		fmt.Println(line)
 	}
 
-	names := make([]string, 0, len(values.Registrations))
-	for _, r := range values.Registrations {
-		names = append(names, r.Name)
+	return nil
+}
+
+// readRegistrations returns the registrations of the values files, merged
+// in order: the names of the top-level registrations, then the names of
+// <block>.registrations for each top-level block whose enabled is true, in
+// the order of the block keys.
+func readRegistrations(files []string) ([]string, error) {
+	merged := map[string]any{}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("reading the values %s: %w", file, err)
+		}
+
+		var values map[string]any
+		if err := yaml.Unmarshal(data, &values); err != nil {
+			return nil, fmt.Errorf("decoding the values %s: %w", file, err)
+		}
+		mergeValues(merged, values)
+	}
+
+	names := registrationNames(merged["registrations"])
+	for _, key := range slices.Sorted(maps.Keys(merged)) {
+		block, ok := merged[key].(map[string]any)
+		if ok && block["enabled"] == true {
+			names = append(names, registrationNames(block["registrations"])...)
+		}
 	}
 
 	return names, nil
+}
+
+// mergeValues merges src into dst as helm merges a later values file: a map
+// merges key by key, and any other value replaces the value of dst.
+func mergeValues(dst, src map[string]any) {
+	for key, value := range src {
+		from, isMap := value.(map[string]any)
+		into, wasMap := dst[key].(map[string]any)
+		if isMap && wasMap {
+			mergeValues(into, from)
+			continue
+		}
+		dst[key] = value
+	}
+}
+
+// registrationNames returns the name of each item of a registrations list.
+func registrationNames(list any) []string {
+	items, _ := list.([]any)
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		registration, _ := item.(map[string]any)
+		name, _ := registration["name"].(string)
+		names = append(names, name)
+	}
+
+	return names
 }
 
 // readObjects decodes a stream of YAML documents. It skips an empty

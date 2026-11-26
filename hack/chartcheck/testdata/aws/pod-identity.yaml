@@ -1,0 +1,6 @@
+# aws-identity with EKS Pod Identity, under the registration of that mode.
+mode: podIdentity
+identity:
+  enabled: true
+  registrations:
+    - name: aws-pod-identity

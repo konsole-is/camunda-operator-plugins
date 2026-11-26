@@ -164,8 +164,8 @@ func newPlugin(opts Options) (*Plugin, error) {
 	if err := awskit.CheckRolePrefix(opts.RoleNamePrefix); err != nil {
 		return nil, err
 	}
-	// IAM role names are unique without regard to case. The chart does not
-	// know the prefix of aws-identity, so this checks its default only.
+	// IAM role names are unique without regard to case. The options do not
+	// hold the prefix of aws-identity, so this checks its default only.
 	if strings.EqualFold(opts.RoleNamePrefix, awsIdentityRolePrefix) {
 		return nil, fmt.Errorf(
 			"role name prefix %q: aws-identity names its roles with it, so both plugins would write one role",

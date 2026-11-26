@@ -1,35 +1,41 @@
 #!/usr/bin/env bash
 # Runs the conformance suite of the operator against one plugin on a new kind
 # cluster. It creates the cluster with the operator, runs setup.sh of the
-# plugin, installs the chart of the plugin with its values.yaml, and runs
-# plugin-conformance with config.yaml and then with each config-<name>.yaml.
-# Last it runs check.sh of the plugin, when the plugin has one. CI only: the
+# plugin, installs the chart of the plugin with its values.yaml as the
+# release <plugin>, and then with each values-<release>.yaml as the release
+# <release>. It runs plugin-conformance with config.yaml and then with each
+# config-<name>.yaml. Last it runs check.sh, when there is one. CI only: the
 # cluster stays after the run, for the logs.
 #
-# render.sh fills the variables of the run into values.yaml and each config
-# first. It refuses a file that names a variable without a value. setup.sh
-# can add a variable with a line NAME=value in the file $RUN_VARS, and
-# render.sh fills it in each file that it renders after that line. check.sh
-# gets RUN_VARS too.
+# The files come from test/conformance/<plugin>/, or from
+# test/conformance/<plugin>/<set>/ when a set is given. A plugin with sets
+# runs each set as one job.
 #
-# Usage: run.sh <plugin> (make conformance-kind runs it)
+# render.sh fills the variables of the run into each values file and each
+# config first. It refuses a file that names a variable without a value.
+# setup.sh can add a variable with a line NAME=value in the file $RUN_VARS,
+# and render.sh fills it in each file that it renders after that line.
+# check.sh gets RUN_VARS too.
+#
+# Usage: run.sh <plugin> [<set>] (make conformance-kind runs it)
 #
 # Inputs:
 #   KIND_CLUSTER     the name of the kind cluster (required)
 #   OPERATOR_DIR     the checkout of the operator (required, see up.sh)
-#   CHART_NAMESPACE  the namespace of the plugin release (required)
+#   CHART_NAMESPACE  the namespace of the plugin releases (required)
 #   REPORT           the JUnit report of config.yaml (required). The report
 #                    of config-<name>.yaml ends in -<name>.xml instead.
-# setup.sh and check.sh of the plugin read the other variables that they
-# need. It exits 1 when a suite or check.sh failed.
+# setup.sh and check.sh read the other variables that they need. It exits 1
+# when a suite or check.sh failed.
 set -euo pipefail
 
-plugin=${1:?usage: run.sh <plugin>}
+plugin=${1:?usage: run.sh <plugin> [<set>]}
+set=${2:-}
 : "${REPORT:?REPORT is not set}"
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-dir=$repo/test/conformance/$plugin
+dir=$repo/test/conformance/$plugin${set:+/$set}
 for f in setup.sh values.yaml config.yaml; do
-  [ -f "$dir/$f" ] || { echo "test/conformance/$plugin/$f is missing" >&2; exit 1; }
+  [ -f "$dir/$f" ] || { echo "${dir#"$repo"/}/$f is missing" >&2; exit 1; }
 done
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -41,6 +47,13 @@ export RUN_VARS=$work/run-vars
 "$dir/setup.sh"
 "$repo/test/conformance/render.sh" "$dir/values.yaml" > "$work/values.yaml"
 "$repo/test/kind/plugin.sh" "$plugin" "$work/values.yaml"
+for values in "$dir"/values-*.yaml; do
+  [ -f "$values" ] || continue
+  release=$(basename "$values" .yaml)
+  release=${release#values-}
+  "$repo/test/conformance/render.sh" "$values" > "$work/values-$release.yaml"
+  "$repo/test/kind/plugin.sh" "$plugin" "$work/values-$release.yaml" "$release"
+done
 
 mkdir -p "$(dirname "$REPORT")"
 cd "$repo"
@@ -64,7 +77,7 @@ for config in "$dir"/config.yaml "$dir"/config-*.yaml; do
 done
 
 if [ -x "$dir/check.sh" ]; then
-  echo "==> Running check.sh of $plugin"
+  echo "==> Running check.sh of ${dir#"$repo"/test/conformance/}"
   "$dir/check.sh" || failed=1
 fi
 exit "$failed"

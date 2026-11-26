@@ -1,0 +1,4 @@
+# The chart values of the conformance run on kind. Only aws-ebs is on: it
+# makes no AWS call, so the release needs no AWS credentials and no region.
+ebs:
+  enabled: true

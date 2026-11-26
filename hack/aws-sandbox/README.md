@@ -4,7 +4,7 @@ The CI of the AWS plugins runs against a real AWS sandbox account. [`terraform/a
 
 ## A run in CI
 
-The job `conformance-aws` of `.github/workflows/conformance.yml` uses these scripts. `CONTRIBUTING.md` tells how a plugin gets such a job. A job that uses AWS has the permission `id-token: write` and selects its environment as `.github/workflows/aws-sandbox.yml` does. It gets the credentials with `aws-actions/configure-aws-credentials` and the role `vars.AWS_ROLE_ARN`.
+The job `conformance-aws` of `.github/workflows/conformance.yml` uses these scripts. It has one row for each set of `test/conformance/aws/` that runs in the sandbox: `single-release` and `multi-release`. `CONTRIBUTING.md` tells how a plugin gets such a row. A job that uses AWS has the permission `id-token: write` and selects its environment as `.github/workflows/aws-sandbox.yml` does. It gets the credentials with `aws-actions/configure-aws-credentials` and the role `vars.AWS_ROLE_ARN`.
 
 The job `awskit-sandbox` of the same workflow runs no kind cluster. It uses only the credentials, the run ID, and `teardown.sh` of step 7. Steps 1 to 6 are for a run with a kind cluster.
 
@@ -36,10 +36,11 @@ Give each run an ID that starts with `cpo-ci-`, for example `cpo-ci-${{ github.r
     test/kind/pod-identity-webhook.sh
     ```
 
-5. Create the role of each controller that calls AWS, with `plugin-role.sh <run ID> <name> <namespace> <service account> <policy file>`. The role `<run ID>-<name>` trusts only the ServiceAccount, and gets the managed policy `<run ID>-<name>` from the policy file. For the controller of aws-kms:
+5. Create the role of each release that calls AWS, with `plugin-role.sh <run ID> <name> <namespace> <service account> <policy file>...`. The role `<run ID>-<name>` trusts only the ServiceAccount. Each policy file becomes one managed policy on the role: `<run ID>-<name>` for one file, and `<run ID>-<name>-<x>` for each file `controller-policy-<x>.json` of more. For the release aws with aws-identity and aws-kms on:
 
     ```sh
-    hack/aws-sandbox/plugin-role.sh "${RUN_ID}" aws-kms camunda-operator-plugins aws-kms controller-policy.json
+    hack/aws-sandbox/plugin-role.sh "${RUN_ID}" aws camunda-operator-plugins aws \
+      controller-policy-identity.json controller-policy-kms.json
     ```
 
 6. Run the tests. A role of the run trusts the provider `oidc-provider/<bucket host>/<run ID>`, which `issuer.sh up` prints.

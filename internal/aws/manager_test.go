@@ -27,10 +27,12 @@ import (
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
 	"github.com/konsole-is/camunda-operator-plugins/internal/aws"
+	"github.com/konsole-is/camunda-operator-plugins/internal/awsconnectorsrole"
+	"github.com/konsole-is/camunda-operator-plugins/internal/awsidentity"
 	"github.com/konsole-is/camunda-operator-plugins/internal/awskms"
 )
 
-// unreachable is a config with no API server behind it. Both refusals come
+// unreachable is a config with no API server behind it. Each refusal comes
 // before the manager talks to a server.
 var unreachable = &rest.Config{Host: "https://127.0.0.1:1"}
 
@@ -60,4 +62,33 @@ func oneRegistration(name string) []pluginsv1alpha1.PluginRegistration {
 
 func validKMSSettings() awskms.Settings {
 	return awskms.Settings{Region: "eu-west-1", Partition: "aws", Account: "111122223333", AliasPrefix: "camunda"}
+}
+
+func TestNewManagerRefusesOneRolePrefixForIdentityAndConnectorsRoles(t *testing.T) {
+	_, err := aws.NewManager(unreachable, aws.Options{
+		HealthProbeAddress: "0",
+		MetricsAddress:     "0",
+		Identity:           &awsidentity.Options{RoleNamePrefix: "run-1-hub"},
+		ConnectorsRole: &awsconnectorsrole.Options{
+			Registrations:  oneRegistration(awsconnectorsrole.RegistrationRole),
+			RoleNamePrefix: "RUN-1-HUB",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `role name prefix "RUN-1-HUB"`)
+}
+
+func TestNewManagerAllowsOneRolePrefixWhenConnectorsServesOnlyExistingRoles(t *testing.T) {
+	_, err := aws.NewManager(unreachable, aws.Options{
+		HealthProbeAddress: "0",
+		MetricsAddress:     "0",
+		Identity:           &awsidentity.Options{RoleNamePrefix: "camunda"},
+		ConnectorsRole: &awsconnectorsrole.Options{
+			Registrations:  oneRegistration(awsconnectorsrole.RegistrationExistingRole),
+			RoleNamePrefix: "camunda",
+		},
+	})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "role name prefix")
+	assert.Contains(t, err.Error(), "setting up aws-identity")
 }

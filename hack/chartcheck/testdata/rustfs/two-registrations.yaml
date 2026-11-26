@@ -1,0 +1,5 @@
+# make chart-verify renders each chart with these values too, so the serve
+# rule must follow the registrations of the values, not a fixed name.
+registrations:
+  - name: skeleton-public
+  - name: skeleton-internal

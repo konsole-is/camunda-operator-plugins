@@ -1,0 +1,6 @@
+# refuses: the registration "aws-kms-key" is in both kms and s3
+kms: {enabled: true}
+s3:
+  enabled: true
+  registrations:
+    - name: aws-kms-key

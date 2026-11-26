@@ -1,0 +1,6 @@
+# Every controller but ebs is on, so the chart serves no registration of ebs.
+identity: {enabled: true}
+connectorsRole: {enabled: true}
+kms: {enabled: true}
+ebs: {enabled: false}
+s3: {enabled: true}

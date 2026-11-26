@@ -1,0 +1,3 @@
+# refuses: the registration aws-irsa needs mode irsa
+mode: podIdentity
+identity: {enabled: true}

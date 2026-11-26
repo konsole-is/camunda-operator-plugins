@@ -2,7 +2,7 @@
 
 The aws-identity plugin serves the `cloud-identity` section of the operator. It gives each Camunda cluster on EKS one IAM role, and the pods of the cluster run as that role. Other plugins do not create roles. They write Grants, and this plugin puts each allowed Grant on the role of its cluster. It serves through [pluginkit](../pluginkit.md).
 
-The chart installs one registration, by the chart value `mode`:
+aws-identity is a controller of the chart [`aws`](aws.md), with the values block `identity`. It installs one registration, by the shared value `mode`:
 
 - `aws-irsa` with `mode: irsa`: the pods assume the role through IAM roles for service accounts (IRSA).
 - `aws-pod-identity` with `mode: podIdentity`: the pods assume the role through EKS Pod Identity.
@@ -11,9 +11,9 @@ The chart installs one registration, by the chart value `mode`:
 
 For each request, the plugin creates one IAM role:
 
-- The name is `<roleNamePrefix>-<hash>`, with the chart value `roleNamePrefix` (`camunda` by default) and 16 hex digits of a hash of the EKS cluster (its OIDC issuer with IRSA, its name with Pod Identity), the namespace, and the claim. Two claims never share a role. Two EKS clusters in one AWS account get two roles for the same namespace and claim, unless they use Pod Identity and have the same name in two regions.
-- The permissions boundary is the chart value `permissionsBoundaryArn`, on every role.
-- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the request. The tag `camunda.io/desired` holds a hash of the role as the plugin last applied it (see [Drift](#drift)). The tags of the chart value `extraTags` go on the role too.
+- The name is `<roleNamePrefix>-<hash>`, with `identity.roleNamePrefix` (`camunda` by default) and 16 hex digits of a hash of the EKS cluster (its OIDC issuer with IRSA, its name with Pod Identity), the namespace, and the claim. Two claims never share a role. Two EKS clusters in one AWS account get two roles for the same namespace and claim, unless they use Pod Identity and have the same name in two regions.
+- The permissions boundary is `identity.permissionsBoundaryArn`, on every role.
+- The tags `camunda.io/namespace`, `camunda.io/claim`, and `camunda.io/request` name the claim and the request. The tag `camunda.io/request-uid` holds the UID of the request. The tag `camunda.io/desired` holds a hash of the role as the plugin last applied it (see [Drift](#drift)). The tags of the shared value `extraTags` go on the role too.
 - The role trusts `spec.target.serviceAccountName` of the request (the ServiceAccount of the cluster, `<claim>-camunda`) and each name in `spec.target.additionalServiceAccounts` (for example `<claim>-es-es` of the built-in Elasticsearch). It trusts no other ServiceAccount. The claim controller fills both fields. The plugin does not add names itself.
 - With IRSA, the trust policy names the OIDC provider of the EKS cluster, with one `sub` value for each ServiceAccount.
 - With Pod Identity, the trust policy names `pods.eks.amazonaws.com` with `sts:AssumeRole` and `sts:TagSession`. The plugin creates one Pod Identity association for each ServiceAccount, with the tags of the request and of `extraTags`, but without `camunda.io/request-uid` and `camunda.io/desired`.
@@ -26,9 +26,9 @@ AWS cannot take back credentials that it already issued. A pod of a former Servi
 
 The plugin also writes:
 
-- One PluginRegistration for each item of the chart value `registrations`.
+- One PluginRegistration for each item of `identity.registrations`.
 - The conditions of each Grant of its clusters (see [Grants](#grants)).
-- One Lease `<release>` in the release namespace. Only the replica that holds it writes.
+- One Lease in the release namespace, with the name of the release, for all controllers of the release. Only the replica that holds it writes.
 
 The summary of a request shows the role name, the number of applied grants, the size of the inline policies against the IAM limit of 10,240 characters, and the permissions boundary. The size has the severity `Warning` above 80% of the limit. The request links to the role in the IAM console.
 
@@ -40,10 +40,10 @@ Before you install the chart, make sure that you have:
 2. For IRSA: the IAM OIDC provider of the EKS cluster, and its ARN, such as `arn:aws:iam::111122223333:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/EXAMPLE`.
 3. For Pod Identity: the EKS Pod Identity Agent add-on in the EKS cluster, and the name of the EKS cluster.
 4. A managed policy for the permissions boundary. It holds the most that any role of a Camunda cluster may do, for example the S3 and KMS actions of your buckets and keys.
-5. A list of the IAM actions of that boundary, as patterns such as `s3:*` or `kms:Decrypt`, for the chart value `allowedActions`.
-6. An IAM role for the controller itself, with the permissions below. Give it to the controller through `serviceAccount.annotations` (IRSA) or a Pod Identity association of the ServiceAccount of the release.
+5. A list of the IAM actions of that boundary, as patterns such as `s3:*` or `kms:Decrypt`, for `identity.allowedActions`.
+6. The [role of the controllers](aws.md#the-role-of-the-controllers) of the release, with the policy below.
 
-The controller role needs this policy. Replace the account, the region, the EKS cluster, and the boundary ARN. Replace `camunda` in each `role/camunda-*` with your `roleNamePrefix`. Remove the last two statements with IRSA.
+Attach this policy to the role of the `aws` release. Replace the account, the region, the EKS cluster, and the boundary ARN. Replace `camunda` in each `role/camunda-*` with your `identity.roleNamePrefix`. Remove the last two statements with IRSA.
 
 ```json
 {
@@ -109,47 +109,51 @@ The condition on the boundary makes sure that the controller cannot create a rol
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `mode` | `irsa` | `irsa` or `podIdentity`. The chart refuses another value. |
-| `permissionsBoundaryArn` | `""` | Required. The managed policy that bounds every role. The registration shows it as a limit. |
-| `roleNamePrefix` | `camunda` | The start of the name of each role, at most 47 characters of `A-Z`, `a-z`, `0-9`, and `+=,.@_-`. It must differ from the role name prefix of aws-connectors-role, `camunda-connectors` by default. The controller refuses only `camunda-connectors`, in any case, because it does not know the value of aws-connectors-role. When aws-connectors-role uses this prefix too, the second plugin finds a role of the other one, and its request reports `RoleNameInUse`. To change it on a running install, see [Change the role name prefix](#change-the-role-name-prefix). |
-| `extraTags` | `{}` | Tags that go on each role and association, next to the tags of the request, for example `cost-center: platform`. At most 45 tags: AWS allows 50 tags on a role, and the plugin puts five `camunda.io/` tags on it. A key cannot start with `aws:` or `camunda.io/`, and cannot hold a `=`. An older version of the plugin allowed 47 tags. If you set more than 45, remove keys from `extraTags` before the upgrade until 45 are left, and remove those tags from each role with `aws iam untag-role`. Else the role has no room for `camunda.io/request-uid` and `camunda.io/desired`, and its request reports `ReconcileError` with `LimitExceeded`. |
-| `allowedActions` | `[]` | Required. The IAM action patterns that a Grant may hold, such as `s3:*`. `*` and `?` are wildcards. The registration shows them as a limit. |
-| `oidcProviderArn` | `""` | Required with IRSA. The IAM OIDC provider of the EKS cluster. |
-| `eksClusterName` | `""` | Required with Pod Identity. The EKS cluster of the associations. |
-| `resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It repairs a role, a Grant policy, or an association that someone changed in AWS (see [Drift](#drift)). A Go duration such as `30m`. `0` turns it off, and then a change in AWS stays until something else reconciles the request. |
-| `region` | `""` | The AWS region. Empty takes the region of the pod, such as `AWS_REGION`. |
-| `endpointURL` | `""` | Sends every AWS call to this endpoint instead of the endpoints of AWS. |
-| `serviceAccount.annotations` | `{}` | The annotations of the ServiceAccount of the controller, for example `eks.amazonaws.com/role-arn` of the controller role. |
-| `registrations` | `[{name: aws-irsa}]` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and fields of a registration spec, merged over the defaults of `mode`. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one, `aws-pod-identity` with `mode: irsa`, and `aws-irsa` with `mode: podIdentity`. |
-| `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/aws-identity` | The image of the controller. |
-| `image.tag` | the `appVersion` of the chart | The tag of the image. |
-| `resources` | 10m CPU and 64Mi memory requested, 128Mi memory limit | The resources of the controller container. |
+| `identity.enabled` | `false` | Turns aws-identity on. |
+| `identity.permissionsBoundaryArn` | `""` | Required. The managed policy that bounds every role. The registration shows it as a limit. |
+| `identity.roleNamePrefix` | `camunda` | The start of the name of each role, at most 47 characters of `A-Z`, `a-z`, `0-9`, and `+=,.@_-`. It must differ from the role name prefix of aws-connectors-role, `camunda-connectors` by default. When aws-connectors-role serves `aws-connectors-role` in the same release, the Pod does not start with its prefix, in any case. aws-identity also refuses `camunda-connectors`, in any case. When aws-connectors-role of another release uses this prefix too, the second plugin finds a role of the other one, and its request reports `RoleNameInUse`. To change it on a running install, see [Change the role name prefix](#change-the-role-name-prefix). |
+| `identity.allowedActions` | `[]` | Required. The IAM action patterns that a Grant may hold, such as `s3:*`. `*` and `?` are wildcards. The registration shows them as a limit. |
+| `identity.resync` | `1h` | The time after which the controller reconciles each request again, also when nothing in the cluster changed. It repairs a role, a Grant policy, or an association that someone changed in AWS (see [Drift](#drift)). A Go duration such as `30m`. `0` turns it off, and then a change in AWS stays until something else reconciles the request. |
+| `identity.registrations` | `[{name: aws-irsa}]` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and fields of a registration spec, merged over the defaults of `mode`. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one, `aws-pod-identity` with `mode: irsa`, and `aws-irsa` with `mode: podIdentity`. |
 
-The chart renders without the required values, but the controller does not start without them. Its log names the missing value.
+aws-identity also reads the [shared values](aws.md#shared-values) `mode`, `region`, `extraTags`, and `endpointURL`. It needs `oidcProviderArn` with IRSA, and `eksClusterName` with Pod Identity.
+
+Of `extraTags`, aws-identity allows at most 45 tags: AWS allows 50 tags on a role, and the plugin puts five `camunda.io/` tags on it. An older version of the plugin allowed 47 tags. If you set more than 45, remove keys from `extraTags` before the upgrade until 45 are left, and remove those tags from each role with `aws iam untag-role`. Else the role has no room for `camunda.io/request-uid` and `camunda.io/desired`, and its request reports `ReconcileError` with `LimitExceeded`.
+
+The examples below turn on only aws-identity. To turn on more controllers, see [Install](aws.md#install).
 
 An install with IRSA:
 
 ```sh
-helm install aws-identity charts/aws-identity --namespace camunda-operator-plugins \
-  --set permissionsBoundaryArn=arn:aws:iam::111122223333:policy/camunda-boundary \
-  --set 'allowedActions={s3:*,kms:Decrypt,kms:GenerateDataKey}' \
+helm install aws charts/aws --namespace camunda-operator-plugins \
+  --set identity.enabled=true \
+  --set identity.permissionsBoundaryArn=arn:aws:iam::111122223333:policy/camunda-boundary \
+  --set 'identity.allowedActions={s3:*,kms:Decrypt,kms:GenerateDataKey}' \
   --set oidcProviderArn=arn:aws:iam::111122223333:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/EXAMPLE \
-  --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=arn:aws:iam::111122223333:role/aws-identity-controller
+  --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=arn:aws:iam::111122223333:role/aws-plugins-controller
 ```
 
 An install with Pod Identity:
 
 ```sh
-helm install aws-identity charts/aws-identity --namespace camunda-operator-plugins \
-  --set mode=podIdentity --set 'registrations[0].name=aws-pod-identity' \
-  --set permissionsBoundaryArn=arn:aws:iam::111122223333:policy/camunda-boundary \
-  --set 'allowedActions={s3:*,kms:Decrypt,kms:GenerateDataKey}' \
+helm install aws charts/aws --namespace camunda-operator-plugins \
+  --set identity.enabled=true \
+  --set mode=podIdentity --set 'identity.registrations[0].name=aws-pod-identity' \
+  --set identity.permissionsBoundaryArn=arn:aws:iam::111122223333:policy/camunda-boundary \
+  --set 'identity.allowedActions={s3:*,kms:Decrypt,kms:GenerateDataKey}' \
   --set eksClusterName=my-eks
 ```
 
 ## Change the role name prefix
 
-A change of `roleNamePrefix` gives each request a role with a new name. When the controller restarts with the new value, it does these steps for each request:
+A change of `identity.roleNamePrefix` gives each request a role with a new name. Change it with an upgrade of the release:
+
+```sh
+helm upgrade aws charts/aws --namespace camunda-operator-plugins --reuse-values \
+  --set identity.roleNamePrefix=<new prefix>
+```
+
+When the controller restarts with the new value, it does these steps for each request:
 
 1. It creates the role with the new name, with the same trust, tags, and Grants.
 2. With Pod Identity, it moves each association to the new role.
@@ -162,7 +166,7 @@ With IRSA, a pod reads the role ARN when it starts, so it keeps the old role unt
 
 The change is complete when the event `RoleDeleted` or `RoleKept` shows on each request, and no request lists a role with the old prefix in `status.resources`. A role that the plugin kept is not its own, so the controller does not need the old prefix for it.
 
-During the change, the controller role needs the permissions of the policy above for both the old and the new prefix. Keep `role/<old prefix>-*` in each `Resource`, next to `role/<new prefix>-*`, until no old role is left.
+During the change, the role of the release needs the permissions of the policy above for both the old and the new prefix. Keep `role/<old prefix>-*` in each `Resource`, next to `role/<new prefix>-*`, until no old role is left.
 
 When the new name belongs to another request, the request reports `RoleNameInUse`. The outputs then keep the old role, and the plugin keeps its trust, its associations, and its Grants up to date. The plugin checks the name again every 30 seconds, and goes on with step 1 when the name is free.
 
@@ -187,7 +191,7 @@ The plugin writes no Grants of its own. It reads the Grants of other plugins and
 
 - It reads each Grant in the namespace of the request whose `spec.cluster.name` names the cluster of the request. A Grant whose request is gone, for example after an `Orphan` deletion of that request, or whose request is of another claim, or not of the registration and the cluster of the Grant, keeps the statement that the role has for it, gets no new one, and gets no conditions.
 - A Grant with the format `aws-iam-statement` becomes one inline policy `grant-<Grant name>` on the role, with the fragment as its one statement. When that name is longer than the 128 characters of IAM, it is cut and ends with `_` and 8 hex digits of a hash. A Grant name has no `_`, so two Grants never share a policy.
-- The plugin refuses a statement with an action outside `allowedActions`, with `NotAction`, or without `Action`. An action with a wildcard passes only when one pattern covers each action that it stands for: the pattern `s3:*` allows the action `s3:Get*`, and the pattern `s3:GetObject?` does not allow `s3:GetObject*`.
+- The plugin refuses a statement with an action outside `identity.allowedActions`, with `NotAction`, or without `Action`. An action with a wildcard passes only when one pattern covers each action that it stands for: the pattern `s3:*` allows the action `s3:Get*`, and the pattern `s3:GetObject?` does not allow `s3:GetObject*`.
 - IAM allows 10,240 characters, white space not counted, for all inline policies of a role together. The plugin applies the Grants in the order of their creation, and refuses a Grant that would take the role over the limit.
 - A refused Grant that was never applied puts nothing on the role.
 - An applied Grant stays applied. When its fragment changes and the new fragment is refused, or its template changes in the registration, the role keeps the statement that it had. Only a deleted Grant loses its policy.
@@ -211,7 +215,7 @@ The plugin repairs a change that someone made in AWS to an object of a request:
 - the inline policy of each applied Grant,
 - with Pod Identity, the associations.
 
-It repairs on each reconcile: after a change in the cluster, and at the latest after the chart value `resync`, `1h` by default. It does not remove a tag or an inline policy without the prefix `grant-` that someone added to the role.
+It repairs on each reconcile: after a change in the cluster, and at the latest after `identity.resync`, `1h` by default. It does not remove a tag or an inline policy without the prefix `grant-` that someone added to the role.
 
 For each reconcile that repaired drift, the plugin records the event `DriftCorrected` on the request. Its note names each object, for example `Corrected drift outside the cluster: the inline policy grant-orders-backup-read of the IAM role camunda-0123456789abcdef`. The summary item `Last drift corrected` of the request shows the time of the last repair. Find the events with:
 
@@ -219,7 +223,7 @@ For each reconcile that repaired drift, the plugin records the event `DriftCorre
 kubectl get events -n <namespace> --field-selector reason=DriftCorrected
 ```
 
-A change of the request, of a Grant, or of a chart value is not drift. The plugin applies it with its usual events, such as `RoleUpdated` and `PolicyApplied`, and records no `DriftCorrected`, also when it needs a retry. A new role, for example after a change of `roleNamePrefix`, is not drift either.
+A change of the request, of a Grant, or of a chart value is not drift. The plugin applies it with its usual events, such as `RoleUpdated` and `PolicyApplied`, and records no `DriftCorrected`, also when it needs a retry. A new role, for example after a change of `identity.roleNamePrefix`, is not drift either.
 
 To tell drift from a change, the plugin keeps the tag `camunda.io/desired` on the role, a hash of the role as the plugin last applied it in full. While the plugin applies a change, the tag holds `changing`. A repair of the role or of an association counts as drift only while the tag matches the request. So a change that fails, and that you then change back, is not drift either. A repair of a Grant policy counts as drift only when the Grant had `Applied=True` for its current spec. Do not change or delete the tag. Without it, the next repair counts as a change, and the plugin then writes the tag again.
 
@@ -232,7 +236,7 @@ The registrations offer the deletion policies `Delete` and `Orphan`.
 | `Delete` | Deletes the inline policies and each role of the request. | Deletes the associations, the inline policies, and each role of the request. |
 | `Orphan` | Keeps the role and its inline policies. | Keeps the role and its inline policies, and deletes the associations, because they name a namespace that goes away. |
 
-The roles of a request are the role of the current `roleNamePrefix` and each role in `status.resources` of the request, such as an old role after a change of the prefix. `Delete` deletes a role only when its `camunda.io/request-uid` is the UID of the request. It keeps any other role, and records the Warning event `RoleKept`.
+The roles of a request are the role of the current `identity.roleNamePrefix` and each role in `status.resources` of the request, such as an old role after a change of the prefix. `Delete` deletes a role only when its `camunda.io/request-uid` is the UID of the request. It keeps any other role, and records the Warning event `RoleKept`.
 
 `Delete` also deletes the inline policies that an admin added to the role by hand, and detaches the managed policies that an admin attached. An orphaned role keeps its tags, so you can find it by the namespace and the claim.
 
@@ -243,14 +247,14 @@ A claim that you make again after an `Orphan` deletion gets a request with a new
 | Reason | Condition | What to do |
 | --- | --- | --- |
 | `MissingServiceAccount` | `OutputsReady` and `Ready` of the request | The request names no ServiceAccount in `spec.target`. A role that the request already has then trusts nobody, and with Pod Identity it loses its associations. The claim controller sets the ServiceAccounts. Check the claim and the operator version. |
-| `RoleNameInUse` | `OutputsReady` and `Ready` of the request | A role with the name of the request belongs to another request, or has no tag `camunda.io/request-uid` and names no request of this namespace. Examples are a claim made again after an `Orphan` deletion, a role that a person made, and a second plugin with the same `roleNamePrefix`. The message names the role and its owner. Delete that role, or change `roleNamePrefix`. When the tags `camunda.io/namespace` and `camunda.io/request` of the role name this request, you can also remove its tag `camunda.io/request-uid`, and the plugin takes the role over. |
-| `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, for example `AccessDenied` when the controller role lacks a permission above. With Pod Identity, the message can say that a ServiceAccount has an association for a role of another claim: the plugin does not move it. Delete that association, or rename the ServiceAccount. pluginkit tries again. |
+| `RoleNameInUse` | `OutputsReady` and `Ready` of the request | A role with the name of the request belongs to another request, or has no tag `camunda.io/request-uid` and names no request of this namespace. Examples are a claim made again after an `Orphan` deletion, a role that a person made, and a second plugin with the same `identity.roleNamePrefix`. The message names the role and its owner. Delete that role, or change `identity.roleNamePrefix`. When the tags `camunda.io/namespace` and `camunda.io/request` of the role name this request, you can also remove its tag `camunda.io/request-uid`, and the plugin takes the role over. |
+| `ReconcileError` | `Ready` of the request | An AWS call failed. The message gives the call and the AWS error, for example `AccessDenied` when the role of the release lacks a permission above. With Pod Identity, the message can say that a ServiceAccount has an association for a role of another claim: the plugin does not move it. Delete that association, or rename the ServiceAccount. pluginkit tries again. |
 | `DeleteFailed` or `ReconcileError` with the message "an instance profile uses it" | `Ready` of the request | An instance profile holds a role of the request, so IAM refuses to delete the role. The plugin does not remove a role from an instance profile. Remove the role named in the message from the instance profile, for example with `aws iam remove-role-from-instance-profile`. pluginkit tries again. |
 | `DeleteFailed` | `Ready` of a deleted request | The plugin could not delete the role or an association. The message gives the AWS error. The finalizer stays, and pluginkit tries again. |
-| `Unhealthy` | `Ready` of the registration | The controller cannot call STS with its credentials, or it cannot read the permissions boundary. The message gives the error. Check the controller role and `permissionsBoundaryArn`. |
-| `OverCeiling` | `Applied` and `Ready` of a Grant | The message names the action outside `allowedActions`. Add the action to the boundary and to `allowedActions`, or change the grant template of the other plugin. |
+| `Unhealthy` | `Ready` of the registration | The controller cannot call STS with its credentials, or it cannot read the permissions boundary. The message gives the error. Check the role of the release and `identity.permissionsBoundaryArn`. |
+| `OverCeiling` | `Applied` and `Ready` of a Grant | The message names the action outside `identity.allowedActions`. Add the action to the boundary and to `identity.allowedActions`, or change the grant template of the other plugin. |
 | `OverSizeLimit` | `Applied` and `Ready` of a Grant | The inline policies of the role would pass 10,240 characters. Remove a Grant of the cluster, or make the grant templates shorter. |
 | `Rejected` | `Applied` and `Ready` of a Grant | The fragment is not one IAM statement that the plugin can check, its format is not `aws-iam-statement`, or IAM refused the policy. The message says which. Correct the grant template of the other plugin. |
 | `TemplateChanged` | `MatchesTemplate` and `Ready` of a Grant | The fragment of the Grant is not its template filled in now, for example after a registration change. The role keeps the statement. The plugin of the Grant writes it again on its next reconcile. |
 
-When the controller Pod does not get ready, read its log. The controller stops when a required chart value is missing or not valid, when `roleNamePrefix` is not valid or is `camunda-connectors` in any case, when `extraTags` has more than 45 tags, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
+When the Pod of the release does not get ready, read its log with `kubectl logs deployment/aws -n camunda-operator-plugins`. aws-identity stops the Pod when a required chart value is missing or not valid, when `identity.roleNamePrefix` is not valid or is `camunda-connectors` in any case, when `extraTags` has more than 45 tags, when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set. The Pod also stops when aws-connectors-role serves `aws-connectors-role` with the same role name prefix, in any case.

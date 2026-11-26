@@ -61,35 +61,15 @@ test-api-ref: ## Check that a pseudo-version and a tag of the api module map to 
 		[ "$$got" = api/v0.3.0-rc.1 ] || { echo "prerelease tag maps to '$$got', want api/v0.3.0-rc.1" >&2; exit 1; }
 
 .PHONY: chart-verify
-chart-verify: ## Lint and render the chart of each plugin, and check the serve rule of CONTRIBUTING.md.
+chart-verify: ## Render the chart of each plugin with its cases in hack/chartcheck/testdata/, and check the chart rule of CONTRIBUTING.md.
+	@for c in charts/*/; do \
+		c="$$(basename "$$c")"; \
+		test -d "cmd/$$c" || { echo "charts/$$c has no binary cmd/$$c" >&2; exit 1; }; \
+	done
 	@for p in $(PLUGINS); do \
 		test -f "charts/$$p/Chart.yaml" || { echo "cmd/$$p has no chart charts/$$p" >&2; exit 1; }; \
-		$(HELM) lint "charts/$$p" || exit 1; \
-		$(HELM) template verify "charts/$$p" --namespace $(CHART_NAMESPACE) \
-			| go run ./hack/chartcheck -values "charts/$$p/values.yaml" -namespace $(CHART_NAMESPACE) || exit 1; \
-		$(HELM) template verify "charts/$$p" --namespace $(CHART_NAMESPACE) -f hack/chartcheck/testdata/two-registrations.yaml \
-			| go run ./hack/chartcheck -values hack/chartcheck/testdata/two-registrations.yaml -namespace $(CHART_NAMESPACE) || exit 1; \
-		err="$$($(HELM) template verify "charts/$$p" --set registrations=null 2>&1 >/dev/null || true)"; \
-		case "$$err" in *"registrations must name at least one registration"*) ;; *) \
-			echo "charts/$$p renders without a registration" >&2; exit 1 ;; \
-		esac; \
-		echo "  charts/$$p refuses to render without a registration"; \
-		$(MAKE) -s chart-names-differ CHART="charts/$$p" A="team-a plugin" B="team a-plugin" || exit 1; \
-		$(MAKE) -s chart-names-differ CHART="charts/$$p" \
-			A="$$(printf 'n%.0s' $$(seq 60))a plugin" B="$$(printf 'n%.0s' $$(seq 60))b plugin" || exit 1; \
+		HELM="$(HELM)" hack/chartcheck/verify.sh "charts/$$p" "$(CHART_NAMESPACE)" || exit 1; \
 	done
-
-# chart-names-differ checks that two releases, A and B as "<namespace> <release>",
-# render different names for the cluster-scoped objects of CHART.
-.PHONY: chart-names-differ
-chart-names-differ:
-	@names() { $(HELM) template "$$2" "$(CHART)" --namespace "$$1" \
-		| awk '/^kind: ClusterRole(Binding)?$$/ { k = 1 } k && /^  name:/ { print $$2; k = 0 }'; }; \
-	a="$$(names $(A))"; b="$$(names $(B))"; \
-	if [ -z "$$a" ] || [ -n "$$(comm -12 <(printf '%s\n' $$a | sort) <(printf '%s\n' $$b | sort))" ]; then \
-		echo "$(CHART): the releases '$(A)' and '$(B)' share a cluster-scoped name: $$a" >&2; exit 1; \
-	fi; \
-	echo "  $(CHART): '$(A)' and '$(B)' render different cluster-scoped names"
 
 # GOMOD_FILE is the go.mod that check-published-api reads. test-published-api
 # sets it to a copy that requires the root module of the operator.
@@ -197,8 +177,11 @@ KIND_CLUSTER ?= camunda-operator-plugins
 # the operator built from it, so it matches the api module of go.mod.
 OPERATOR_DIR ?= $(LOCALBIN)/camunda-operator
 OPERATOR_REPO ?= https://github.com/konsole-is/camunda-operator.git
+# CONFORMANCE_SET is the set of PLUGIN that conformance-kind runs, a directory
+# of test/conformance/<plugin>/. Empty runs test/conformance/<plugin>/ itself.
+CONFORMANCE_SET ?=
 # CONFORMANCE_REPORT is the JUnit report of conformance-kind.
-CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
+CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN)$(if $(CONFORMANCE_SET),-$(CONFORMANCE_SET)).xml
 # renovate: datasource=github-releases depName=envoyproxy/gateway
 ENVOY_GATEWAY_VERSION ?= v1.10.0
 # renovate: datasource=docker depName=rustfs/rustfs
@@ -233,13 +216,13 @@ operator-source: ## Check out the operator at API_REF into OPERATOR_DIR.
 	API_REF="$(API_REF)" OPERATOR_REPO="$(OPERATOR_REPO)" test/kind/operator-source.sh "$(OPERATOR_DIR)"
 
 .PHONY: conformance-kind
-conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run the conformance suite against PLUGIN. CI only.
+conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run the conformance suite of CONFORMANCE_SET against PLUGIN. CI only.
 	KIND_CLUSTER="$(KIND_CLUSTER)" OPERATOR_DIR="$(OPERATOR_DIR)" CHART_NAMESPACE="$(CHART_NAMESPACE)" \
 	REPORT="$(CONFORMANCE_REPORT)" GATEWAY_API_VERSION="$(GATEWAY_API_VERSION)" \
 	ENVOY_GATEWAY_VERSION="$(ENVOY_GATEWAY_VERSION)" RUSTFS_VERSION="$(RUSTFS_VERSION)" \
 	CERT_MANAGER_VERSION="$(CERT_MANAGER_VERSION)" POD_IDENTITY_WEBHOOK_VERSION="$(POD_IDENTITY_WEBHOOK_VERSION)" \
 	AWS_CLI_IMAGE="amazon/aws-cli:$(AWS_CLI_VERSION)" \
-		test/conformance/run.sh "$(PLUGIN)"
+		test/conformance/run.sh "$(PLUGIN)" $(CONFORMANCE_SET)
 
 .PHONY: journey-kind
 journey-kind: ## Create a kind cluster with the operator, ECK, and the plugins of JOURNEY, and run the journey. CI only.
