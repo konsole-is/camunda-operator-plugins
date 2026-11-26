@@ -29,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/aws"
 	"github.com/konsole-is/camunda-operator-plugins/internal/awsconnectorsrole"
 	"github.com/konsole-is/camunda-operator-plugins/internal/version"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
@@ -37,27 +38,28 @@ import (
 
 func main() {
 	var opts awsconnectorsrole.Options
+	var managerOpts aws.Options
 	showVersion := flag.Bool("version", false, "Print the version of the build and exit.")
 	flag.StringVar(
-		&opts.HealthProbeAddress,
+		&managerOpts.HealthProbeAddress,
 		"health-probe-bind-address",
 		":8081",
 		"The address of /healthz and /readyz.",
 	)
 	flag.StringVar(
-		&opts.MetricsAddress,
+		&managerOpts.MetricsAddress,
 		"metrics-bind-address",
 		"0",
 		"The address of /metrics. 0 turns the metrics off.",
 	)
 	flag.BoolVar(
-		&opts.LeaderElection,
+		&managerOpts.LeaderElection,
 		"leader-elect",
 		false,
 		"Run the controller only in the replica that holds the leader election Lease.",
 	)
 	flag.StringVar(
-		&opts.LeaderElectionID,
+		&managerOpts.LeaderElectionID,
 		"leader-election-id",
 		"aws-connectors-role.plugins.camunda.io",
 		"The name of the leader election Lease, in the namespace of the controller.",
@@ -131,7 +133,8 @@ func main() {
 	opts.Region = cfg.Region
 	opts.Clients = awskit.NewClients(cfg)
 
-	mgr, err := awsconnectorsrole.NewManager(ctrl.GetConfigOrDie(), opts)
+	managerOpts.ConnectorsRole = &opts
+	mgr, err := aws.NewManager(ctrl.GetConfigOrDie(), managerOpts)
 	if err != nil {
 		log.Error(err, "Could not create the manager")
 		os.Exit(1)

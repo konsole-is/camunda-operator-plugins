@@ -39,6 +39,7 @@ import (
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/aws"
 	"github.com/konsole-is/camunda-operator-plugins/internal/awsconnectorsrole"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
@@ -189,16 +190,14 @@ func newConnectorsWith(
 
 	opts := awsconnectorsrole.Options{
 		// Controller names are unique in the process.
-		Name:               fmt.Sprintf("%s-%s-%d", registration, mode, managerSeq.Add(1)),
-		HealthProbeAddress: "0",
-		MetricsAddress:     "0",
-		ServiceAccount:     h.serviceAccount,
-		Mode:               mode,
-		ExtraTags:          awskit.ExtraTags{"cost-center": "camunda"},
-		OIDCProviderARN:    providerARN,
-		EKSClusterName:     eksCluster,
-		Region:             region,
-		Clients:            awskit.Clients{IAM: h.iam, EKS: h.eks, STS: awsfake.NewSTS()},
+		Name:            fmt.Sprintf("%s-%s-%d", registration, mode, managerSeq.Add(1)),
+		ServiceAccount:  h.serviceAccount,
+		Mode:            mode,
+		ExtraTags:       awskit.ExtraTags{"cost-center": "camunda"},
+		OIDCProviderARN: providerARN,
+		EKSClusterName:  eksCluster,
+		Region:          region,
+		Clients:         awskit.Clients{IAM: h.iam, EKS: h.eks, STS: awsfake.NewSTS()},
 	}
 	if registration == awsconnectorsrole.RegistrationRole && mode == awskit.ModePodIdentity {
 		opts.Resync = 2 * time.Second
@@ -218,7 +217,10 @@ func newConnectorsWith(
 	Expect(opts.Registrations).To(HaveLen(1), "the chart has the registration %s", registration)
 
 	var err error
-	h.mgr, err = awsconnectorsrole.NewManager(c.restConfig, opts)
+	h.mgr, err = aws.NewManager(
+		c.restConfig,
+		aws.Options{HealthProbeAddress: "0", MetricsAddress: "0", ConnectorsRole: &opts},
+	)
 	Expect(err).NotTo(HaveOccurred())
 
 	return h
