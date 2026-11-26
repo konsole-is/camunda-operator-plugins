@@ -1,0 +1,17 @@
+# The run of plugin-conformance against the registration aws-ebs-encrypted.
+# The plugin makes no AWS call, so the key input is the ARN of no real key.
+# The case runs once with Delete and once with Orphan.
+registration: aws-ebs-encrypted
+namespace: conformance-aws-ebs
+timeouts:
+  outputsReady: 2m
+  ready: 5m
+  deletion: 3m
+cases:
+  - name: basic
+    inputs:
+      key: arn:aws:kms:eu-west-1:000000000000:key/x
+    target:
+      kind: CamundaCluster
+      name: orders
+      serviceAccountName: orders-camunda

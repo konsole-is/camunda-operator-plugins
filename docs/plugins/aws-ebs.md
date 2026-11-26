@@ -2,7 +2,7 @@
 
 The aws-ebs plugin serves the `volume-encryption` section of the operator. It gives each Camunda cluster one StorageClass of the [Amazon EBS CSI driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver) that encrypts each new EBS volume with the AWS KMS key of the cluster. It serves through [pluginkit](../pluginkit.md).
 
-The chart installs one registration, `aws-ebs-encrypted`. It needs the key of the `encryption-key` section of the same claim, for example from the [AWS KMS key](aws-kms.md) plugin.
+aws-ebs is a controller of the chart [`aws`](aws.md), with the values block `ebs`. It installs one registration, `aws-ebs-encrypted`. It needs the key of the `encryption-key` section of the same claim, for example from the [AWS KMS key](aws-kms.md) plugin.
 
 ## What it creates
 
@@ -23,12 +23,12 @@ For each request, the plugin creates one StorageClass `camunda-<namespace>-<clai
 
 The StorageClass is cluster-scoped, so it has no owner reference. It has the labels `plugins.camunda.io/registration`, `plugins.camunda.io/request`, and `plugins.camunda.io/request-namespace`. The plugin changes or deletes only a StorageClass with all three labels of its request.
 
-The plugin makes no AWS call, and its own controller needs no IAM role. The EBS CSI driver creates and encrypts the volumes, with the IAM role of the driver.
+The plugin makes no AWS call, and needs no IAM permission. With only aws-ebs on, the release needs no IAM role. The EBS CSI driver creates and encrypts the volumes, with the IAM role of the driver.
 
 The plugin also writes:
 
-- One PluginRegistration for each item of the chart value `registrations`.
-- One Lease `<release>` in the release namespace. Only the replica that holds it writes.
+- One PluginRegistration for each item of `ebs.registrations`.
+- One Lease in the release namespace, with the name of the release, for all controllers of the release. Only the replica that holds it writes.
 
 The summary of a request shows the name of the StorageClass, the volume type, and the ARN of the key. The request links to the key in the KMS console.
 
@@ -47,41 +47,43 @@ Before you install the chart, make sure that you have:
 
 1. An EKS cluster with the CRDs of the operator.
 2. The EBS CSI driver, as the EKS add-on `aws-ebs-csi-driver` or from its Helm chart, with an IAM role of its own. Give that role the AWS managed policy `AmazonEBSCSIDriverPolicy`, through IRSA or a Pod Identity association of the ServiceAccount `ebs-csi-controller-sa`.
-3. The right of that role to use each key. With the AWS KMS key plugin, set the chart value `csiDriverRoleArn` of the aws-kms chart to the ARN of the driver role. The plugin then writes a key policy that lets the driver encrypt with the key and create grants for the volumes. See [Key policy](aws-kms.md#key-policy). With keys of your own, give the driver role the same rights in the key policy of each key.
+3. The right of that role to use each key. With the AWS KMS key plugin, set `kms.csiDriverRoleArn` to the ARN of the driver role. The plugin then writes a key policy that lets the driver encrypt with the key and create grants for the volumes. See [Key policy](aws-kms.md#key-policy). With keys of your own, give the driver role the same rights in the key policy of each key.
 4. An option of the `encryption-key` section on each claim that selects `aws-ebs-encrypted`. The input `key` is required, so the fleet manager shows the option as not available without one.
 
 ## Chart values
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `registrations` | `aws-ebs-encrypted` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
-| `resync` | `1h` | The time after which the controller reconciles each request again, plus up to 10%. A StorageClass that someone deleted comes back within this time. `0` turns it off. |
-| `image.repository` | `ghcr.io/konsole-is/camunda-operator-plugins/aws-ebs` | The image of the controller. |
-| `image.tag` | the `appVersion` of the chart | The tag of the image. |
-| `resources` | 10m CPU and 64Mi memory requested, 128Mi memory limit | The resources of the controller container. |
+| `ebs.enabled` | `false` | Turns aws-ebs on. |
+| `ebs.registrations` | `aws-ebs-encrypted` | The PluginRegistrations that the controller writes at startup and serves. Each item is a name and the fields of a registration spec. The chart gives the controller the verb `serve` on each name and on no other registration. The chart refuses to render without one. |
+| `ebs.resync` | `1h` | The time after which the controller reconciles each request again, plus up to 10%. A StorageClass that someone deleted comes back within this time. `0` turns it off. |
 
-An install with the default registration:
+aws-ebs reads no AWS value of the [shared values](aws.md#shared-values), such as `region` or `extraTags`.
+
+An install of only aws-ebs, with the default registration:
 
 ```sh
-helm install aws-ebs charts/aws-ebs --namespace camunda-operator-plugins
+helm install aws charts/aws --namespace camunda-operator-plugins --set ebs.enabled=true
 ```
 
 To give every cluster `io2` volumes, set the parameters in the `parameterValues` of the registration, for example with a values file:
 
 ```yaml
-registrations:
-  - name: aws-ebs-encrypted
-    # The other fields of the default aws-ebs-encrypted item of values.yaml.
-    parameterValues:
-      type: io2
-      iops: 16000
-      fsType: xfs
+ebs:
+  enabled: true
+  registrations:
+    - name: aws-ebs-encrypted
+      # The other fields of the default aws-ebs-encrypted item of values.yaml.
+      parameterValues:
+        type: io2
+        iops: 16000
+        fsType: xfs
 ```
 
-A list in a values file replaces the default list, so copy the item of `registrations` from the `values.yaml` of the chart and change it there. Then install with the file:
+A list in a values file replaces the default list, so copy the item of `ebs.registrations` from the `values.yaml` of the chart and change it there. Then install with the file:
 
 ```sh
-helm install aws-ebs charts/aws-ebs --namespace camunda-operator-plugins -f my-values.yaml
+helm install aws charts/aws --namespace camunda-operator-plugins -f my-values.yaml
 ```
 
 ## Parameters
@@ -157,10 +159,10 @@ A later claim of the same name in the same namespace gets the same StorageClass 
 | `ReconcileError` | `Ready` of the request | The plugin could not read, delete, or apply the StorageClass. The message gives the error. pluginkit tries again. |
 | `DeleteFailed` | `Ready` of a deleted request | The StorageClass of the request still exists, for example because a finalizer holds it. The message names it. The finalizer of the request stays, and pluginkit tries again. |
 
-When someone deletes the StorageClass, the plugin creates it again at the next resync: within the time of the chart value `resync`, plus up to 10%. With `resync: 0`, it comes back only when a change of the request starts a reconcile.
+When someone deletes the StorageClass, the plugin creates it again at the next resync: within the time of `ebs.resync`, plus up to 10%. With `ebs.resync: 0`, it comes back only when a change of the request starts a reconcile.
 
 When a PersistentVolumeClaim stays `Pending` with the event `waiting for a volume to be created, either by external provisioner "ebs.csi.aws.com" or manually created by system administrator`, and no later event, the EBS CSI driver does not run, or it does not serve the cluster. Check that its controller pods run, with `kubectl get pods -n kube-system -l app=ebs-csi-controller`. The `Ready` of the request cannot show this.
 
-When a PersistentVolumeClaim stays `Pending` and its events show a KMS error, such as an access denied error, the driver role cannot use the key. Check that `csiDriverRoleArn` of the aws-kms chart names the role of the EBS CSI driver, and that the key is `Enabled`.
+When a PersistentVolumeClaim stays `Pending` and its events show a KMS error, such as an access denied error, the driver role cannot use the key. Check that `kms.csiDriverRoleArn` names the role of the EBS CSI driver, and that the key is `Enabled`.
 
-When the controller Pod does not get ready, read its log with `kubectl logs deployment/<release> -n <namespace>`. The controller stops when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.
+When the Pod of the release does not get ready, read its log with `kubectl logs deployment/aws -n camunda-operator-plugins`. aws-ebs stops the Pod when it cannot read the file of its registrations, or when the variable `POD_NAMESPACE` or `SERVICE_ACCOUNT_NAME` is not set.

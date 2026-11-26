@@ -1,0 +1,11 @@
+{
+  "tag_key": "cpo-ci-run",
+  "run_prefix": "cpo-ci-",
+  "ignored_values": ["", "None"],
+  "older_than_hours": {
+    "sweep": 6,
+    "eks_sweep": 2
+  },
+  "trusted_services": ["pods.eks.amazonaws.com"],
+  "untrusted_provider_hosts": ["token.actions.githubusercontent.com"]
+}

@@ -1,0 +1,6 @@
+# Every controller but identity is on, so the chart serves no registration of identity.
+identity: {enabled: false}
+connectorsRole: {enabled: true}
+kms: {enabled: true}
+ebs: {enabled: true}
+s3: {enabled: true}

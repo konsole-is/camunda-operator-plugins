@@ -1,9 +1,0 @@
-# make chart-verify-policy-kinds renders the gateway-access chart with these
-# values and compares the policy role with gateway-access-policies.golden.yaml.
-policyKinds:
-  - apiVersion: gateway.envoyproxy.io/v1alpha1
-    kind: SecurityPolicy
-    resource: securitypolicies
-  - apiVersion: security.istio.io/v1
-    kind: AuthorizationPolicy
-    resource: authorizationpolicies

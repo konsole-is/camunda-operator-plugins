@@ -1,0 +1,12 @@
+# The chart values of the second release, aws-keys, in the namespace of the
+# release aws: only aws-kms is on, with its own role. render.sh fills in the
+# variables of the run.
+region: ${AWS_REGION}
+extraTags:
+  cpo-ci-run: ${RUN_ID}
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-aws-keys
+kms:
+  enabled: true
+  aliasPrefix: ${RUN_ID}

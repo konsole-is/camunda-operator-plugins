@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aws.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aws.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aws.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/registrations: {{ include "aws.registrationsData" . | sha256sum }}
+        # IRSA reads the annotations of the ServiceAccount when a pod starts.
+        checksum/serviceaccount: {{ toYaml .Values.serviceAccount.annotations | sha256sum }}
+      labels:
+        {{- include "aws.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "aws.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -leader-elect
+            - -leader-election-id={{ include "aws.fullname" . }}
+            - -mode={{ .Values.mode }}
+            - -region={{ .Values.region }}
+            - {{ printf "-extra-tags=%s" (include "aws.extraTags" .) | quote }}
+            - -oidc-provider-arn={{ .Values.oidcProviderArn }}
+            - -eks-cluster-name={{ .Values.eksClusterName }}
+            {{- range include "aws.blocks" . | fromJsonArray }}
+            - -{{ .name }}-registrations=/etc/plugin/{{ .name }}.yaml
+            {{- end }}
+            {{- with .Values.identity }}
+            {{- if .enabled }}
+            - -identity-permissions-boundary-arn={{ .permissionsBoundaryArn }}
+            - -identity-role-name-prefix={{ .roleNamePrefix }}
+            - -identity-allowed-actions={{ join "," .allowedActions }}
+            - -identity-resync={{ .resync }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.connectorsRole }}
+            {{- if .enabled }}
+            - -connectors-role-permissions-boundary-arn={{ .permissionsBoundaryArn }}
+            - -connectors-role-role-name-prefix={{ .roleNamePrefix }}
+            - -connectors-role-resync={{ .resync }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.kms }}
+            {{- if .enabled }}
+            - -kms-alias-prefix={{ .aliasPrefix }}
+            - -kms-key-administrator-arns={{ join "," .keyAdministratorArns }}
+            - -kms-csi-driver-role-arn={{ .csiDriverRoleArn }}
+            - -kms-resync={{ .resync }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.ebs }}
+            {{- if .enabled }}
+            - -ebs-resync={{ .resync }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.s3 }}
+            {{- if .enabled }}
+            - -s3-partition={{ .partition }}
+            - -s3-delete-budget={{ .deleteBudget }}
+            - -s3-resync={{ .resync }}
+            {{- end }}
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SERVICE_ACCOUNT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            {{- with .Values.endpointURL }}
+            - name: AWS_ENDPOINT_URL
+              value: {{ . | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: registrations
+              mountPath: /etc/plugin
+              readOnly: true
+          ports:
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: registrations
+          configMap:
+            name: {{ include "aws.fullname" . }}-registrations

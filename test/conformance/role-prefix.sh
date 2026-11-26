@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks against real IAM what a plugin that names IAM roles does when its
+# Checks against real IAM what a controller that names IAM roles does when its
 # role name prefix changes. The requests orders and billing get their roles.
 # The script gives the role of billing the UID tag of another request and
 # changes the prefix of the release. Then the old role of orders must be
@@ -7,25 +7,28 @@
 # the event RoleKept. Last, the delete of each request must delete its new
 # role.
 #
-# Usage: role-prefix.sh <plugin> <section> <registration> <service-account suffix> <new prefix>
+# Usage: role-prefix.sh <release> <values key> <section> <registration> <service-account suffix> <new prefix>
 #
-# The target of each request is the CamundaCluster <claim> with the
-# ServiceAccount <claim>-<service-account suffix>. The roles of the new
-# prefix must be inside the policy of the controller. Needs CHART_NAMESPACE,
-# the credentials of the CI role, and a kind cluster on which run.sh
-# installed the plugin. The old role of billing stays in IAM: the sweep of
-# the run removes it.
+# The release is a release of charts/aws, and the values key is the role
+# name prefix of the controller, such as identity.roleNamePrefix. The target
+# of each request is the CamundaCluster <claim> with the ServiceAccount
+# <claim>-<service-account suffix>. The roles of the new prefix must be
+# inside the policy of the controller. Needs CHART_NAMESPACE, the
+# credentials of the CI role, and a kind cluster on which run.sh installed
+# the release. The old role of billing stays in IAM: the sweep of the run
+# removes it.
 set -euo pipefail
 
-if [ $# -ne 5 ]; then
-  echo "usage: $0 <plugin> <section> <registration> <service-account suffix> <new prefix>" >&2
+if [ $# -ne 6 ]; then
+  echo "usage: $0 <release> <values key> <section> <registration> <service-account suffix> <new prefix>" >&2
   exit 2
 fi
-plugin=$1
-section=$2
-registration=$3
-suffix=$4
-prefix=$5
+release=$1
+key=$2
+section=$3
+registration=$4
+suffix=$5
+prefix=$6
 : "${CHART_NAMESPACE:?CHART_NAMESPACE is not set}"
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 ns=conformance-$registration-prefix
@@ -101,7 +104,7 @@ event() {
 report() {
   kubectl get -n "$ns" pluginrequests -o yaml || true
   kubectl get events.events.k8s.io -n "$ns" -o custom-columns=REGARDING:.regarding.name,REASON:.reason,NOTE:.note || true
-  kubectl logs -n "$CHART_NAMESPACE" "deployment/$plugin" --tail=100 || true
+  kubectl logs -n "$CHART_NAMESPACE" "deployment/$release" --tail=100 || true
 }
 
 echo "==> Creating the requests orders and billing of $registration"
@@ -114,9 +117,9 @@ uid=$(kubectl get -n "$ns" pluginrequest/orders -o jsonpath='{.metadata.uid}')
 tag=$(uid_tag "$orders_old")
 [ "$tag" = "$uid" ] || fail "the role $orders_old has the request UID tag '$tag', want '$uid'"
 
-echo "==> Stopping $plugin, and giving the role $billing_old the UID of another request"
-kubectl scale -n "$CHART_NAMESPACE" "deployment/$plugin" --replicas=0
-selector=$(kubectl get -n "$CHART_NAMESPACE" "deployment/$plugin" -o json |
+echo "==> Stopping $release, and giving the role $billing_old the UID of another request"
+kubectl scale -n "$CHART_NAMESPACE" "deployment/$release" --replicas=0
+selector=$(kubectl get -n "$CHART_NAMESPACE" "deployment/$release" -o json |
   jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')
 for _ in $(seq 24); do
   if [ -z "$(kubectl get pods -n "$CHART_NAMESPACE" -l "$selector" -o name)" ]; then
@@ -134,11 +137,11 @@ for _ in $(seq 12); do
 done
 sleep 10
 
-echo "==> Starting $plugin with the role name prefix $prefix"
-helm upgrade "$plugin" "$repo/charts/$plugin" --namespace "$CHART_NAMESPACE" --reuse-values \
-  --set-string "roleNamePrefix=$prefix"
-kubectl scale -n "$CHART_NAMESPACE" "deployment/$plugin" --replicas=1
-kubectl rollout status -n "$CHART_NAMESPACE" "deployment/$plugin" --timeout=3m
+echo "==> Starting $release with the role name prefix $prefix"
+helm upgrade "$release" "$repo/charts/aws" --namespace "$CHART_NAMESPACE" --reuse-values \
+  --set-string "$key=$prefix"
+kubectl scale -n "$CHART_NAMESPACE" "deployment/$release" --replicas=1
+kubectl rollout status -n "$CHART_NAMESPACE" "deployment/$release" --timeout=3m
 
 moved=false
 for _ in $(seq 36); do
@@ -179,4 +182,4 @@ if [ "$failed" -ne 0 ]; then
   exit 1
 fi
 kubectl delete namespace "$ns" --timeout=3m
-echo "==> The prefix change of $plugin deleted only the old roles of its requests"
+echo "==> The prefix change of $key in $release deleted only the old roles of its requests"

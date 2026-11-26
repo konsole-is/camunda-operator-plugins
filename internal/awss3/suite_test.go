@@ -35,6 +35,7 @@ import (
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/aws"
 	"github.com/konsole-is/camunda-operator-plugins/internal/awss3"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
@@ -79,10 +80,8 @@ var _ = BeforeSuite(func() {
 	cloudWatch = awsfake.NewCloudWatch()
 	sa := pluginsv1alpha1.ServiceAccountRef{Namespace: pluginNamespace, Name: "aws-s3"}
 	options = awss3.Options{
-		HealthProbeAddress: "0",
-		MetricsAddress:     "0",
-		Registrations:      registrations,
-		ServiceAccount:     sa,
+		Registrations:  registrations,
+		ServiceAccount: sa,
 		Settings: awss3.Settings{
 			Region:    home,
 			Partition: "aws",
@@ -124,7 +123,7 @@ func startManager(name string) {
 	GinkgoHelper()
 	opts := options
 	opts.Name = name
-	m, err := awss3.NewManager(restConfig, opts)
+	m, err := aws.NewManager(restConfig, aws.Options{HealthProbeAddress: "0", MetricsAddress: "0", S3: &opts})
 	Expect(err).NotTo(HaveOccurred())
 
 	mgrCtx, mgrCancel := context.WithCancel(ctx)

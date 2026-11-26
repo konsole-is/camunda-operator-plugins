@@ -50,3 +50,6 @@ jobs:
 
       - name: Run the tests of the CI scripts
         run: make test-scripts
+
+      - name: Run the tests of the scheduled sweep
+        run: make test-sweeper

@@ -1,0 +1,34 @@
+# The chart values of the conformance run in the AWS sandbox, with every
+# controller on in one release. render.sh fills in the variables of the run.
+# Every AWS object gets the run in its name and the tag cpo-ci-run, and every
+# role the boundary of the sandbox. The sandbox refuses a key policy, so no
+# key administrator and no CSI driver role are set. It also refuses a public
+# access block write and CloudWatch, so aws-s3 keeps the four flags on and
+# does not know the size of a bucket. One delete pass deletes one batch of
+# objects, and aws-s3 resyncs each 30 seconds, for s3-check.sh.
+mode: irsa
+region: ${AWS_REGION}
+oidcProviderArn: ${AWS_OIDC_PROVIDER_ARN}
+extraTags:
+  cpo-ci-run: ${RUN_ID}
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/${RUN_ID}-aws
+identity:
+  enabled: true
+  permissionsBoundaryArn: arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary
+  allowedActions: ["s3:*", "kms:Decrypt", "kms:GenerateDataKey"]
+  roleNamePrefix: ${RUN_ID}-hub
+connectorsRole:
+  enabled: true
+  permissionsBoundaryArn: arn:aws:iam::${AWS_ACCOUNT_ID}:policy/cpo-sandbox-boundary
+  roleNamePrefix: ${RUN_ID}-conn
+kms:
+  enabled: true
+  aliasPrefix: ${RUN_ID}
+ebs:
+  enabled: true
+s3:
+  enabled: true
+  deleteBudget: 1ms
+  resync: 30s

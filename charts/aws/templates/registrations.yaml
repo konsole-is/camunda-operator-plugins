@@ -1,0 +1,12 @@
+{{- include "aws.check" . }}
+# The controllers read their registrations from these files at startup, one
+# file for each controller that is on, and apply them as PluginRegistrations.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aws.fullname" . }}-registrations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aws.labels" . | nindent 4 }}
+data:
+  {{- include "aws.registrationsData" . | trim | nindent 2 }}

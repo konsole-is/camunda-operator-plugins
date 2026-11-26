@@ -1,0 +1,6 @@
+# Every controller but s3 is on, so the chart serves no registration of s3.
+identity: {enabled: true}
+connectorsRole: {enabled: true}
+kms: {enabled: true}
+ebs: {enabled: true}
+s3: {enabled: false}

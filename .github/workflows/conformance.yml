@@ -16,26 +16,30 @@ permissions:
   contents: read
 
 jobs:
-  # Each plugin of kind gets its own job and its own kind cluster. The job
-  # runs on every pull request, so that its check reports and can be
-  # required. A pull request that touches only the docs or other plugins
-  # ends it after the scope step, with the check green.
+  # Each plugin of kind, or each set of a plugin, gets its own job and its
+  # own kind cluster. The job runs on every pull request, so that its check
+  # reports and can be required. A pull request that touches only the docs
+  # or other plugins ends it after the scope step, with the check green.
   conformance:
-    name: Conformance of ${{ matrix.plugin }}
+    name: Conformance of ${{ matrix.check }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # One line for each plugin, and test/conformance/<plugin>/ for its
-        # setup. See CONTRIBUTING.md.
-        plugin:
-          - aws-ebs
-          - gateway-access
-          - rustfs
+        # One line for each plugin, with test/conformance/<plugin>/ for its
+        # setup, or for each set, with test/conformance/<plugin>/<set>/. The
+        # check is the name that the ruleset of main requires. The set
+        # ebs-only of aws runs aws-ebs, whose check keeps its name. See
+        # CONTRIBUTING.md.
+        include:
+          - {check: aws-ebs, plugin: aws, set: ebs-only}
+          - {check: gateway-access, plugin: gateway-access}
+          - {check: rustfs, plugin: rustfs}
     env:
       PLUGIN: ${{ matrix.plugin }}
+      CONFORMANCE_SET: ${{ matrix.set }}
       KIND_CLUSTER: conformance
-      CONFORMANCE_REPORT: ${{ github.workspace }}/conformance-report/${{ matrix.plugin }}.xml
+      CONFORMANCE_REPORT: ${{ github.workspace }}/conformance-report/${{ matrix.check }}.xml
     steps:
       - name: Clone the code
         uses: actions/checkout@v7
@@ -75,7 +79,7 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: conformance-${{ matrix.plugin }}
+          name: conformance-${{ matrix.check }}
           path: conformance-report/
           if-no-files-found: warn
 
@@ -86,18 +90,16 @@ jobs:
           kubectl get pluginregistrations,pluginrequests,grants -A -o yaml || true
           kubectl get gateways,httproutes,grpcroutes -A -o yaml || true
           kubectl get storageclasses -o yaml || true
-          for target in \
-            "camunda-operator-system deployment/camunda-operator-controller-manager" \
-            "camunda-operator-plugins deployment/${PLUGIN}"; do
-            read -r namespace workload <<< "${target}"
-            echo "=== logs of ${workload} in ${namespace}"
-            kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
-          done
+          echo "=== logs of deployment/camunda-operator-controller-manager in camunda-operator-system"
+          kubectl logs -n camunda-operator-system deployment/camunda-operator-controller-manager --all-containers --tail=300 || true
+          # Each release of the plugin, with the name of its Pod on each line.
+          echo "=== logs of the releases of ${PLUGIN} in camunda-operator-plugins"
+          kubectl logs -n camunda-operator-plugins -l "app.kubernetes.io/name=${PLUGIN}" --all-containers --prefix --tail=300 || true
 
-  # Each AWS plugin gets its own job, its own kind cluster, and its own run
-  # in the AWS sandbox. These checks are never required.
+  # Each set of the AWS sandbox gets its own job, its own kind cluster, and
+  # its own run in the AWS sandbox. These checks are never required.
   conformance-aws:
-    name: Conformance of ${{ matrix.plugin }} in the AWS sandbox
+    name: Conformance of aws (${{ matrix.set }}) in the AWS sandbox
     # A pull request runs these rows only when the trusted user opened it
     # from a branch of this repository, and opened or pushed it in this event.
     # A reopen skips them. Every other pull request, Renovate included, skips
@@ -119,17 +121,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One line for each AWS plugin, and test/conformance/<plugin>/ for its
-        # setup. See CONTRIBUTING.md.
-        plugin:
-          - aws-connectors-role
-          - aws-identity
-          - aws-kms
-          - aws-s3
+        # One line for each set of test/conformance/aws/ that runs in the AWS
+        # sandbox. single-release runs the suite of each registration
+        # against one release. multi-release runs two releases in one
+        # namespace, and moves the second into the first. See CONTRIBUTING.md.
+        set:
+          - single-release
+          - multi-release
     env:
-      PLUGIN: ${{ matrix.plugin }}
+      PLUGIN: aws
+      CONFORMANCE_SET: ${{ matrix.set }}
       KIND_CLUSTER: conformance
-      CONFORMANCE_REPORT: ${{ github.workspace }}/conformance-report/${{ matrix.plugin }}.xml
+      CONFORMANCE_REPORT: ${{ github.workspace }}/conformance-report/aws-${{ matrix.set }}.xml
       # One run ID for each row. issuer.sh refuses an ID that does not match
       # cpo-ci-[a-z0-9-]{1,40}.
       RUN_ID: cpo-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
@@ -175,6 +178,12 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # ECR Public limits an anonymous pull, and test/kind/pod-identity-webhook.sh
+      # pulls its image on the runner. Its login token comes only from us-east-1.
+      - name: Log in to ECR Public
+        if: steps.scope.outputs.run == 'true'
+        run: aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+
       - name: Publish the issuer of the run
         id: issuer
         if: steps.scope.outputs.run == 'true'
@@ -195,7 +204,7 @@ jobs:
         if: ${{ !cancelled() && steps.scope.outputs.run == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: conformance-${{ matrix.plugin }}
+          name: conformance-aws-${{ matrix.set }}
           path: conformance-report/
           if-no-files-found: warn
 
@@ -204,15 +213,18 @@ jobs:
         run: |
           kubectl get pods -A -o wide || true
           kubectl get pluginregistrations,pluginrequests,grants -A -o yaml || true
+          kubectl get leases -n camunda-operator-plugins -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
           for target in \
             "camunda-operator-system deployment/camunda-operator-controller-manager" \
-            "camunda-operator-plugins deployment/${PLUGIN}" \
             "default deployment/pod-identity-webhook"; do
             read -r namespace workload <<< "${target}"
             echo "=== logs of ${workload} in ${namespace}"
             kubectl logs -n "${namespace}" "${workload}" --all-containers --tail=300 || true
           done
+          # Each release of the plugin, with the name of its Pod on each line.
+          echo "=== logs of the releases of ${PLUGIN} in camunda-operator-plugins"
+          kubectl logs -n camunda-operator-plugins -l "app.kubernetes.io/name=${PLUGIN}" --all-containers --prefix --tail=300 || true
 
       # The first session of the CI role can be over: it lasts one hour.
       - name: Get the credentials of the CI role for the cleanup

@@ -1,0 +1,6 @@
+# Every controller but kms is on, so the chart serves no registration of kms.
+identity: {enabled: true}
+connectorsRole: {enabled: true}
+kms: {enabled: false}
+ebs: {enabled: true}
+s3: {enabled: true}

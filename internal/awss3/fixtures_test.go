@@ -53,20 +53,22 @@ const (
 // as the controller loads them from the ConfigMap of the chart, so that the
 // specs read the real grant templates.
 func chartRegistrations(dir string) ([]pluginsv1alpha1.PluginRegistration, error) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "charts", "aws-s3", "values.yaml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "charts", "aws", "values.yaml"))
 	if err != nil {
 		return nil, err
 	}
 
 	var values struct {
-		Registrations json.RawMessage `json:"registrations"`
+		S3 struct {
+			Registrations json.RawMessage `json:"registrations"`
+		} `json:"s3"`
 	}
 	if err := yaml.Unmarshal(raw, &values); err != nil {
 		return nil, err
 	}
 
 	path := filepath.Join(dir, "registrations.yaml")
-	if err := os.WriteFile(path, values.Registrations, 0o600); err != nil {
+	if err := os.WriteFile(path, values.S3.Registrations, 0o600); err != nil {
 		return nil, err
 	}
 	return pluginkit.LoadRegistrations(path)
@@ -115,7 +117,7 @@ func sections() []*pluginsv1alpha1.PluginSection {
 }
 
 // installRBAC creates the ServiceAccount sa and the ClusterRoles of
-// charts/aws-s3/templates/rbac.yaml for the registrations, bound to sa. The
+// charts/aws/templates/rbac.yaml for the registrations, bound to sa. The
 // conformance suite reads them to find the kinds of the plugin.
 func installRBAC(
 	ctx context.Context,

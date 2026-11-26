@@ -221,7 +221,7 @@ func awsEnvironment(runID string) *fleetv1alpha1.Environment {
 				registrationElasticsearch: {"preset": fixedParameter(fixtureName)},
 				// The sandbox refuses every other deletion window of a key.
 				registrationKMSKey: {"pendingWindowDays": fixedParameter(7)},
-				// The controller role of aws-s3 and the sweep of the sandbox
+				// The controller role of the run and the sweep of the sandbox
 				// know only the buckets of the run.
 				registrationS3: {"bucketPrefix": fixedParameter(runID)},
 			},

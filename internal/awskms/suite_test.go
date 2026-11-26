@@ -35,6 +35,7 @@ import (
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/aws"
 	"github.com/konsole-is/camunda-operator-plugins/internal/awskms"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
@@ -69,23 +70,25 @@ var _ = BeforeSuite(func() {
 
 	fake = awsfake.NewKMS()
 	sa := pluginsv1alpha1.ServiceAccountRef{Namespace: pluginNamespace, Name: "aws-kms"}
-	mgr, err = awskms.NewManager(restConfig, awskms.Options{
+	mgr, err = aws.NewManager(restConfig, aws.Options{
 		HealthProbeAddress: "0",
 		MetricsAddress:     "0",
-		Registrations: []pluginsv1alpha1.PluginRegistration{
-			kmsRegistration(singleRegion, false),
-			kmsRegistration(multiRegion, true),
+		KMS: &awskms.Options{
+			Registrations: []pluginsv1alpha1.PluginRegistration{
+				kmsRegistration(singleRegion, false),
+				kmsRegistration(multiRegion, true),
+			},
+			ServiceAccount: sa,
+			Settings: awskms.Settings{
+				Region:      home,
+				Partition:   "aws",
+				Account:     awsfake.DefaultAccount,
+				AliasPrefix: "camunda",
+				ExtraTags:   awskit.ExtraTags{"team": "platform"},
+			},
+			KMS:    fake.In,
+			Resync: 10 * time.Minute,
 		},
-		ServiceAccount: sa,
-		Settings: awskms.Settings{
-			Region:      home,
-			Partition:   "aws",
-			Account:     awsfake.DefaultAccount,
-			AliasPrefix: "camunda",
-			ExtraTags:   awskit.ExtraTags{"team": "platform"},
-		},
-		KMS:    fake.In,
-		Resync: 10 * time.Minute,
 	})
 	Expect(err).NotTo(HaveOccurred())
 

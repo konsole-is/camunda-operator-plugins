@@ -49,6 +49,10 @@ test: fmt vet setup-envtest envtest-crds ## Run the unit tests, the envtest suit
 test-scripts: ## Run the tests of the CI scripts, each *_test.sh in git.
 	@for t in $$(git ls-files '*_test.sh'); do echo "==> $$t"; bash "$$t" || exit 1; done
 
+.PHONY: test-sweeper
+test-sweeper: ## Run the unit tests of the scheduled sweep in hack/aws-sandbox/sweeper. They call no AWS API.
+	python3 -B -m unittest discover -s hack/aws-sandbox/sweeper -p 'test_*.py'
+
 .PHONY: test-api-ref
 test-api-ref: ## Check that a pseudo-version and a tag of the api module map to the operator ref of their CRD bases.
 	@got="$$($(MAKE) -s print-api-ref API_VERSION=v0.2.1-0.20261015084104-bb2edca2c2db)"; \
@@ -61,35 +65,15 @@ test-api-ref: ## Check that a pseudo-version and a tag of the api module map to 
 		[ "$$got" = api/v0.3.0-rc.1 ] || { echo "prerelease tag maps to '$$got', want api/v0.3.0-rc.1" >&2; exit 1; }
 
 .PHONY: chart-verify
-chart-verify: chart-verify-policy-kinds ## Lint and render the chart of each plugin, and check the serve rule of CONTRIBUTING.md.
+chart-verify: chart-verify-policy-kinds ## Render the chart of each plugin with its cases in hack/chartcheck/testdata/, and check the chart rule of CONTRIBUTING.md.
+	@for c in charts/*/; do \
+		c="$$(basename "$$c")"; \
+		test -d "cmd/$$c" || { echo "charts/$$c has no binary cmd/$$c" >&2; exit 1; }; \
+	done
 	@for p in $(PLUGINS); do \
 		test -f "charts/$$p/Chart.yaml" || { echo "cmd/$$p has no chart charts/$$p" >&2; exit 1; }; \
-		$(HELM) lint "charts/$$p" || exit 1; \
-		$(HELM) template verify "charts/$$p" --namespace $(CHART_NAMESPACE) \
-			| go run ./hack/chartcheck -values "charts/$$p/values.yaml" -namespace $(CHART_NAMESPACE) || exit 1; \
-		$(HELM) template verify "charts/$$p" --namespace $(CHART_NAMESPACE) -f hack/chartcheck/testdata/two-registrations.yaml \
-			| go run ./hack/chartcheck -values hack/chartcheck/testdata/two-registrations.yaml -namespace $(CHART_NAMESPACE) || exit 1; \
-		err="$$($(HELM) template verify "charts/$$p" --set registrations=null 2>&1 >/dev/null || true)"; \
-		case "$$err" in *"registrations must name at least one registration"*) ;; *) \
-			echo "charts/$$p renders without a registration" >&2; exit 1 ;; \
-		esac; \
-		echo "  charts/$$p refuses to render without a registration"; \
-		$(MAKE) -s chart-names-differ CHART="charts/$$p" A="team-a plugin" B="team a-plugin" || exit 1; \
-		$(MAKE) -s chart-names-differ CHART="charts/$$p" \
-			A="$$(printf 'n%.0s' $$(seq 60))a plugin" B="$$(printf 'n%.0s' $$(seq 60))b plugin" || exit 1; \
+		HELM="$(HELM)" hack/chartcheck/verify.sh "charts/$$p" "$(CHART_NAMESPACE)" || exit 1; \
 	done
-
-# chart-names-differ checks that two releases, A and B as "<namespace> <release>",
-# render different names for the cluster-scoped objects of CHART.
-.PHONY: chart-names-differ
-chart-names-differ:
-	@names() { $(HELM) template "$$2" "$(CHART)" --namespace "$$1" \
-		| awk '/^kind: ClusterRole(Binding)?$$/ { k = 1 } k && /^  name:/ { print $$2; k = 0 }'; }; \
-	a="$$(names $(A))"; b="$$(names $(B))"; \
-	if [ -z "$$a" ] || [ -n "$$(comm -12 <(printf '%s\n' $$a | sort) <(printf '%s\n' $$b | sort))" ]; then \
-		echo "$(CHART): the releases '$(A)' and '$(B)' share a cluster-scoped name: $$a" >&2; exit 1; \
-	fi; \
-	echo "  $(CHART): '$(A)' and '$(B)' render different cluster-scoped names"
 
 # chart-verify-policy-kinds checks that the gateway-access chart grants the
 # verbs on the policy kinds of its values and on no other kind, and passes
@@ -99,11 +83,11 @@ chart-verify-policy-kinds:
 	@# The golden file names the namespace camunda-operator-plugins, and the role
 	@# names hash it.
 	@$(HELM) template verify charts/gateway-access --namespace camunda-operator-plugins \
-		-f hack/chartcheck/testdata/gateway-access-policy-kinds.yaml --show-only templates/policies.yaml \
+		-f hack/chartcheck/testdata/gateway-access/policy-kinds.yaml --show-only templates/policies.yaml \
 		| diff -u hack/chartcheck/testdata/gateway-access-policies.golden.yaml - \
 		|| { echo "charts/gateway-access: the policy role differs from gateway-access-policies.golden.yaml" >&2; exit 1; }
 	@$(HELM) template verify charts/gateway-access --namespace $(CHART_NAMESPACE) \
-		-f hack/chartcheck/testdata/gateway-access-policy-kinds.yaml --show-only templates/deployment.yaml \
+		-f hack/chartcheck/testdata/gateway-access/policy-kinds.yaml --show-only templates/deployment.yaml \
 		| grep -qxF -- '            - -policy-kinds=gateway.envoyproxy.io/v1alpha1/SecurityPolicy,security.istio.io/v1/AuthorizationPolicy' \
 		|| { echo "charts/gateway-access: the controller does not get the policy kinds" >&2; exit 1; }
 	@out="$$($(HELM) template verify charts/gateway-access --namespace $(CHART_NAMESPACE) 2>&1)"; \
@@ -218,7 +202,7 @@ docker-buildx: ## Build the image of PLUGIN as IMG for PLATFORMS, and push or lo
 	$(CONTAINER_TOOL) buildx build $(BUILDX_OUTPUT) --platform=$(PLATFORMS) \
 		--build-arg PLUGIN=$(PLUGIN) --build-arg VERSION=$(VERSION) -t $(IMG) .
 
-##@ Kind
+##@ CI clusters
 
 # The kind targets run in CI: they create a kind cluster and fill it. Never
 # point them at a cluster that you use.
@@ -227,8 +211,11 @@ KIND_CLUSTER ?= camunda-operator-plugins
 # the operator built from it, so it matches the api module of go.mod.
 OPERATOR_DIR ?= $(LOCALBIN)/camunda-operator
 OPERATOR_REPO ?= https://github.com/konsole-is/camunda-operator.git
+# CONFORMANCE_SET is the set of PLUGIN that conformance-kind runs, a directory
+# of test/conformance/<plugin>/. Empty runs test/conformance/<plugin>/ itself.
+CONFORMANCE_SET ?=
 # CONFORMANCE_REPORT is the JUnit report of conformance-kind.
-CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN).xml
+CONFORMANCE_REPORT ?= $(LOCALBIN)/conformance/$(PLUGIN)$(if $(CONFORMANCE_SET),-$(CONFORMANCE_SET)).xml
 # renovate: datasource=github-releases depName=envoyproxy/gateway
 ENVOY_GATEWAY_VERSION ?= v1.10.0
 # renovate: datasource=docker depName=rustfs/rustfs
@@ -263,13 +250,13 @@ operator-source: ## Check out the operator at API_REF into OPERATOR_DIR.
 	API_REF="$(API_REF)" OPERATOR_REPO="$(OPERATOR_REPO)" test/kind/operator-source.sh "$(OPERATOR_DIR)"
 
 .PHONY: conformance-kind
-conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run the conformance suite against PLUGIN. CI only.
+conformance-kind: ## Create a kind cluster with the operator and PLUGIN, and run the conformance suite of CONFORMANCE_SET against PLUGIN. CI only.
 	KIND_CLUSTER="$(KIND_CLUSTER)" OPERATOR_DIR="$(OPERATOR_DIR)" CHART_NAMESPACE="$(CHART_NAMESPACE)" \
 	REPORT="$(CONFORMANCE_REPORT)" GATEWAY_API_VERSION="$(GATEWAY_API_VERSION)" \
 	ENVOY_GATEWAY_VERSION="$(ENVOY_GATEWAY_VERSION)" RUSTFS_VERSION="$(RUSTFS_VERSION)" \
 	CERT_MANAGER_VERSION="$(CERT_MANAGER_VERSION)" POD_IDENTITY_WEBHOOK_VERSION="$(POD_IDENTITY_WEBHOOK_VERSION)" \
 	AWS_CLI_IMAGE="amazon/aws-cli:$(AWS_CLI_VERSION)" \
-		test/conformance/run.sh "$(PLUGIN)"
+		test/conformance/run.sh "$(PLUGIN)" $(CONFORMANCE_SET)
 
 .PHONY: journey-kind
 journey-kind: ## Create a kind cluster with the operator, ECK, and the plugins of JOURNEY, and run the journey. CI only.
@@ -281,6 +268,17 @@ journey-kind: ## Create a kind cluster with the operator, ECK, and the plugins o
 	AWS_REGION="$(AWS_REGION)" RUN_ID="$(RUN_ID)" AWS_ACCOUNT_ID="$(AWS_ACCOUNT_ID)" \
 	AWS_OIDC_PROVIDER_ARN="$(AWS_OIDC_PROVIDER_ARN)" \
 		test/e2e/run.sh "$(JOURNEY)"
+
+# The node pulls the AWS CLI image, and Docker Hub limits the anonymous pulls
+# of one address, so journey-eks takes it from ECR Public.
+.PHONY: journey-eks
+journey-eks: ## Install the operator, ECK, and the chart aws on the EKS cluster of RUN_ID, and run the eks journey. CI only.
+	EKS_CLUSTER="$(RUN_ID)" OPERATOR_DIR="$(OPERATOR_DIR)" CHART_NAMESPACE="$(CHART_NAMESPACE)" \
+	REPORT="$(LOCALBIN)/journeys/eks.xml" CAMUNDA_MINOR="$(CAMUNDA_MINOR)" \
+	AWS_CLI_IMAGE="public.ecr.aws/aws-cli/aws-cli:$(AWS_CLI_VERSION)" \
+	AWS_REGION="$(AWS_REGION)" RUN_ID="$(RUN_ID)" AWS_ACCOUNT_ID="$(AWS_ACCOUNT_ID)" \
+	AWS_EKS_REGISTRY="$(AWS_EKS_REGISTRY)" AWS_EKS_PLUGINS_ROLE_ARN="$(AWS_EKS_PLUGINS_ROLE_ARN)" \
+		test/e2e/run.sh eks
 
 ##@ Dependencies
 

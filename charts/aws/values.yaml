@@ -1,0 +1,413 @@
+image:
+  repository: ghcr.io/konsole-is/camunda-operator-plugins/aws
+  # An empty tag is the appVersion of the chart, which the release sets.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# The values from here to resources are shared by every controller that is
+# on. The blocks after resources hold the values of one controller each.
+
+# mode is how the pods of a cluster assume their AWS roles: irsa (IAM roles
+# for service accounts) or podIdentity (EKS Pod Identity). aws-identity,
+# aws-connectors-role, and aws-s3 read it. With podIdentity, aws-s3 names no
+# role in the ObjectStorageConfig, because a role annotation on the
+# ServiceAccount makes the IRSA token win over Pod Identity.
+mode: irsa
+
+# region is the AWS region of the API calls, of the primary KMS keys, and of
+# a bucket whose request sets no region. Empty takes the region of the AWS
+# SDK chain, such as the AWS_REGION of the pod. aws-kms and aws-s3 do not
+# start without a region.
+region: ""
+
+# extraTags go on each AWS object of the controllers, next to the tags of the
+# request, for example a cost center. A key cannot start with aws: or
+# camunda.io/.
+extraTags: {}
+
+# oidcProviderArn is the IAM OIDC provider of the EKS cluster. Mode irsa needs
+# it for aws-identity and aws-connectors-role.
+oidcProviderArn: ""
+
+# eksClusterName is the EKS cluster of the Pod Identity associations. Mode
+# podIdentity needs it for aws-identity and aws-connectors-role.
+eksClusterName: ""
+
+# endpointURL, when set, sends every AWS call to this endpoint instead of the
+# endpoints of AWS.
+endpointURL: ""
+
+serviceAccount:
+  # annotations of the ServiceAccount of the controllers, for example the
+  # IRSA annotation of the role that the controllers run as. The role needs
+  # the policy of each controller that is on.
+  annotations: {}
+
+# One Pod runs every controller that is on, with one cache.
+resources:
+  requests:
+    cpu: 10m
+    memory: 96Mi
+  limits:
+    memory: 256Mi
+
+# identity is aws-identity: one IAM role for each cluster, which holds the
+# grants of the other plugins.
+identity:
+  # enabled turns aws-identity on. Every controller is off by default, and
+  # the chart refuses to render with none on.
+  enabled: false
+
+  # permissionsBoundaryArn is the managed policy that bounds every role.
+  # aws-identity does not start without it.
+  permissionsBoundaryArn: ""
+
+  # roleNamePrefix starts the name of each role, at most 47 characters. It
+  # must differ from connectorsRole.roleNamePrefix, camunda-connectors by
+  # default. A change creates new roles and deletes the old ones. Restart the
+  # pods of each cluster after the change, with IRSA and with Pod Identity:
+  # see "Change the role name prefix" in the docs of aws-identity.
+  roleNamePrefix: camunda
+
+  # allowedActions are the IAM action patterns, such as s3:*, that a grant of
+  # another plugin can put on a role. They mirror the boundary. aws-identity
+  # does not start without one.
+  allowedActions: []
+
+  # resync is the time after which aws-identity reconciles each request
+  # again, and repairs a role, a Grant policy, or an association that was
+  # changed outside the cluster.
+  # 0 turns the resync off.
+  resync: 1h
+
+  # registrations are the PluginRegistrations that aws-identity writes at
+  # startup and serves. Each item is a name and the fields of a registration
+  # spec, merged over the defaults of mode. The chart grants the controllers
+  # the verb serve on each name of the blocks that are on, and on no other
+  # registration. With mode podIdentity, name the registration
+  # aws-pod-identity.
+  registrations:
+    - name: aws-irsa
+
+# connectorsRole is aws-connectors-role: an IAM role for the Connectors of
+# each cluster.
+connectorsRole:
+  # enabled turns aws-connectors-role on.
+  enabled: false
+
+  # permissionsBoundaryArn is the managed policy that bounds each role of
+  # aws-connectors-role. No environment and no claim can change it.
+  # aws-connectors-role does not start without it when it serves
+  # aws-connectors-role.
+  permissionsBoundaryArn: ""
+
+  # roleNamePrefix starts the name of each role of aws-connectors-role, at
+  # most 47 characters. It must differ from identity.roleNamePrefix, camunda
+  # by default. Else both controllers write the same role for one claim.
+  roleNamePrefix: camunda-connectors
+
+  # resync is the time after which aws-connectors-role reconciles each
+  # request again, and repairs a role, a policy, or an association that was
+  # changed outside the cluster.
+  # 0 turns the resync off.
+  resync: 1h
+
+  # registrations are the PluginRegistrations that aws-connectors-role
+  # writes at startup and serves. Each item is a name and the fields of a
+  # registration spec, merged over the defaults of the chart.
+  registrations:
+    - name: aws-connectors-existing-role
+      label: Existing role
+      description: >-
+        The Connectors of each cluster use one IAM role that the admin made. An
+        AWS connector uses the role when it signs in with the default credentials
+        chain.
+      parameters:
+        type: object
+        required: [roleArn]
+        properties:
+          roleArn:
+            type: string
+            description: The IAM role of the Connectors.
+            pattern: '^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$'
+    - name: aws-connectors-role
+      label: Role for each cluster
+      description: >-
+        The Connectors of each cluster get an IAM role of their own, with the
+        policies that the admin allows. An AWS connector uses the role when it
+        signs in with the default credentials chain.
+      parameters:
+        type: object
+        properties:
+          managedPolicyArns:
+            type: array
+            x-kubernetes-list-type: set
+            maxItems: 10
+            items:
+              type: string
+              pattern: '^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/([!-~]{1,510}/)?[A-Za-z0-9.,+@=_-]{1,128}$'
+            description: Managed policies that every cluster of the environment gets.
+          extraPolicyArns:
+            type: array
+            x-kubernetes-list-type: set
+            maxItems: 10
+            items:
+              type: string
+              pattern: '^arn:aws[a-z-]*:iam::([0-9]{12}|aws):policy/([!-~]{1,510}/)?[A-Za-z0-9.,+@=_-]{1,128}$'
+            description: Managed policies that a claim can add from the allowed values of its environment.
+          inlinePolicy:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+            x-fleet-template: true
+            description: One IAM policy document. Its placeholders scope it to one cluster.
+
+# kms is aws-kms: one customer-managed KMS key with rotation for each
+# cluster.
+kms:
+  # enabled turns aws-kms on.
+  enabled: false
+
+  # aliasPrefix starts the alias of each key: alias/<aliasPrefix>/<namespace>/<claim>.
+  # It must not be aws or start with aws/.
+  aliasPrefix: camunda
+
+  # keyAdministratorArns are the IAM principals that administer each key. When
+  # it and csiDriverRoleArn are both empty, each key keeps the default key
+  # policy, and aws-kms never reads or writes a key policy.
+  keyAdministratorArns: []
+
+  # csiDriverRoleArn is the IAM role of the EBS CSI driver. The key policy lets
+  # it encrypt and decrypt with each key, and create grants for EBS volumes.
+  csiDriverRoleArn: ""
+
+  # resync is the time after which aws-kms reconciles each request again, and
+  # repairs the tags, the key policy, or the rotation of a key that was
+  # changed outside the cluster.
+  # 0 turns the resync off.
+  resync: 10m
+
+  # registrations are the PluginRegistrations that aws-kms writes at startup
+  # and serves. Each item is a name and the fields of a registration spec.
+  # The chart adds the limit Alias prefix to each. A request of a
+  # registration whose parameters hold replicaRegions gets a multi-Region
+  # key: set the regions in parameterValues, for example
+  # parameterValues: {replicaRegions: [eu-central-1]}.
+  registrations:
+    - name: aws-kms-key
+      sections: [encryption-key]
+      label: AWS KMS key
+      description: Creates one customer-managed KMS key with automatic rotation for each cluster.
+      docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/aws-kms.md
+      mode: Optional
+      deletionPolicies: [Delete, Orphan]
+      outputs: &outputs
+        - key: keyRef
+          format: aws-kms-arn
+          description: The ARN of the key.
+        - key: format
+          description: "The format of keyRef: aws-kms-arn."
+      parameters:
+        type: object
+        properties:
+          pendingWindowDays: &pendingWindowDays
+            type: integer
+            minimum: 7
+            maximum: 30
+            default: 30
+            description: Days between the delete of the claim and the delete of the key.
+    - name: aws-kms-key-multi-region
+      sections: [encryption-key]
+      label: AWS KMS multi-Region key
+      description: Creates one multi-Region KMS key with automatic rotation for each cluster, and a replica in each region of replicaRegions.
+      docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/aws-kms.md
+      mode: Optional
+      deletionPolicies: [Delete, Orphan]
+      outputs: *outputs
+      parameters:
+        type: object
+        required: [replicaRegions]
+        properties:
+          pendingWindowDays: *pendingWindowDays
+          replicaRegions:
+            type: array
+            minItems: 1
+            x-kubernetes-list-type: set
+            items:
+              type: string
+              pattern: '^([a-z]+-){2,3}[0-9]+$'
+            description: The regions of the replicas of the key.
+
+# ebs is aws-ebs: a StorageClass for each cluster that encrypts its EBS
+# volumes with the KMS key of the cluster. It makes no AWS call.
+ebs:
+  # enabled turns aws-ebs on.
+  enabled: false
+
+  # resync is the time after which aws-ebs reconciles each request again,
+  # also when nothing in the cluster changed. It brings back a StorageClass
+  # that someone deleted. 0 turns it off.
+  resync: 1h
+
+  # registrations are the PluginRegistrations that aws-ebs writes at startup
+  # and serves. Each item is a name and the fields of a registration spec.
+  registrations:
+    - name: aws-ebs-encrypted
+      sections: [volume-encryption]
+      label: Encrypted EBS volumes
+      description: Creates a StorageClass for each cluster that encrypts its EBS volumes with the AWS KMS key of the cluster.
+      docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/aws-ebs.md
+      mode: Optional
+      deletionPolicies: [Delete, Orphan]
+      inputs:
+        - name: key
+          from: encryption-key/keyRef
+          required: true
+          formats: [aws-kms-arn]
+      outputs:
+        - key: storageClassName
+          description: The name of the StorageClass of the volumes of the cluster.
+      parameters:
+        type: object
+        properties:
+          type:
+            type: string
+            enum: [gp3, gp2, io1, io2, st1, sc1]
+            default: gp3
+            description: The EBS volume type.
+          iops:
+            type: integer
+            minimum: 100
+            description: The IOPS of each volume. Only for gp3, io1, and io2, and required for io1 and io2. 3000 to 80000 for gp3, 100 to 64000 for io1, and 100 to 256000 for io2.
+          throughput:
+            type: integer
+            minimum: 125
+            maximum: 2000
+            description: The throughput of each volume in MiB/s. Only for gp3. At most iops / 4, and 750 without iops.
+          fsType:
+            type: string
+            enum: [ext4, xfs, ext3]
+            default: ext4
+            description: The file system of each volume.
+          reclaimPolicy:
+            type: string
+            enum: [Delete, Retain]
+            default: Delete
+            description: What happens to a volume when its claim is deleted.
+        x-kubernetes-validations:
+          - rule: "!has(self.throughput) || !has(self.type) || self.type == 'gp3'"
+            message: throughput is only for the volume type gp3
+          - rule: "!has(self.iops) || !has(self.type) || self.type in ['gp3', 'io1', 'io2']"
+            message: iops is only for the volume types gp3, io1, and io2
+          - rule: "!has(self.iops) || (has(self.type) && self.type != 'gp3') || self.iops >= 3000"
+            message: iops of gp3 is at least 3000
+          - rule: "!has(self.type) || !(self.type in ['io1', 'io2']) || has(self.iops)"
+            message: iops is required for the volume types io1 and io2
+          - rule: "!has(self.iops) || self.iops <= ((!has(self.type) || self.type == 'gp3') ? 80000 : (self.type == 'io1' ? 64000 : 256000))"
+            message: iops is at most 80000 for gp3, 64000 for io1, and 256000 for io2
+          - rule: "!has(self.throughput) || self.throughput * 4 <= (has(self.iops) ? self.iops : 3000)"
+            message: throughput of gp3 is at most iops / 4, and 750 without iops
+
+# s3 is aws-s3: one S3 bucket for the backups of each cluster.
+s3:
+  # enabled turns aws-s3 on.
+  enabled: false
+
+  # partition is the AWS partition of the buckets: aws, aws-cn, or aws-us-gov.
+  # It goes into the bucket ARN of the outputs, which the grants read, and
+  # into the console link.
+  partition: aws
+
+  # deleteBudget is the time for which one pass of a delete deletes objects.
+  # A bucket with more objects than one pass deletes takes more passes, and
+  # the request requeues between them.
+  deleteBudget: 15s
+
+  # resync is the time after which aws-s3 reconciles each request again, and
+  # repairs a bucket setting that was changed outside the cluster.
+  # 0 turns the resync off.
+  resync: 1h
+
+  # registrations are the PluginRegistrations that aws-s3 writes at startup
+  # and serves. Each item is a name and the fields of a registration spec.
+  # The grant templates hold placeholders that pluginkit fills for each
+  # request.
+  registrations:
+    - name: aws-s3
+      sections: [backup-storage]
+      label: AWS S3 bucket
+      description: Creates one S3 bucket for the backups of each cluster, encrypted with the key of the cluster when it has one.
+      docsUrl: https://github.com/konsole-is/camunda-operator-plugins/blob/main/docs/plugins/aws-s3.md
+      mode: Optional
+      deletionPolicies: [Delete, Orphan]
+      inputs:
+        - name: key
+          from: encryption-key/keyRef
+          required: false
+          formats: [aws-kms-arn]
+        - name: principal
+          from: cloud-identity/principal
+          required: false
+          formats: [aws-iam-role-arn]
+      outputs:
+        - key: objectStorageConfig
+          description: The ObjectStorageConfig of the bucket, in the namespace of the claim.
+        - key: bucket
+          description: The name of the bucket.
+        - key: bucketArn
+          description: The ARN of the bucket, in the partition of the chart.
+        - key: keyArn
+          format: aws-kms-arn
+          description: The ARN of the key of the default encryption. Only with the key input.
+      grantTemplates:
+        - name: bucket-read-write
+          format: aws-iam-statement
+          description: Read and write the objects of the bucket, as Zeebe, the Elasticsearch snapshot repository, and the PostgreSQL archive do.
+          template:
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:ListBucketMultipartUploads
+              - s3:ListBucketVersions
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+              - s3:ListMultipartUploadParts
+            Resource:
+              - "{{ .outputs.bucketArn }}"
+              - "{{ .outputs.bucketArn }}/*"
+        - name: bucket-key-use
+          format: aws-iam-statement
+          requiresInputs: [key]
+          description: Encrypt and decrypt with the key of the bucket.
+          template:
+            Effect: Allow
+            Action: [kms:GenerateDataKey, kms:Decrypt]
+            Resource: "{{ .outputs.keyArn }}"
+      parameters:
+        type: object
+        properties:
+          bucketPrefix:
+            type: string
+            default: camunda
+            maxLength: 40
+            pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+            x-kubernetes-validations:
+              # The bucket name is the prefix and a hyphen, then more.
+              - rule: "!(self + '-').startsWith('xn--') && !(self + '-').startsWith('sthree-') && !(self + '-').startsWith('amzn-s3-demo-')"
+                message: S3 reserves the bucket name prefixes xn--, sthree-, and amzn-s3-demo-.
+            description: The start of each bucket name. It cannot change after the bucket exists.
+          region:
+            type: string
+            pattern: '^(([a-z]+-){2,3}[0-9]+)?$'
+            description: The region of the bucket. Empty is the region of the chart. It cannot change after the bucket exists.
+          abortIncompleteUploadDays:
+            type: integer
+            minimum: 1
+            # The plugin reads the days as a 32-bit integer.
+            maximum: 2147483647
+            default: 7
+            description: Days after which S3 aborts an incomplete multipart upload.

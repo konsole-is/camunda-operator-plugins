@@ -10,6 +10,10 @@ terraform {
       source  = "integrations/github"
       version = "~> 6.13"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.8"
+    }
   }
 
   # Created by hand before the first apply. See README.md.

@@ -34,6 +34,7 @@ import (
 
 	pluginsv1alpha1 "github.com/konsole-is/camunda-operator/api/plugins/v1alpha1"
 
+	"github.com/konsole-is/camunda-operator-plugins/internal/aws"
 	"github.com/konsole-is/camunda-operator-plugins/internal/awsidentity"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit"
 	"github.com/konsole-is/camunda-operator-plugins/pkg/awskit/awsfake"
@@ -138,8 +139,6 @@ func newHubWith(
 	opts := awsidentity.Options{
 		// Controller names are unique in the process.
 		Name:                   "aws-identity-" + registration + "-" + prefix,
-		HealthProbeAddress:     "0",
-		MetricsAddress:         "0",
 		Registrations:          []pluginsv1alpha1.PluginRegistration{hubRegistration(registration)},
 		ServiceAccount:         h.serviceAccount,
 		Mode:                   mode,
@@ -156,7 +155,7 @@ func newHubWith(
 	}
 
 	var err error
-	h.mgr, err = awsidentity.NewManager(restConfig, opts)
+	h.mgr, err = aws.NewManager(restConfig, aws.Options{HealthProbeAddress: "0", MetricsAddress: "0", Identity: &opts})
 	Expect(err).NotTo(HaveOccurred())
 
 	return h
